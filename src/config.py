@@ -280,6 +280,13 @@ FLAT_FEE_TO_NEXUS = _compat_env("FEE_FLAT_TO_NEXUS", "FLAT_FEE_USDD", default="0
 FEE_REFUND_SOLANA = _compat_env(
     "FEE_REFUND_SOLANA", "FLAT_FEE_USDD", default=FLAT_FEE_TO_NEXUS
 )
+# Nexus congestion/disposition fee for an explicitly authorized Nexus transfer. Automatic
+# refunds remain disabled; this term still belongs in the canonical fee policy so the
+# eventual durable operator workflow cannot read a separate legacy-only setting.
+FEE_NEXUS_DISPOSITION = _compat_env(
+    "FEE_NEXUS_DISPOSITION", "NEXUS_CONGESTION_FEE_USDD", default="0"
+)
+NEXUS_CONGESTION_FEE_USDD = FEE_NEXUS_DISPOSITION  # compatibility attribute
 # Compatibility attributes for existing callers. New code should consume SWAP_PAIR.
 FLAT_FEE_USDC = FLAT_FEE_TO_SOLANA
 FLAT_FEE_USDD = FLAT_FEE_TO_NEXUS
@@ -300,6 +307,9 @@ FLAT_FEE_TO_SOLANA_UNITS = _to_units(FLAT_FEE_TO_SOLANA, USDC_DECIMALS)
 # A failed Solana deposit is returned on Solana, so its USDD-denominated refund fee
 # must be represented in Solana base units, not Nexus base units.
 FLAT_FEE_REFUND_SOLANA_UNITS = _to_units(FEE_REFUND_SOLANA, USDC_DECIMALS)
+# Authorized Nexus refund/disposition fee in Nexus base units. It is currently not
+# applied automatically, but its unit representation is immutable inside SWAP_PAIR.
+FEE_NEXUS_DISPOSITION_UNITS = _to_units(FEE_NEXUS_DISPOSITION, USDD_DECIMALS)
 # The Solana-output fee re-expressed in Nexus base units for Nexus-side input thresholds.
 FLAT_FEE_TO_SOLANA_NEXUS_UNITS = _to_units(FLAT_FEE_TO_SOLANA, USDD_DECIMALS)
 
@@ -309,9 +319,6 @@ FLAT_FEE_TO_SOLANA_NEXUS_UNITS = _to_units(FLAT_FEE_TO_SOLANA, USDD_DECIMALS)
 FEE_BPS = int(_compat_env("FEE_BPS", "DYNAMIC_FEE_BPS", default="10"))
 DYNAMIC_FEE_BPS = FEE_BPS  # compatibility attribute for existing callers
 FEES_STATE_FILE = os.getenv("FEES_STATE_FILE", "fees_state.json")
-
-# Nexus congestion fee for Nexus refunds (token units)
-NEXUS_CONGESTION_FEE_USDD = os.getenv("NEXUS_CONGESTION_FEE_USDD", "0.001")
 
 # Anti-DoS protections
 # Default is DERIVED from the flat fee (2x), not a fixed dollar figure: a hardcoded "0.2"
@@ -457,6 +464,7 @@ class FeePolicy:
     flat_to_nexus_units: int
     flat_to_solana_units: int
     refund_solana_units: int
+    nexus_disposition_units: int
     basis_points: int
 
 
@@ -489,6 +497,7 @@ SWAP_PAIR = SwapPairConfig(
         flat_to_nexus_units=FLAT_FEE_TO_NEXUS_UNITS,
         flat_to_solana_units=FLAT_FEE_TO_SOLANA_UNITS,
         refund_solana_units=FLAT_FEE_REFUND_SOLANA_UNITS,
+        nexus_disposition_units=FEE_NEXUS_DISPOSITION_UNITS,
         basis_points=FEE_BPS,
     ),
     deposit_memo_prefix=DEPOSIT_MEMO_PREFIX,

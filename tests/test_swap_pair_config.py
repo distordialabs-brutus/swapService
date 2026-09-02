@@ -66,6 +66,7 @@ def test_canonical_swap_pair_groups_exact_identities_custody_and_fee_terms(monke
         FEE_FLAT_TO_NEXUS="0.0001",
         FEE_FLAT_TO_SOLANA="0.0002",
         FEE_REFUND_SOLANA="0.0003",
+        FEE_NEXUS_DISPOSITION="0.0004",
         FEE_BPS="15",
     )
 
@@ -79,6 +80,7 @@ def test_canonical_swap_pair_groups_exact_identities_custody_and_fee_terms(monke
     assert pair.fees.flat_to_nexus_units == 10_000
     assert pair.fees.flat_to_solana_units == 20_000
     assert pair.fees.refund_solana_units == 30_000
+    assert pair.fees.nexus_disposition_units == 40_000
     assert pair.fees.basis_points == 15
 
     with pytest.raises(FrozenInstanceError):
@@ -92,3 +94,17 @@ def test_canonical_fee_and_legacy_alias_conflict_fails_closed(monkeypatch):
             FEE_FLAT_TO_NEXUS="0.1",
             FLAT_FEE_USDD="0.2",
         )
+
+
+def test_default_nexus_disposition_fee_is_exact_for_zero_decimal_pairs(monkeypatch):
+    """An inactive default disposition fee must not reject a valid 0/0 pair."""
+    config = _load_config(
+        monkeypatch,
+        SOLANA_TOKEN_DECIMALS="0",
+        NEXUS_TOKEN_DECIMALS="0",
+        FEE_FLAT_TO_NEXUS="0",
+        FEE_FLAT_TO_SOLANA="0",
+        FEE_REFUND_SOLANA="0",
+    )
+
+    assert config.SWAP_PAIR.fees.nexus_disposition_units == 0

@@ -157,17 +157,17 @@ def _quarantine_txid(r: dict, reason: str = "") -> None:
 
 
 def _apply_congestion_fee(amount_dec: Decimal) -> Decimal:
-    """Subtract a fixed Nexus congestion fee (configured in Nexus token units).
+    """Subtract the canonical Nexus disposition fee from an authorized transfer.
 
     NOT WIRED IN. Automatic Nexus refunds are intentionally disabled until the durable
-    refund protocol exists. Deducting a congestion fee is a change to what users receive,
+    refund protocol exists. Deducting a disposition fee is a change to what users receive,
     so it remains an explicit operator decision for that future protocol rather than being
     switched on silently.
     """
-    try:
-        fee_dec = _parse_decimal_amount(getattr(config, "NEXUS_CONGESTION_FEE_USDD", "0"))
-    except Exception:
-        fee_dec = Decimal(0)
+    fee_policy = config.SWAP_PAIR.fees
+    fee_dec = Decimal(int(fee_policy.nexus_disposition_units)) / (
+        Decimal(10) ** int(config.SWAP_PAIR.nexus.decimals)
+    )
     out = amount_dec - fee_dec
     return out if out > 0 else Decimal(0)
 

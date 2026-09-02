@@ -112,6 +112,20 @@ class CriticalSafetyTests(unittest.TestCase):
         self.assertEqual(record["fee_flat_to_solana"], "0.00035")
         self.assertEqual(record["fee_bps"], "100")
 
+    def test_nexus_disposition_fee_uses_canonical_pair_policy(self):
+        """The policy's Nexus scale—not a legacy fee or Solana scale—controls deduction."""
+        pair = replace(
+            config.SWAP_PAIR,
+            nexus=replace(config.SWAP_PAIR.nexus, decimals=9),
+            fees=replace(config.SWAP_PAIR.fees, nexus_disposition_units=2_500),
+        )
+
+        with patch.object(config, "SWAP_PAIR", pair):
+            self.assertEqual(
+                swap_nexus._apply_congestion_fee(Decimal("1")),
+                Decimal("0.9999975"),
+            )
+
     def test_solana_poll_money_path_summaries_are_structured_events(self):
         """A Nexus→Solana payout operator must not have to parse console prose."""
         with patch.object(swap_solana.nexus_client, "get_heartbeat_asset", return_value={

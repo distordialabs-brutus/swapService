@@ -42,7 +42,7 @@ Excluded surfaces are explicit:
 
 | Surface | Classification | Required Batch 7 treatment |
 |---|---|---|
-<!-- token-pair-inventory: .env.example:1,12,15,17,40,41,42,43,44,45,46,47,49,83,86,124,126,127,128,134,135,137,138,140,142,144,154,155,161,173,174,185,186,187,188,204,205 -->
+<!-- token-pair-inventory: .env.example:1,12,15,17,40,41,42,43,44,45,46,47,49,83,86,124,126,127,128,134,135,137,138,140,146,156,157,163,175,176,187,188,189,190,206,207 -->
 | `.env.example` | Migration alias + Public pair-specific example | Replace with canonical input names and documented alias-conflict policy only when validated configuration exists. |
 <!-- token-pair-inventory: .github/copilot-instructions.md:4,10,11,18,19,34,37,49,50,58,137,140,154,156,160,170,171,174,175,176,177,179,180,181,197,202 -->
 | `.github/copilot-instructions.md` | Public pair-specific example + Runtime semantics | Keep money-path and Nexus/Solana safety guidance synchronized with the validated canonical configuration. |
@@ -70,7 +70,7 @@ Excluded surfaces are explicit:
 | `quarantine_viewer.py` | Display metadata + Frozen compatibility state | Present canonical symbols while retaining existing state labels until migrated. |
 <!-- token-pair-inventory: src/balance_reconciler.py:156,158 -->
 | `src/balance_reconciler.py` | Runtime semantics | Reconciliation must consume canonical identities and scales, never a token ticker literal. |
-<!-- token-pair-inventory: src/config.py:12,13,15,27,31,33,39,78,79,81,83,84,85,87,88,91,95,96,97,98,104,133,138,148,154,155,157,166,167,168,170,172,173,175,186,187,227,271,272,273,275,278,279,281,284,285,297,299,300,302,304,314,318,319,321,323,334,335,337,342,345,346,348,353,361,372,373,375,406,407,408,409,412,413,422,425,427 -->
+<!-- token-pair-inventory: src/config.py:12,13,15,27,31,33,39,78,79,81,83,84,85,87,88,91,95,96,97,98,104,133,138,148,154,155,157,166,167,168,170,172,173,175,186,187,227,271,272,273,275,278,279,281,287,289,291,292,304,306,307,309,312,314,325,326,328,330,341,342,344,349,352,353,355,360,368,379,380,382,413,414,415,416,419,420,429,432,434 -->
 | `src/config.py` | Runtime semantics + Migration alias + Frozen compatibility state | Build one immutable `SwapPairConfig`; legacy aliases remain conflict-detecting inputs and database labels remain frozen absent migration. |
 <!-- token-pair-inventory: src/dashboard.py:43,44,45,46,460 -->
 | `src/dashboard.py` | Display metadata | Dashboard labels/fallbacks must consume canonical display symbols and never control custody or routing. |
@@ -86,7 +86,7 @@ Excluded surfaces are explicit:
 | `src/startup_recovery.py` | Runtime semantics | Recovery must preserve the validated pair/custody identity and exact integer amounts. |
 <!-- token-pair-inventory: src/state_db.py:14,2184 -->
 | `src/state_db.py` | Frozen compatibility state + Display metadata | Existing SQLite names stay stable until a separately tested append-only migration; new labels derive from canonical metadata. |
-<!-- token-pair-inventory: src/swap_nexus.py:90,168,332,424,539,715,723,726,756,768,772,779,816 -->
+<!-- token-pair-inventory: src/swap_nexus.py:90,332,424,539,715,723,726,756,768,772,779,816 -->
 | `src/swap_nexus.py` | Runtime semantics | Nexus-to-Solana processing must use canonical token/custody/fee configuration and durable intent rules. |
 <!-- token-pair-inventory: src/swap_solana.py:126,193 -->
 | `src/swap_solana.py` | Runtime semantics | Solana-to-Nexus processing must use canonical token/custody/fee configuration and immutable Nexus identity checks. |
