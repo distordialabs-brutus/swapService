@@ -16,7 +16,7 @@ Design notes:
  - Reference seeding heuristic: choose max(reference found in database OR Nexus) + 1.
 """
 from __future__ import annotations
-from decimal import Decimal, ROUND_DOWN
+from decimal import Decimal
 from . import config, solana_client, nexus_client, state_db
 import time
 
@@ -99,40 +99,32 @@ def _rebuild_nexus_from_waterline(waterline_timestamp: int) -> dict:
             if amount_dec <= 0:
                 continue
             
-            # Check minimum threshold
-            # Dust floor, matching poll_nexus_deposits: credits above dust but below
-            # the swap minimum are recorded (as fees) rather than skipped without trace.
-            min_threshold = config.DUST_CREDIT_NEXUS_UNITS / (10 ** config.USDD_DECIMALS)
-            if amount_dec < min_threshold:
+            classification = nexus_client.classify_nexus_credit(c.get("amount"))
+            if classification.disposition in {"invalid", "dust"}:
                 continue
-            
-            # Recovery must use the same exact canonical payout calculation as the
-            # normal poller.  A credit that cannot fund a positive Solana output after
-            # the configured fee policy is retained as an accounted fee, not queued.
-            credit_units = int(
-                (amount_dec * (Decimal(10) ** config.USDD_DECIMALS)).to_integral_value(
-                    rounding=ROUND_DOWN
+            credit_units = classification.amount_nexus_units
+            owner = (nexus_client.get_account_info(sender) or {}).get("owner")
+
+            if classification.disposition in {"below_minimum", "fee_only"}:
+                kind = (
+                    "below_min_credit_nexus"
+                    if classification.disposition == "below_minimum"
+                    else "fee_only_nexus_credit"
                 )
-            )
-            if nexus_client.get_solana_send_amount_units(credit_units) <= 0:
-                # Mark as processed fees
-                owner = (nexus_client.get_account_info(sender) or {}).get("owner")
+                state_db.add_fee_entry(
+                    sig=None, txid=txid, kind=kind, amount_usdc_units=None,
+                    amount_usdd_units=credit_units,
+                )
                 state_db.mark_processed_txid(
-                    txid=txid,
-                    timestamp=ts,
-                    amount_usdd=float(amount_dec),
-                    from_address=sender,
-                    to_address=treasury_addr,
-                    owner=owner or "",
-                    sig="",
-                    status="processed as fees"
+                    txid=txid, timestamp=ts, amount_usdd=float(amount_dec),
+                    from_address=sender, to_address=treasury_addr, owner=owner or "", sig="",
+                    status="processed as fees", amount_usdd_units=credit_units,
                 )
                 processed_txids.add(txid)
                 skipped_fees += 1
                 break
-            
-            # Add to unprocessed
-            owner = (nexus_client.get_account_info(sender) or {}).get("owner")
+
+            status = "refund pending" if classification.disposition == "over_cap" else "pending_receival"
             state_db.add_unprocessed_txid(
                 txid=txid,
                 timestamp=ts,
@@ -141,9 +133,9 @@ def _rebuild_nexus_from_waterline(waterline_timestamp: int) -> dict:
                 to_address=treasury_addr,
                 owner_from_address=owner,
                 confirmations_credit=conf,
-                status="pending_receival",
-                # Exact base units: refunds are derived from this, not the REAL column.
-                amount_usdd_units=int((amount_dec * (Decimal(10) ** config.USDD_DECIMALS)).to_integral_value(rounding=ROUND_DOWN)),
+                status=status,
+                # Exact base units: every later payout/refund derives from this value.
+                amount_usdd_units=credit_units,
             )
             unprocessed_txids.add(txid)
             added_count += 1

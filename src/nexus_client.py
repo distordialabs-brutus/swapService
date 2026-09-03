@@ -350,16 +350,48 @@ def get_nexus_send_amount_units(amount_solana_units: int) -> int:
 
 
 def get_solana_send_amount_units(amount_nexus_units: int) -> int:
-    """Net Solana output for a Nexus credit, in Solana base units.
+    """Return the exact Solana output units after canonical Nexus→Solana fees.
 
-    This mirrors ``get_nexus_send_amount_units`` with the opposite input and
-    output scales.  A conversion remainder is rounded down before fees, so a
-    decimal mismatch can never cause an overpayment.
+    The Nexus input is converted down to the Solana scale before the Solana-output fee
+    is charged.  This ordering prevents an unrepresentable Nexus remainder from becoming
+    a Solana payout unit.
     """
     gross_solana_units = config.nexus_units_to_solana(int(amount_nexus_units), round_up=False)
     fee_policy = config.SWAP_PAIR.fees
     dynamic_fee = _dynamic_fee_units(gross_solana_units, fee_policy.basis_points)
     return max(0, gross_solana_units - int(fee_policy.flat_to_solana_units) - dynamic_fee)
+
+
+@dataclass(frozen=True)
+class NexusCreditClassification:
+    """One exact, fail-closed disposition for a Nexus credit entering the bridge."""
+
+    disposition: str
+    amount_nexus_units: int
+    net_solana_units: int = 0
+
+
+def classify_nexus_credit(amount: object) -> NexusCreditClassification:
+    """Classify Nexus credits identically for live polling and startup recovery.
+
+    Only exact Nexus base units are admitted.  The returned disposition is one of
+    ``invalid``, ``dust``, ``below_minimum``, ``over_cap``, ``fee_only`` or ``payable``.
+    Callers own durable state writes but must never invent a separate threshold policy.
+    """
+    amount_nexus_units = _parse_exact_nexus_units(amount)
+    if amount_nexus_units is None or amount_nexus_units <= 0:
+        return NexusCreditClassification("invalid", 0)
+    if amount_nexus_units < int(config.DUST_CREDIT_NEXUS_UNITS):
+        return NexusCreditClassification("dust", amount_nexus_units)
+    if amount_nexus_units < int(config.MIN_CREDIT_NEXUS_UNITS):
+        return NexusCreditClassification("below_minimum", amount_nexus_units)
+    max_swap_nexus = int(getattr(config, "MAX_SWAP_NEXUS_UNITS", 0) or 0)
+    if max_swap_nexus > 0 and amount_nexus_units > max_swap_nexus:
+        return NexusCreditClassification("over_cap", amount_nexus_units)
+    net_solana_units = get_solana_send_amount_units(amount_nexus_units)
+    if net_solana_units <= 0:
+        return NexusCreditClassification("fee_only", amount_nexus_units)
+    return NexusCreditClassification("payable", amount_nexus_units, net_solana_units)
 
 
 def get_nexus_send_amount(amount_solana: int) -> Decimal:

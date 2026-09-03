@@ -710,27 +710,25 @@ def poll_nexus_deposits():
                     amount_dec = _parse_decimal_amount(c.get("amount"))
                     if amount_dec <= 0:
                         continue
-                        
-                    # Dust floor (anti-DoS): below this we ignore the credit entirely.
-                    dust_threshold = Decimal(config.DUST_CREDIT_NEXUS_UNITS) / (Decimal(10) ** config.USDD_DECIMALS)
-                    if amount_dec < dust_threshold:
-                        # True spam dust: no state writes, no fee accounting.
+                    classification = nexus_client.classify_nexus_credit(c.get("amount"))
+                    if classification.disposition in {"invalid", "dust"}:
+                        # True spam dust or non-exact chain evidence: no state write and no
+                        # fee accounting. Recovery uses this same classifier.
                         continue
+                    credit_units = classification.amount_nexus_units
 
                     # Below the swap minimum but above dust: this is real user money.
                     # It must NEVER be dropped silently - record it so the funds are
                     # accounted for and the sender is traceable for manual resolution.
-                    min_credit_threshold = Decimal(config.MIN_CREDIT_NEXUS_UNITS) / (Decimal(10) ** config.USDD_DECIMALS)
-                    if amount_dec < min_credit_threshold:
+                    if classification.disposition == "below_minimum":
                         owner = (nexus_client.get_account_info(sender) or {}).get("owner")
-                        below_min_units = int((amount_dec * (Decimal(10) ** config.USDD_DECIMALS)).to_integral_value(rounding=ROUND_DOWN))
-                        if below_min_units > 0:
+                        if credit_units > 0:
                             state_db.add_fee_entry(
                                 sig=None,
                                 txid=txid,
                                 kind="below_min_credit_nexus",
                                 amount_usdc_units=None,
-                                amount_usdd_units=below_min_units,
+                                amount_usdd_units=credit_units,
                             )
                         state_db.mark_processed_txid(
                             txid=txid,
@@ -741,20 +739,18 @@ def poll_nexus_deposits():
                             owner=owner or "",
                             sig="",
                             status=NEXUS_STATUS_FEES,
-                            amount_usdd_units=below_min_units,
+                            amount_usdd_units=credit_units,
                         )
                         processed_txids.add(txid)
                         processed_count += 1
                         _log("NEXUS_BELOW_MIN_CREDIT", txid=txid, amount=str(amount_dec),
-                             minimum=str(min_credit_threshold), sender=sender)
+                             minimum_units=config.MIN_CREDIT_NEXUS_UNITS, sender=sender)
                         continue
 
 
-                    # Per-swap size cap: queue oversized credits for refund rather than
-                    # committing the vault to a payout that large.
-                    max_swap_nexus = int(getattr(config, "MAX_SWAP_NEXUS_UNITS", 0) or 0)
-                    credit_units = int((amount_dec * (Decimal(10) ** config.USDD_DECIMALS)).to_integral_value(rounding=ROUND_DOWN))
-                    if max_swap_nexus > 0 and credit_units > max_swap_nexus:
+                    # Over-cap credits are retained for the explicit refund workflow;
+                    # recovery makes this exact same disposition.
+                    if classification.disposition == "over_cap":
                         owner = (nexus_client.get_account_info(sender) or {}).get("owner")
                         state_db.add_unprocessed_txid(
                             txid=txid, timestamp=ts, amount_usdd=float(amount_dec),
@@ -766,25 +762,25 @@ def poll_nexus_deposits():
                         processed_count += 1
                         alerts.warning("swap_over_cap",
                                        "Nexus credit exceeds MAX_SWAP_USDD; queued for refund",
-                                       txid=txid, amount_units=credit_units, cap_units=max_swap_nexus)
+                                       txid=txid, amount_units=credit_units,
+                                       cap_units=config.MAX_SWAP_NEXUS_UNITS)
                         continue
 
                     # Use the same exact, canonical payout calculation as the send path.
                     # A Nexus credit that cannot fund one Solana output unit after the
                     # configured output fee and bps must be retained as a fee, never queued
                     # for a payout that will later resolve to zero.
-                    if nexus_client.get_solana_send_amount_units(credit_units) <= 0:
+                    if classification.disposition == "fee_only":
                         # Add to processed as fees
                         owner = (nexus_client.get_account_info(sender) or {}).get("owner")
-                        # Bug #14 fix: Track the fee (entire amount is kept as fee)
-                        total_fee_nexus_units = int((amount_dec * (Decimal(10) ** config.USDD_DECIMALS)).to_integral_value(rounding=ROUND_DOWN))
-                        if total_fee_nexus_units > 0:
+                        # The exact credited base units are fully retained as a fee.
+                        if credit_units > 0:
                             state_db.add_fee_entry(
                                 sig=None,
                                 txid=txid,
                                 kind="fee_only_nexus_credit",
                                 amount_usdc_units=None,
-                                amount_usdd_units=total_fee_nexus_units
+                                amount_usdd_units=credit_units
                             )
                         state_db.mark_processed_txid(
                             txid=txid,
@@ -795,7 +791,7 @@ def poll_nexus_deposits():
                             owner=owner or "",
                             sig="",
                             status=NEXUS_STATUS_FEES,
-                            amount_usdd_units=total_fee_nexus_units,
+                            amount_usdd_units=credit_units,
                         )
                         processed_txids.add(txid)
                         processed_count += 1
@@ -813,8 +809,9 @@ def poll_nexus_deposits():
                         owner_from_address=owner,
                         confirmations_credit=conf,
                         status=NEXUS_STATUS_PENDING,
-                        # Exact base units: refunds are derived from this, not the REAL column.
-                        amount_usdd_units=int((amount_dec * (Decimal(10) ** config.USDD_DECIMALS)).to_integral_value(rounding=ROUND_DOWN)),
+                        # Exact base units from the shared classifier; refunds derive from this,
+                        # never from the lossy REAL column.
+                        amount_usdd_units=credit_units,
                     )
                     unprocessed_txids.add(txid)
                     processed_count += 1

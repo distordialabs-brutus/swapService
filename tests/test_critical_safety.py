@@ -93,6 +93,27 @@ class CriticalSafetyTests(unittest.TestCase):
                 9_899_650,
             )
 
+    def test_nexus_credit_classifier_has_exact_branch_parity_inputs(self):
+        """Live polling and recovery must share every durable Nexus-credit disposition."""
+        pair = replace(
+            config.SWAP_PAIR,
+            fees=replace(config.SWAP_PAIR.fees, flat_to_solana_units=100, basis_points=0),
+        )
+        with patch.object(config, "SWAP_PAIR", pair), patch.object(
+            config, "DUST_CREDIT_NEXUS_UNITS", 10
+        ), patch.object(config, "MIN_CREDIT_NEXUS_UNITS", 50), patch.object(
+            config, "MAX_SWAP_NEXUS_UNITS", 200
+        ):
+            dispositions = [
+                nexus_client.classify_nexus_credit(value).disposition
+                for value in ("0.000001", "0.000025", "0.000100", "0.000150", "0.000201")
+            ]
+
+        self.assertEqual(
+            dispositions,
+            ["dust", "below_minimum", "fee_only", "payable", "over_cap"],
+        )
+
     def test_nexus_credit_admission_uses_canonical_output_math(self):
         """A credit that cannot fund canonical Solana output is fee-only, never queued."""
         pair = replace(
@@ -172,6 +193,54 @@ class CriticalSafetyTests(unittest.TestCase):
 
                 self.assertTrue(state_db.is_processed_txid(credit["txid"]))
                 self.assertFalse(state_db.is_unprocessed_txid(credit["txid"]))
+
+    def test_recovery_uses_the_full_shared_nexus_credit_classifier(self):
+        """Recovery persists every non-dust credit exactly as live classification requires."""
+        pair = replace(
+            config.SWAP_PAIR,
+            fees=replace(config.SWAP_PAIR.fees, flat_to_solana_units=100, basis_points=0),
+        )
+        def credit(txid, amount):
+            return {"txid": txid, "timestamp": 1_000, "confirmations": 2, "contracts": [{
+                "OP": "CREDIT", "from": "sender", "to": "TREASURY", "amount": amount,
+            }]}
+        credits = [
+            credit("dust", "0.000001"),
+            credit("below", "0.000025"),
+            credit("fee-only", "0.000100"),
+            credit("payable", "0.000150"),
+            credit("over-cap", "0.000201"),
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "state.db")
+            with patch.object(state_db, "DB_PATH", db_path), patch.object(
+                config, "SWAP_PAIR", pair
+            ), patch.object(config, "DUST_CREDIT_NEXUS_UNITS", 10), patch.object(
+                config, "MIN_CREDIT_NEXUS_UNITS", 50
+            ), patch.object(config, "MAX_SWAP_NEXUS_UNITS", 200), patch.object(
+                nexus_client, "fetch_deposits_since", return_value=credits
+            ), patch.object(nexus_client, "get_account_info", return_value={"owner": "owner"}):
+                state_db.init_db()
+                startup_recovery._rebuild_nexus_from_waterline(0)
+                pending = {row["txid"]: row for row in state_db.get_unprocessed_txids_as_dicts()}
+                # (id, sig, txid, kind, amount_usdc_units, amount_usdd_units, timestamp)
+                fees = {row[2]: row for row in state_db.get_fee_entries()}
+                conn = state_db.sqlite3.connect(db_path)
+                processed = dict(conn.execute(
+                    "SELECT txid, amount_usdd_units FROM processed_txids"
+                ).fetchall())
+                conn.close()
+                dust_processed = state_db.is_processed_txid("dust")
+
+        self.assertFalse(dust_processed)
+        self.assertEqual(fees["below"][5], 25)
+        self.assertEqual(fees["fee-only"][5], 100)
+        self.assertEqual(processed["below"], 25)
+        self.assertEqual(processed["fee-only"], 100)
+        self.assertEqual(pending["payable"]["amount_usdd_units"], 150)
+        self.assertEqual(pending["payable"]["comment"], "pending_receival")
+        self.assertEqual(pending["over-cap"]["amount_usdd_units"], 201)
+        self.assertEqual(pending["over-cap"]["comment"], "refund pending")
 
     def test_service_record_terms_use_canonical_pair_fee_policy(self):
         """Nexus heartbeat terms must advertise the same policy that pays Solana users."""
