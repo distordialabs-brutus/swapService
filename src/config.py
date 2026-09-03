@@ -300,23 +300,43 @@ def _to_units(s: str, decimals: int) -> int:
         raise ValueError(f"{s!r} cannot be represented with {decimals} decimals")
     return int(integral)
 
+
+def _non_negative_fee_units(name: str, value: str, decimals: int) -> int:
+    """Parse a fee amount without permitting it to increase a user payout."""
+    units = _to_units(value, decimals)
+    if units < 0:
+        raise ValueError(f"{name} must be non-negative")
+    return units
+
 # Fee charged on an output sent to Nexus, in Nexus base units.
-FLAT_FEE_TO_NEXUS_UNITS = _to_units(FLAT_FEE_TO_NEXUS, USDD_DECIMALS)
+FLAT_FEE_TO_NEXUS_UNITS = _non_negative_fee_units(
+    "FEE_FLAT_TO_NEXUS", FLAT_FEE_TO_NEXUS, USDD_DECIMALS
+)
 # Fee charged on an output sent to Solana, in Solana base units.
-FLAT_FEE_TO_SOLANA_UNITS = _to_units(FLAT_FEE_TO_SOLANA, USDC_DECIMALS)
+FLAT_FEE_TO_SOLANA_UNITS = _non_negative_fee_units(
+    "FEE_FLAT_TO_SOLANA", FLAT_FEE_TO_SOLANA, USDC_DECIMALS
+)
 # A failed Solana deposit is returned on Solana, so its USDD-denominated refund fee
 # must be represented in Solana base units, not Nexus base units.
-FLAT_FEE_REFUND_SOLANA_UNITS = _to_units(FEE_REFUND_SOLANA, USDC_DECIMALS)
+FLAT_FEE_REFUND_SOLANA_UNITS = _non_negative_fee_units(
+    "FEE_REFUND_SOLANA", FEE_REFUND_SOLANA, USDC_DECIMALS
+)
 # Authorized Nexus refund/disposition fee in Nexus base units. It is currently not
 # applied automatically, but its unit representation is immutable inside SWAP_PAIR.
-FEE_NEXUS_DISPOSITION_UNITS = _to_units(FEE_NEXUS_DISPOSITION, USDD_DECIMALS)
+FEE_NEXUS_DISPOSITION_UNITS = _non_negative_fee_units(
+    "FEE_NEXUS_DISPOSITION", FEE_NEXUS_DISPOSITION, USDD_DECIMALS
+)
 # The Solana-output fee re-expressed in Nexus base units for Nexus-side input thresholds.
-FLAT_FEE_TO_SOLANA_NEXUS_UNITS = _to_units(FLAT_FEE_TO_SOLANA, USDD_DECIMALS)
+FLAT_FEE_TO_SOLANA_NEXUS_UNITS = _non_negative_fee_units(
+    "FEE_FLAT_TO_SOLANA", FLAT_FEE_TO_SOLANA, USDD_DECIMALS
+)
 
 # A single bps rate is deliberately applied to the input of each direction.  Callers use
 # direction-named helpers/inputs so the source scale is explicit: Nexus units for a
 # Nexus->Solana payout and Solana units for a Solana->Nexus payout.
 FEE_BPS = int(_compat_env("FEE_BPS", "DYNAMIC_FEE_BPS", default="10"))
+if not 0 <= FEE_BPS < 5_000:
+    raise ValueError("FEE_BPS must be between 0 and 4999")
 DYNAMIC_FEE_BPS = FEE_BPS  # compatibility attribute for existing callers
 FEES_STATE_FILE = os.getenv("FEES_STATE_FILE", "fees_state.json")
 

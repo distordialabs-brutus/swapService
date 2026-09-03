@@ -108,3 +108,22 @@ def test_default_nexus_disposition_fee_is_exact_for_zero_decimal_pairs(monkeypat
     )
 
     assert config.SWAP_PAIR.fees.nexus_disposition_units == 0
+
+
+@pytest.mark.parametrize(
+    ("setting", "value", "message"),
+    (
+        ("FEE_FLAT_TO_NEXUS", "-0.1", "FEE_FLAT_TO_NEXUS must be non-negative"),
+        ("FEE_FLAT_TO_SOLANA", "-0.1", "FEE_FLAT_TO_SOLANA must be non-negative"),
+        ("FEE_REFUND_SOLANA", "-0.1", "FEE_REFUND_SOLANA must be non-negative"),
+        ("FEE_NEXUS_DISPOSITION", "-0.1", "FEE_NEXUS_DISPOSITION must be non-negative"),
+        ("FEE_BPS", "-1", "FEE_BPS must be between 0 and 4999"),
+        ("FEE_BPS", "5000", "FEE_BPS must be between 0 and 4999"),
+    ),
+)
+def test_fee_policy_rejects_values_that_can_credit_or_consume_minimum_swaps(
+    monkeypatch, setting, value, message
+):
+    """Startup must reject fee schedules that can pay users extra or consume a minimum swap."""
+    with pytest.raises(ValueError, match=message):
+        _load_config(monkeypatch, **{setting: value})
