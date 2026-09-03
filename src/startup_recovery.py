@@ -106,12 +106,15 @@ def _rebuild_nexus_from_waterline(waterline_timestamp: int) -> dict:
             if amount_dec < min_threshold:
                 continue
             
-            # Check if fees only
-            flat_fee = _parse_decimal_amount(getattr(config, "FLAT_FEE_USDD", "0.1"))
-            dyn_bps = int(getattr(config, "DYNAMIC_FEE_BPS", 0))
-            dyn_fee = (amount_dec * Decimal(dyn_bps)) / Decimal(10000)
-            
-            if amount_dec <= (flat_fee + dyn_fee):
+            # Recovery must use the same exact canonical payout calculation as the
+            # normal poller.  A credit that cannot fund a positive Solana output after
+            # the configured fee policy is retained as an accounted fee, not queued.
+            credit_units = int(
+                (amount_dec * (Decimal(10) ** config.USDD_DECIMALS)).to_integral_value(
+                    rounding=ROUND_DOWN
+                )
+            )
+            if nexus_client.get_solana_send_amount_units(credit_units) <= 0:
                 # Mark as processed fees
                 owner = (nexus_client.get_account_info(sender) or {}).get("owner")
                 state_db.mark_processed_txid(

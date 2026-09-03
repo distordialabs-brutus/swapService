@@ -93,6 +93,86 @@ class CriticalSafetyTests(unittest.TestCase):
                 9_899_650,
             )
 
+    def test_nexus_credit_admission_uses_canonical_output_math(self):
+        """A credit that cannot fund canonical Solana output is fee-only, never queued."""
+        pair = replace(
+            config.SWAP_PAIR,
+            fees=replace(
+                config.SWAP_PAIR.fees,
+                flat_to_solana_units=500_000,
+                basis_points=0,
+            ),
+        )
+        credit = {
+            "txid": "canonical-fee-only-credit",
+            "timestamp": 1_000,
+            "confirmations": 2,
+            "contracts": [{
+                "OP": "CREDIT",
+                "from": "sender",
+                "to": "TREASURY",
+                "amount": "0.3",
+            }],
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "state.db")
+            with patch.object(state_db, "DB_PATH", db_path), patch.object(
+                config, "SWAP_PAIR", pair
+            ), patch.object(config, "DUST_CREDIT_NEXUS_UNITS", 1), patch.object(
+                config, "MIN_CREDIT_NEXUS_UNITS", 1
+            ), patch.object(config, "FLAT_FEE_USDD", "0"), patch.object(
+                config, "DYNAMIC_FEE_BPS", 0
+            ), patch.object(
+                nexus_client, "_run", return_value=(0, json.dumps([credit]), "")
+            ), patch.object(
+                nexus_client, "get_account_info", return_value={"owner": "owner"}
+            ):
+                state_db.init_db()
+                swap_nexus.poll_nexus_deposits()
+
+                self.assertTrue(state_db.is_processed_txid(credit["txid"]))
+                self.assertFalse(state_db.is_unprocessed_txid(credit["txid"]))
+
+    def test_recovery_nexus_credit_admission_uses_canonical_output_math(self):
+        """Database recovery must apply the same fee-only admission rule as the poller."""
+        pair = replace(
+            config.SWAP_PAIR,
+            fees=replace(
+                config.SWAP_PAIR.fees,
+                flat_to_solana_units=500_000,
+                basis_points=0,
+            ),
+        )
+        credit = {
+            "txid": "recovery-canonical-fee-only-credit",
+            "timestamp": 1_000,
+            "confirmations": 2,
+            "contracts": [{
+                "OP": "CREDIT",
+                "from": "sender",
+                "to": "TREASURY",
+                "amount": "0.3",
+            }],
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "state.db")
+            with patch.object(state_db, "DB_PATH", db_path), patch.object(
+                config, "SWAP_PAIR", pair
+            ), patch.object(config, "DUST_CREDIT_NEXUS_UNITS", 1), patch.object(
+                config, "FLAT_FEE_USDD", "0"
+            ), patch.object(config, "DYNAMIC_FEE_BPS", 0), patch.object(
+                nexus_client, "fetch_deposits_since", return_value=[credit]
+            ), patch.object(
+                nexus_client, "get_account_info", return_value={"owner": "owner"}
+            ):
+                state_db.init_db()
+                startup_recovery._rebuild_nexus_from_waterline(0)
+
+                self.assertTrue(state_db.is_processed_txid(credit["txid"]))
+                self.assertFalse(state_db.is_unprocessed_txid(credit["txid"]))
+
     def test_service_record_terms_use_canonical_pair_fee_policy(self):
         """Nexus heartbeat terms must advertise the same policy that pays Solana users."""
         pair = replace(

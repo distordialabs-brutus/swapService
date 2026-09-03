@@ -769,10 +769,11 @@ def poll_nexus_deposits():
                                        txid=txid, amount_units=credit_units, cap_units=max_swap_nexus)
                         continue
 
-                    flat_nexus_dec = _parse_decimal_amount(getattr(config, "FLAT_FEE_USDD", "0.1"))
-                    dyn_bps = int(getattr(config, "DYNAMIC_FEE_BPS", 0))
-                    dyn_fee_dec = (amount_dec * Decimal(max(0, dyn_bps))) / Decimal(10000)
-                    if amount_dec <= (flat_nexus_dec + dyn_fee_dec):
+                    # Use the same exact, canonical payout calculation as the send path.
+                    # A Nexus credit that cannot fund one Solana output unit after the
+                    # configured output fee and bps must be retained as a fee, never queued
+                    # for a payout that will later resolve to zero.
+                    if nexus_client.get_solana_send_amount_units(credit_units) <= 0:
                         # Add to processed as fees
                         owner = (nexus_client.get_account_info(sender) or {}).get("owner")
                         # Bug #14 fix: Track the fee (entire amount is kept as fee)
