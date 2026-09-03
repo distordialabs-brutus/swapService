@@ -126,6 +126,76 @@ class CriticalSafetyTests(unittest.TestCase):
                 Decimal("0.9999975"),
             )
 
+    def test_solana_refund_uses_canonical_pair_refund_fee(self):
+        """Refund output must use the immutable pair fee, not a legacy module alias."""
+        pair = replace(
+            config.SWAP_PAIR,
+            fees=replace(config.SWAP_PAIR.fees, refund_solana_units=7),
+        )
+        row = ("deposit-sig", 1, "memo", "sender", 100, "to be refunded", None)
+
+        with patch.object(config, "SWAP_PAIR", pair), patch.object(
+            config, "FLAT_FEE_REFUND_SOLANA_UNITS", 29
+        ), patch.object(
+            solana_client.state_db, "filter_unprocessed_sigs", return_value=[row]
+        ), patch.object(
+            solana_client.state_db, "get_unprocessed_sig_status", return_value="to be refunded"
+        ), patch.object(solana_client.state_db, "is_processed_sig", return_value=False), patch.object(
+            solana_client.state_db, "is_quarantined_sig", return_value=False
+        ), patch.object(solana_client.state_db, "refund_attempt_key", return_value="refund-key"), patch.object(
+            solana_client.state_db, "get_attempt_count", return_value=0
+        ), patch.object(solana_client.state_db, "record_attempt"), patch.object(
+            solana_client, "_is_token_account_for_mint", return_value=True
+        ), patch.object(solana_client.state_db, "add_fee_entry"
+        ), patch.object(solana_client.state_db, "mark_processed_sig"), patch.object(
+            solana_client.state_db, "remove_unprocessed_sig"
+        ), patch.object(solana_client.state_db, "update_unprocessed_sig_status"), patch.object(
+            solana_client.state_db, "mark_refunded_sig"
+        ), patch.object(
+            solana_client, "send_solana_token", return_value=(True, "refund-tx")
+        ) as send:
+            processed = solana_client.process_solana_deposits_refunding(limit=1)
+
+        self.assertEqual(processed, 1)
+        send.assert_called_once_with("sender", 93, memo="refundSig:deposit-sig")
+
+    def test_solana_quarantine_uses_canonical_pair_refund_fee(self):
+        """Quarantine output must use the same immutable pair refund fee."""
+        pair = replace(
+            config.SWAP_PAIR,
+            fees=replace(config.SWAP_PAIR.fees, refund_solana_units=7),
+        )
+        row = ("deposit-sig", 1, "memo", "sender", 100, "to be quarantined", None)
+
+        with patch.object(config, "SWAP_PAIR", pair), patch.object(
+            config, "FLAT_FEE_REFUND_SOLANA_UNITS", 29
+        ), patch.object(
+            solana_client.state_db, "filter_unprocessed_sigs", return_value=[row]
+        ), patch.object(
+            solana_client.state_db, "get_unprocessed_sig_status", return_value="to be quarantined"
+        ), patch.object(solana_client.state_db, "should_attempt", return_value=True), patch.object(
+            solana_client.state_db, "quarantine_send_attempt_key", return_value="quarantine-key"
+        ), patch.object(solana_client.state_db, "get_attempt_count", return_value=0), patch.object(
+            solana_client.state_db, "record_attempt"), patch.object(
+            solana_client, "_is_token_account_for_mint", return_value=True
+        ), patch.object(
+            solana_client.state_db, "is_processed_sig", return_value=False
+        ), patch.object(solana_client.state_db, "is_refunded_sig", return_value=False), patch.object(
+            solana_client.state_db, "add_fee_entry"
+        ), patch.object(solana_client.state_db, "mark_processed_sig"), patch.object(
+            solana_client.state_db, "remove_unprocessed_sig"
+        ), patch.object(solana_client.state_db, "update_unprocessed_sig_status"), patch.object(
+            solana_client.state_db, "mark_quarantined_sig"
+        ), patch.object(
+            solana_client, "send_solana_token", return_value=(True, "quarantine-tx")
+        ) as send:
+            processed = solana_client.process_solana_deposits_quarantine(limit=1)
+
+        self.assertEqual(processed, 1)
+        send.assert_called_once_with(
+            config.USDC_QUARANTINE_ACCOUNT, 93, memo="quarantinedSig:deposit-sig"
+        )
+
     def test_solana_poll_money_path_summaries_are_structured_events(self):
         """A Nexus→Solana payout operator must not have to parse console prose."""
         with patch.object(swap_solana.nexus_client, "get_heartbeat_asset", return_value={
