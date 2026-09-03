@@ -78,15 +78,15 @@ Excluded surfaces are explicit:
 | `src/fees.py` | Runtime semantics | Route every flat, proportional and micro fee through the exact pair fee policy. |
 <!-- token-pair-inventory: src/main.py:96,98,100,108,109,110,111,286,287,300,303,342,343,345,349,414,429,471 -->
 | `src/main.py` | Runtime semantics + Display metadata | Production admission and output must use canonical identities/terms, preserving only compatibility names where migration requires them. |
-<!-- token-pair-inventory: src/nexus_client.py:264,320,325,367,453,931,1081,1082,1115,1639,1696,1697,1698,1699 -->
+<!-- token-pair-inventory: src/nexus_client.py:264,320,325,399,485,963,1113,1114,1147,1671,1728,1729,1730,1731 -->
 | `src/nexus_client.py` | Runtime semantics + Display metadata | Require immutable Nexus register identity for authorization/reconciliation; retain token name only where the Nexus API requires it and for presentation. |
 <!-- token-pair-inventory: src/solana_client.py:273,363,614,722,744,804,928,1005,1009,1018,1019,1023,1407,1411,1455,1468,1530,1541,1542,1546,1584,1593,1594,1598,1612,1638,1649,1666,1667,1771,1876,2003,2014,2036,2037,2041,2068,2076,2077,2081 -->
 | `src/solana_client.py` | Runtime semantics + Frozen compatibility state | Route transfers, payout caps and persisted labels through the canonical pair object without renaming live state prematurely. |
-<!-- token-pair-inventory: src/startup_recovery.py:44,105,113,146 -->
+<!-- token-pair-inventory: src/startup_recovery.py:44 -->
 | `src/startup_recovery.py` | Runtime semantics | Recovery must preserve the validated pair/custody identity and exact integer amounts. |
 <!-- token-pair-inventory: src/state_db.py:14,2184 -->
 | `src/state_db.py` | Frozen compatibility state + Display metadata | Existing SQLite names stay stable until a separately tested append-only migration; new labels derive from canonical metadata. |
-<!-- token-pair-inventory: src/swap_nexus.py:90,332,424,539,715,723,726,756,768,780,817 -->
+<!-- token-pair-inventory: src/swap_nexus.py:90,332,424,539,764 -->
 | `src/swap_nexus.py` | Runtime semantics | Nexus-to-Solana processing must use canonical token/custody/fee configuration and durable intent rules. |
 <!-- token-pair-inventory: src/swap_solana.py:126,193 -->
 | `src/swap_solana.py` | Runtime semantics | Solana-to-Nexus processing must use canonical token/custody/fee configuration and immutable Nexus identity checks. |
