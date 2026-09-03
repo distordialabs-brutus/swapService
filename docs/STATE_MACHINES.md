@@ -67,6 +67,15 @@ State machine diagrams for both swap directions in the bidirectional USDC ↔ US
 > field, zero-input/positive-output terminal mints can reconcile healthy, and the
 > target-node matrix remains unrun. Production remains hard-blocked; see
 > `DEVELOPMENT_REVIEW_2026-09-02.md`.
+>
+> **Follow-up review (2026-09-03, `8769dcf`):** positive finality, strictly
+> positive completed-mint inputs and canonical fee policy are now enforced and
+> covered by the green suite. Startup reconstruction, however, does not preserve
+> the live Nexus-credit dust/minimum/cap/fee transitions: positive-output
+> below-minimum or over-cap credits can be queued for payout, and fee-only
+> recovery omits exact-unit/fee-ledger evidence. Live polling and recovery must
+> share one classifier. Production remains hard-blocked; see
+> `DEVELOPMENT_REVIEW_2026-09-03.md`.
 
 ---
 
