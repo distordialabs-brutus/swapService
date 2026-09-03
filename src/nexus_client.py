@@ -1447,11 +1447,15 @@ def find_nexus_transfer_debits_by_references(references, limit: int = 100) -> Ba
         return BatchLookup(out, True)
 
     page_size = max(1, int(limit))
+    try:
+        minimum_confirmations = config.get_nexus_transfer_min_confirmations()
+    except ValueError:
+        return BatchLookup({}, False, "invalid_finality_policy")
     max_pages = max(1, int(getattr(config, "NEXUS_LOOKUP_MAX_PAGES", 5)))
     for page in range(max_pages):
         cmd = [
             config.NEXUS_CLI,
-            "finance/transactions/token/txid,timestamp,contracts.id,contracts.OP,contracts.reference,contracts.from,contracts.to,contracts.amount",
+            "finance/transactions/token/txid,timestamp,confirmations,contracts.id,contracts.OP,contracts.reference,contracts.from,contracts.to,contracts.amount",
             f"name={config.NEXUS_TOKEN_NAME}",
             "sort=timestamp",
             "order=desc",
@@ -1486,6 +1490,14 @@ def find_nexus_transfer_debits_by_references(references, limit: int = 100) -> Ba
                     key = str(reference).strip()
                     if key not in wanted:
                         continue
+                    confirmations = tx.get("confirmations")
+                    if (isinstance(confirmations, bool) or not isinstance(confirmations, int)
+                            or confirmations < minimum_confirmations):
+                        # A bounded reference lookup is already insufficient to prove global
+                        # uniqueness. It also must not let a candidate below the configured
+                        # finality depth become durable transfer evidence for a future complete
+                        # lookup implementation.
+                        return BatchLookup({}, False, "insufficient_confirmations")
                     amount_usdd_units = _parse_exact_nexus_units(contract.get("amount"))
                     from_address = _parse_nexus_contract_address(contract.get("from"))
                     to_address = _parse_nexus_contract_address(contract.get("to"))

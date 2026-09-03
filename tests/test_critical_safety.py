@@ -2616,6 +2616,7 @@ class CriticalSafetyTests(unittest.TestCase):
         """Current LLL-TAO contract filters return endpoint objects, not flat strings."""
         response = json.dumps([{
             "txid": "nested-endpoints-tx",
+            "confirmations": config.NEXUS_TRANSFER_MIN_CONFIRMATIONS,
             "contracts": [{
                 "id": 7, "OP": "DEBIT", "reference": "bridge-xfer:nested",
                 "from": {"address": "TREASURY-REGISTER"},
@@ -2632,6 +2633,27 @@ class CriticalSafetyTests(unittest.TestCase):
         self.assertEqual(evidence.from_address, "TREASURY-REGISTER")
         self.assertEqual(evidence.to_address, "RECIPIENT-REGISTER")
         self.assertEqual(evidence.contract_id, 7)
+
+    def test_reference_transfer_lookup_holds_unfinal_debit_evidence(self):
+        """A reference match cannot finalize a transfer before the configured depth."""
+        response = json.dumps([{
+            "txid": "reference-unfinal-tx",
+            "confirmations": config.NEXUS_TRANSFER_MIN_CONFIRMATIONS - 1,
+            "contracts": [{
+                "id": 7, "OP": "DEBIT", "reference": "bridge-xfer:unfinal-reference",
+                "from": {"address": "TREASURY-REGISTER"},
+                "to": {"address": "RECIPIENT-REGISTER"},
+                "amount": "1.000000",
+            }],
+        }])
+        with patch.object(nexus_client, "_run", return_value=(0, response, "")):
+            lookup = nexus_client.find_nexus_transfer_debits_by_references(
+                ["bridge-xfer:unfinal-reference"]
+            )
+
+        self.assertFalse(lookup.complete)
+        self.assertEqual(lookup.reason, "insufficient_confirmations")
+        self.assertEqual(lookup.values, {})
 
     def test_transfer_resolution_holds_two_exact_contracts_in_one_transaction(self):
         """A pair of exact contracts sharing a txid must never complete one transfer intent."""
