@@ -93,6 +93,25 @@ class CriticalSafetyTests(unittest.TestCase):
                 9_899_650,
             )
 
+    def test_backing_maintenance_uses_canonical_pair_vault(self):
+        """Backing checks must read the configured pair custody account, not a legacy alias."""
+        pair = replace(
+            config.SWAP_PAIR,
+            solana=replace(config.SWAP_PAIR.solana, vault_account="canonical-vault"),
+        )
+        with patch.object(config, "SWAP_PAIR", pair), patch.object(
+            config, "VAULT_USDC_ACCOUNT", "legacy-vault"
+        ), patch.object(
+            solana_client, "get_token_account_balance", return_value=1_000
+        ) as get_balance, patch.object(
+            state_db, "get_unresolved_solana_liability_units", return_value=0
+        ), patch.object(
+            nexus_client, "get_circulating_nexus_units", return_value=0
+        ):
+            self.assertFalse(fees.maintain_backing_and_bounds())
+
+        get_balance.assert_called_once_with("canonical-vault", max_age_sec=5)
+
     def test_nexus_credit_classifier_has_exact_branch_parity_inputs(self):
         """Live polling and recovery must share every durable Nexus-credit disposition."""
         pair = replace(

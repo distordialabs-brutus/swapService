@@ -74,8 +74,6 @@ Excluded surfaces are explicit:
 | `src/config.py` | Runtime semantics + Migration alias + Frozen compatibility state | Build one immutable `SwapPairConfig`; legacy aliases remain conflict-detecting inputs and database labels remain frozen absent migration. |
 <!-- token-pair-inventory: src/dashboard.py:43,44,45,46,460 -->
 | `src/dashboard.py` | Display metadata | Dashboard labels/fallbacks must consume canonical display symbols and never control custody or routing. |
-<!-- token-pair-inventory: src/fees.py:143 -->
-| `src/fees.py` | Runtime semantics | Route every flat, proportional and micro fee through the exact pair fee policy. |
 <!-- token-pair-inventory: src/main.py:96,98,100,108,109,110,111,286,287,300,303,342,343,345,349,414,429,471 -->
 | `src/main.py` | Runtime semantics + Display metadata | Production admission and output must use canonical identities/terms, preserving only compatibility names where migration requires them. |
 <!-- token-pair-inventory: src/nexus_client.py:264,320,325,399,485,963,1113,1114,1147,1683,1740,1741,1742,1743 -->
