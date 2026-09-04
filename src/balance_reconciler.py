@@ -153,9 +153,11 @@ def _fetch_processed_txids_for_account(
 def reconcile_account_trades(
     nexus_account: str, waterline_ts: int, include_remote_balance: bool = False
 ) -> Dict:
-    treasury = getattr(config, "NEXUS_USDD_TREASURY_ACCOUNT", None)
+    # Reconciliation is a financial authorization path: it must bind to the immutable
+    # startup pair, not a mutable legacy compatibility alias.
+    treasury = str(config.SWAP_PAIR.nexus.treasury_account or "").strip()
     if not treasury:
-        raise ValueError("NEXUS_USDD_TREASURY_ACCOUNT not configured")
+        raise ValueError("canonical Nexus treasury account is not configured")
 
     mint_rows = _fetch_processed_sigs_for_account(nexus_account, waterline_ts)
     credits, external_debits = _fetch_processed_txids_for_account(

@@ -112,6 +112,33 @@ class CriticalSafetyTests(unittest.TestCase):
 
         get_balance.assert_called_once_with("canonical-vault", max_age_sec=5)
 
+    def test_reconciliation_uses_canonical_pair_treasury(self):
+        """Reconciliation must not route accounting through a mutable legacy alias."""
+        pair = replace(
+            config.SWAP_PAIR,
+            nexus=replace(config.SWAP_PAIR.nexus, treasury_account="canonical-treasury"),
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "state.db")
+            with patch.object(state_db, "DB_PATH", db_path), patch.object(
+                config, "SWAP_PAIR", pair
+            ), patch.object(config, "NEXUS_USDD_TREASURY_ACCOUNT", "legacy-treasury"):
+                state_db.init_db()
+                state_db.mark_processed_txid(
+                    txid="canonical-treasury-credit",
+                    timestamp=1_000,
+                    amount_usdd=0.000123,
+                    amount_usdd_units=123,
+                    from_address="recipient",
+                    to_address="canonical-treasury",
+                    owner="owner",
+                    sig="",
+                    status="processed as fees",
+                )
+                summary = balance_reconciler.reconcile_account_trades("recipient", 0)
+
+        self.assertEqual(summary["treasury_in_nexus_units"], 123)
+
     def test_nexus_credit_classifier_has_exact_branch_parity_inputs(self):
         """Live polling and recovery must share every durable Nexus-credit disposition."""
         pair = replace(
