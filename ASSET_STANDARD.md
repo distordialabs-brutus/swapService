@@ -561,10 +561,15 @@ tool must emit every canonical field from the tables above and reject an incompl
 
 ---
 
-## Legacy Provider Heartbeat Asset Standard (v1; Current Implementation)
+## Legacy Provider Heartbeat Asset Standards (v1; Current Implementations)
 
-> **Compatibility only:** This section documents what the current code actually creates and
-> addresses by local name. New architecture work should target v2 above, not extend the v1 schema.
+> **Compatibility only:** the repository currently contains two incompatible `format=basic` v1
+> creators. This section documents the record emitted by `create_heartbeat_asset.py`.
+> `register_service.py` instead emits `src.nexus_client.SERVICE_RECORD_FIELDS`, including canonical
+> token, custody, fee, minimum, status, contact, memo and liveness fields. Because `format=basic`
+> fixes the field set, operators must not treat those assets as interchangeable. Both are addressed
+> by local name and neither implements v2. New architecture work should target v2 above, not extend
+> either v1 schema.
 
 Bridge service operators **should** maintain a public heartbeat asset on Nexus. This allows users and monitoring systems to verify the service is online and processing transactions.
 

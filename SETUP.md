@@ -380,7 +380,7 @@ new asset (another ~1 NXS). `--show` prints the record and its size against the 
 budget; `--create` refuses if the name already exists or the record is oversized.
 
 Published fields: `distordiaType`, `provider`, `contact`, `version`, `memo_prefix`,
-`nexus_token`, `nexus_treasury_address`, `solana_token`, `solana_vault_address`,
+`nexus_token`, `nexus_treasury_address`, `nexus_token_register_address`, `solana_token`, `solana_vault_address`,
 `solana_vault_mint`, `fee_flat_to_nexus`, `fee_flat_to_solana`, `fee_bps`, `min_to_nexus`,
 `min_to_solana`, `status`, `last_poll_timestamp` and both waterlines. The service rewrites
 the mutable subset (status, terms, liveness) each cycle, so the on-chain terms stay
