@@ -1956,6 +1956,29 @@ class DepositScan:
     reason: str | None = None
 
 
+def treasury_deposit_history_command(treasury_addr: str) -> list[str]:
+    """Build the public register-history query for the configured treasury account.
+
+    A token-register history omits ordinary account-to-account credits because neither
+    side of those CREDIT contracts is the token supply register.  Deposit admission and
+    wipeout recovery must instead enumerate the immutable treasury account itself.
+    """
+    treasury = str(treasury_addr or "").strip()
+    if not treasury:
+        raise ValueError("canonical Nexus treasury account is required for deposit enumeration")
+    projection = (
+        "register/transactions/finance:account/"
+        "txid,timestamp,confirmations,contracts.id,contracts.OP,contracts.from,contracts.to,contracts.amount"
+    )
+    return [
+        config.NEXUS_CLI,
+        projection,
+        f"address={treasury}",
+        "sort=timestamp",
+        "order=desc",
+    ]
+
+
 def fetch_deposits_since(treasury_addr: str, since_timestamp: int, max_pages: int = 50) -> DepositScan:
     """Enumerate Nexus transactions containing CREDITs to one canonical treasury.
 
@@ -1966,15 +1989,10 @@ def fetch_deposits_since(treasury_addr: str, since_timestamp: int, max_pages: in
     results: list[dict] = []
     limit = 100
 
-    base_cmd = [config.NEXUS_CLI]
-    projection = (
-        "register/transactions/finance:token/"
-        "txid,timestamp,confirmations,contracts.id,contracts.OP,contracts.from,contracts.to,contracts.amount"
-    )
-    base_cmd.append(projection)
-    base_cmd.append(f"name={config.NEXUS_TOKEN_NAME}")
-    base_cmd.append("sort=timestamp")
-    base_cmd.append("order=desc")
+    try:
+        base_cmd = treasury_deposit_history_command(treasury_addr)
+    except ValueError:
+        return DepositScan(results, False, "missing_treasury_account")
 
     for page in range(max(1, int(max_pages))):
         cmd = list(base_cmd) + [f"limit={limit}", f"offset={page * limit}"]

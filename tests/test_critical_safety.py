@@ -161,7 +161,7 @@ class CriticalSafetyTests(unittest.TestCase):
         )
 
     def test_admission_and_publication_use_canonical_pair_identity(self):
-        """Public identity and credit admission ignore mutable legacy aliases."""
+        """Public identity and live admission use canonical custody, not token history."""
         pair = replace(
             config.SWAP_PAIR,
             nexus=replace(
@@ -183,18 +183,72 @@ class CriticalSafetyTests(unittest.TestCase):
                 config, "SWAP_PAIR", pair
             ), patch.object(config, "NEXUS_USDD_TREASURY_ACCOUNT", "legacy-treasury"), patch.object(
                 config, "NEXUS_TOKEN_NAME", "LEGACY"
-            ), patch.object(nexus_client, "_run", return_value=(0, json.dumps([credit]), "")), patch.object(
+            ), patch.object(
                 nexus_client, "get_account_info", return_value={"owner": "owner"}
-            ):
+            ), patch.object(nexus_client, "_run", return_value=(0, json.dumps([credit]), "")) as run:
                 state_db.init_db()
                 swap_nexus.poll_nexus_deposits()
                 admitted = state_db.is_unprocessed_txid("canonical-admission")
                 record = nexus_client.build_service_record(last_poll=1)
 
         self.assertTrue(admitted)
+        command = run.call_args.args[0]
+        self.assertTrue(command[1].startswith("register/transactions/finance:account/"))
+        self.assertIn("address=canonical-treasury", command)
+        self.assertNotIn("name=LEGACY", command)
         self.assertEqual(record["nexus_token"], "CANON")
         self.assertEqual(record["nexus_treasury_address"], "canonical-treasury")
         self.assertEqual(record["nexus_token_register_address"], "canonical-register")
+
+    def test_recovery_scans_canonical_treasury_account_history(self):
+        """Wipeout recovery must not fall back to the token register's lossy history."""
+        credit = {
+            "txid": "treasury-account-credit", "timestamp": 1_000, "confirmations": 2,
+            "contracts": [{
+                "id": 0, "OP": "CREDIT", "from": "sender",
+                "to": "canonical-treasury", "amount": "3",
+            }],
+        }
+        with patch.object(config, "NEXUS_TOKEN_NAME", "LEGACY"), patch.object(
+            nexus_client, "_run", return_value=(0, json.dumps([credit]), "")
+        ) as run:
+            scan = nexus_client.fetch_deposits_since("canonical-treasury", 0)
+
+        self.assertTrue(scan.complete)
+        self.assertEqual(scan.deposits, [credit])
+        command = run.call_args.args[0]
+        self.assertTrue(command[1].startswith("register/transactions/finance:account/"))
+        self.assertIn("address=canonical-treasury", command)
+        self.assertNotIn("name=LEGACY", command)
+
+    def test_deposit_history_requires_canonical_treasury_account(self):
+        """An absent canonical treasury is incomplete evidence, never an empty scan."""
+        with patch.object(nexus_client, "_run") as run:
+            scan = nexus_client.fetch_deposits_since("", 0)
+
+        self.assertFalse(scan.complete)
+        self.assertEqual(scan.reason, "missing_treasury_account")
+        self.assertEqual(scan.deposits, [])
+        run.assert_not_called()
+
+    @patch.object(swap_nexus.alerts, "critical")
+    @patch.object(nexus_client, "_run")
+    def test_live_admission_holds_when_canonical_treasury_is_missing(self, run, critical):
+        """Admission must not replace a missing custody account with a legacy alias."""
+        pair = replace(
+            config.SWAP_PAIR,
+            nexus=replace(config.SWAP_PAIR.nexus, treasury_account=""),
+        )
+        with patch.object(config, "SWAP_PAIR", pair), patch.object(
+            config, "NEXUS_USDD_TREASURY_ACCOUNT", "legacy-treasury"
+        ):
+            swap_nexus.poll_nexus_deposits()
+
+        run.assert_not_called()
+        critical.assert_called_once_with(
+            "nexus_treasury_history_unavailable",
+            "Nexus deposit enumeration requires the canonical treasury account",
+        )
 
     def test_nexus_credit_admission_uses_canonical_output_math(self):
         """A credit that cannot fund canonical Solana output is fee-only, never queued."""
@@ -1366,7 +1420,8 @@ class CriticalSafetyTests(unittest.TestCase):
         run.assert_called_once()
         command = run.call_args.args[0]
         self.assertEqual(command[0], config.NEXUS_CLI)
-        self.assertTrue(command[1].startswith("register/transactions/finance:token/"))
+        self.assertTrue(command[1].startswith("register/transactions/finance:account/"))
+        self.assertIn(f"address={config.SWAP_PAIR.nexus.treasury_account}", command)
         self.assertIn("limit=100", command)
         self.assertIn("offset=0", command)
         self.assertEqual(

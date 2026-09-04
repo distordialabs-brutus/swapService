@@ -539,16 +539,17 @@ def poll_nexus_deposits():
     # Custody admission binds to the immutable pair identity, not a compatibility alias
     # which can differ after process startup/config mutation.
     treasury_addr = config.SWAP_PAIR.nexus.treasury_account
-    # Build base command. Use register/transactions/finance:token to get both debits and credits.
-    base_cmd = [config.NEXUS_CLI]
-    projection = (
-        "register/transactions/finance:token/"
-        "txid,timestamp,confirmations,contracts.id,contracts.OP,contracts.from,contracts.to,contracts.amount"
-    )
-    base_cmd.append(projection)
-    base_cmd.append(f"name={config.NEXUS_TOKEN_NAME}")
-    base_cmd.append("sort=timestamp")
-    base_cmd.append("order=desc")
+    try:
+        # The token-register history omits normal account-to-account credits.  Querying
+        # this custody account is the authoritative admission scope for this direction.
+        base_cmd = nexus_client.treasury_deposit_history_command(treasury_addr)
+    except ValueError as exc:
+        _log("NEXUS_ENUMERATION_FAILED", reason="missing_treasury_account", error=str(exc))
+        alerts.critical(
+            "nexus_treasury_history_unavailable",
+            "Nexus deposit enumeration requires the canonical treasury account",
+        )
+        return
 
     # Do not filter nested contracts on the server.  An accepted-but-lossy Nexus WHERE
     # expression could return an empty page and make a real treasury credit fall below the
