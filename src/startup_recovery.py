@@ -41,15 +41,26 @@ def _rebuild_nexus_from_waterline(waterline_timestamp: int) -> dict:
     
     Returns dict with stats about deposits added.
     """
-    treasury_addr = getattr(config, "NEXUS_USDD_TREASURY_ACCOUNT", None)
+    # Startup recovery is a custody boundary: never let the legacy mutable alias choose
+    # which account is treated as the bridge treasury.
+    treasury_addr = config.SWAP_PAIR.nexus.treasury_account
     if not treasury_addr:
         return {'nexus_deposits_added': 0, 'error': 'no_treasury_configured'}
-    
+
     print(f"   Rebuilding Nexus deposits from waterline {waterline_timestamp}...")
-    
-    # Fetch all deposits since waterline
-    deposits = nexus_client.fetch_deposits_since(treasury_addr, waterline_timestamp)
-    
+
+    # A partial history page is never a safe basis for a wipeout reconstruction.  In
+    # particular, it must not create markers which could be mistaken for a complete
+    # recovery after a pagination budget or transport failure.
+    scan = nexus_client.fetch_deposits_since(treasury_addr, waterline_timestamp)
+    if not scan.complete:
+        return {
+            'nexus_deposits_added': 0,
+            'nexus_deposits_scanned': 0,
+            'error': f'nexus_deposit_scan_incomplete:{scan.reason or "unknown"}',
+        }
+    deposits = scan.deposits
+
     # Get existing sets from database
     conn = state_db.sqlite3.connect(state_db.DB_PATH)
     cursor = conn.cursor()
@@ -78,30 +89,40 @@ def _rebuild_nexus_from_waterline(waterline_timestamp: int) -> dict:
             skipped_processed += 1
             continue
         
-        # Extract contract details
+        # Extract contract details. A transaction may carry multiple CREDITS; every
+        # individual contract must independently prove that it targets the canonical
+        # treasury. A sibling CREDIT never authorizes this one.
         contracts = tx.get("contracts") or []
         for c in contracts:
             if not isinstance(c, dict):
                 continue
             if str(c.get("OP") or "").upper() != "CREDIT":
                 continue
-            
-            # Get sender
-            from_field = c.get("from")
-            sender = ""
-            if isinstance(from_field, dict):
-                sender = str(from_field.get("address") or from_field.get("name") or "")
-            elif isinstance(from_field, str):
-                sender = from_field
-            
-            # Get amount
+            to_address = nexus_client._parse_nexus_contract_address(c.get("to"))
+            if to_address != treasury_addr:
+                continue
+            sender = nexus_client._parse_nexus_contract_address(c.get("from")) or ""
+
             amount_dec = _parse_decimal_amount(c.get("amount"))
-            if amount_dec <= 0:
-                continue
-            
             classification = nexus_client.classify_nexus_credit(c.get("amount"))
-            if classification.disposition in {"invalid", "dust"}:
-                continue
+            if classification.disposition == "invalid":
+                # A finite, positive amount that is not an exact configured base-unit
+                # value is real but cannot be paid safely. Keep durable evidence rather
+                # than silently skipping it while reconstruction moves onward.
+                if amount_dec.is_finite() and amount_dec > 0:
+                    owner = (nexus_client.get_account_info(sender) or {}).get("owner")
+                    state_db.add_unprocessed_txid(
+                        txid=txid, timestamp=ts, amount_usdd=float(amount_dec),
+                        from_address=sender, to_address=to_address,
+                        owner_from_address=owner, confirmations_credit=conf,
+                        status="quarantined", amount_usdd_units=None,
+                        hold_reason="invalid_exact_nexus_amount",
+                    )
+                    unprocessed_txids.add(txid)
+                # Invalid chain evidence never becomes a fee, payout, or refund.
+                break
+            if classification.disposition == "dust":
+                break
             credit_units = classification.amount_nexus_units
             owner = (nexus_client.get_account_info(sender) or {}).get("owner")
 

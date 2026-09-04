@@ -381,7 +381,7 @@ def _reconcile_remote_mint_history(
     verified_mint_sources: set[str] = set()
     incomplete: List[str] = []
     completed = completed_rows if completed_rows is not None else _completed_mint_rows(waterline_ts)
-    configured_token_register = str(getattr(config, "NEXUS_TOKEN_REGISTER_ADDRESS", "") or "").strip()
+    configured_token_register = str(config.SWAP_PAIR.nexus.register_address or "").strip()
     if not configured_token_register:
         return {}, ["configured Nexus token register address is missing"]
     for row in completed:

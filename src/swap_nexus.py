@@ -536,7 +536,9 @@ def poll_nexus_deposits():
     - Fetch recent Nexus transactions 
     - Queue new credits >= threshold to unprocessed_txids database table
     """
-    treasury_addr = getattr(config, "NEXUS_USDD_TREASURY_ACCOUNT", None)
+    # Custody admission binds to the immutable pair identity, not a compatibility alias
+    # which can differ after process startup/config mutation.
+    treasury_addr = config.SWAP_PAIR.nexus.treasury_account
     # Build base command. Use register/transactions/finance:token to get both debits and credits.
     base_cmd = [config.NEXUS_CLI]
     projection = (
@@ -622,6 +624,7 @@ def poll_nexus_deposits():
             if not txs:
                 break
             malformed = False
+            invalid_exact_credit: tuple[str, str] | None = None
             for tx in txs:
                 if not isinstance(tx, dict) or not tx.get("txid"):
                     malformed = True
@@ -648,15 +651,42 @@ def poll_nexus_deposits():
                     if not operation:
                         malformed = True
                         break
-                    if operation == "CREDIT" and (
-                        not _address_value(contract.get("from"))
-                        or not _address_value(contract.get("to"))
-                        or _parse_decimal_amount(contract.get("amount")) <= 0
+                    if operation == "CREDIT":
+                        amount_dec = _parse_decimal_amount(contract.get("amount"))
+                        if (
+                            not _address_value(contract.get("from"))
+                            or not _address_value(contract.get("to"))
+                            or not amount_dec.is_finite()
+                            or amount_dec <= 0
+                        ):
+                            malformed = True
+                            break
+                    if (
+                        operation == "CREDIT"
+                        and _address_value(contract.get("to")) == treasury_addr
+                        and nexus_client.classify_nexus_credit(contract.get("amount")).disposition == "invalid"
                     ):
-                        malformed = True
+                        invalid_exact_credit = (str(tx["txid"]), str(contract.get("amount")))
                         break
-                if malformed:
+                if malformed or invalid_exact_credit:
                     break
+            if invalid_exact_credit:
+                txid, amount = invalid_exact_credit
+                _log(
+                    "NEXUS_ENUMERATION_FAILED",
+                    page=page,
+                    reason="invalid_exact_treasury_credit",
+                    txid=txid,
+                    amount=amount,
+                )
+                alerts.critical(
+                    "nexus_credit_invalid_exact_amount",
+                    "Positive Nexus treasury credit cannot be represented exactly; scan held",
+                    txid=txid,
+                    amount=amount,
+                )
+                enumeration_complete = False
+                break
             if malformed:
                 _log("NEXUS_ENUMERATION_FAILED", page=page, reason="malformed_transaction_schema")
                 enumeration_complete = False
