@@ -46,17 +46,17 @@ Excluded surfaces are explicit:
 | `.env.example` | Migration alias + Public pair-specific example | Replace with canonical input names and documented alias-conflict policy only when validated configuration exists. |
 <!-- token-pair-inventory: .github/copilot-instructions.md:4,10,11,18,19,34,37,49,50,58,137,140,154,156,160,170,171,174,175,176,177,179,180,181,197,202 -->
 | `.github/copilot-instructions.md` | Public pair-specific example + Runtime semantics | Keep money-path and Nexus/Solana safety guidance synchronized with the validated canonical configuration. |
-<!-- token-pair-inventory: ASSET_STANDARD.md:5,10,41,42,59,60,96,97,133,141,144,145,161,255,305,306,333,377,378,379,380,381,389,390,396,402,413,414,415,416,417,465,467,469 -->
+<!-- token-pair-inventory: ASSET_STANDARD.md:5,10,41,42,59,60,96,97,133,141,144,145,161,255,305,306,333,403,410,513,518,601,602,603,604,605,613,614,620,626,637,638,639,640,641,689,691,693 -->
 | `ASSET_STANDARD.md` | Planned/schema example + Public pair-specific example | Keep v1 distinct from planned v2; Nexus `format=basic` fixes field sets, so never relabel an incomplete v1 asset as v2. |
 <!-- token-pair-inventory: CONFIG.md:16,17,19,25,26,27,28,29,31,40,41,52,53,54,55,65,72,73,83,85,94,95,97,98,99,102,118,119,120,124,125,137,156,161,162,176 -->
 | `CONFIG.md` | Migration alias + Public pair-specific example | Derive operator configuration reference and terms from the canonical object after implementation. |
 <!-- token-pair-inventory: README.md:1,3,31,32,36,37,38,42,44,46,53,55,56,58,62,64,68,76,80,82,85,94,97,99,100,106,110,111,117,119,121,122,123,126,128,130,141,150,151,161,163,170,171,172,175,176,177,178,184,189,196,198,199,200,203,205,207,208,215,216,218,219,220,223,226,227,228,230,231,234,235,237,238,248,249,275,317,348,351,353 -->
 | `README.md` | Public pair-specific example | Current fixed deployment instructions stay truthful until selected-pair public terms are generated from validated configuration. |
-<!-- token-pair-inventory: SETUP.md:3,22,30,31,33,36,37,40,41,60,138,139,140,141,142,144,177,178,181,187,188,189,197,204,210,213,215,220,224,234,236,254,259,262,266,268,269,270,275,306,324,325,326,327,330,331,333,334,366,381,413,433,436,465,468,524,534,535,537,538,539,541,545,582 -->
+<!-- token-pair-inventory: SETUP.md:3,22,30,31,33,36,37,40,41,60,138,139,140,141,142,144,177,178,181,187,188,189,197,204,210,213,215,220,224,234,236,244,254,255,280,285,288,292,294,295,296,301,332,350,351,352,353,356,357,359,360,392,407,439,459,462,491,494,550,560,561,563,564,565,567,571,608 -->
 | `SETUP.md` | Public pair-specific example + Migration alias | Update only after runtime validation and terms generation are shipped, so documentation never overstates generic support. |
 <!-- token-pair-inventory: create_heartbeat_asset.py:24,26,42,43,44,250,251,253,318,319,328,329,338,339,380,382 -->
 | `create_heartbeat_asset.py` | Runtime semantics + Public pair-specific example | Retire default pair/ticker arguments behind a config-derived address-based v2 creation workflow. |
-<!-- token-pair-inventory: docs/EVALUATION.md:239,440,584,585 -->
+<!-- token-pair-inventory: docs/EVALUATION.md:240,441,485,496,510,644,645,694,728 -->
 | `docs/EVALUATION.md` | Planned/schema example | Maintain as evaluated remediation evidence; change only with verified implementation evidence. |
 <!-- token-pair-inventory: docs/SECURITY.md:35,42,55,56,59,73,100 -->
 | `docs/SECURITY.md` | Public pair-specific example | Derive risk/control naming from the selected validated pair once behavior changes. |

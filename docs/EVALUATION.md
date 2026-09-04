@@ -3,6 +3,7 @@
 **Date:** 2026-08-31
 **Evaluated code:** `cc175cb595ebe7d1fedd8173020e2a133627906a`
 **Status:** Current issue register and repair priority for `swapService`
+**Architecture-plan update:** 2026-09-04 (provider-v2 target; runtime foundation remains partial)
 
 This document replaces the old June code-level audit as the current engineering evaluation. Historical findings and their original line references remain available in [`AUDIT_FINDINGS.md`](AUDIT_FINDINGS.md) and [`RISK_ASSESSMENT.md`](RISK_ASSESSMENT.md). The current independent evidence is in [`DEVELOPMENT_REVIEW_2026-08-31.md`](DEVELOPMENT_REVIEW_2026-08-31.md); earlier reviews remain historical evidence.
 
@@ -478,6 +479,65 @@ resolve ambiguous outcome against chain -> finalize local state
 
 A timeout is not failure, an empty bounded scan is not absence, and a warning is not a safety control. This rule already protects the repaired Solana→Nexus debit path; it must also govern Nexus refunds, quarantine transfers, fee movements and any future automated maintenance action.
 
+### Target deployment configuration (partially implemented; incomplete)
+
+The existing generic token variables are only a partial compatibility layer. Runtime and
+operator surfaces still contain USDC/USDD-specific aliases, defaults, labels and account names,
+and the fee policy is spread across direction-specific values, micro-amount percentages and an
+inert congestion-fee setting. A fork therefore cannot yet be called completely token-pair or
+fee-policy configurable.
+
+The current code now has an immutable `SwapPairConfig` foundation, conflict-detecting aliases and
+several canonical fee/custody consumers. The target architecture requires that object to be passed
+to every money, reconciliation, dashboard and publication path. It must contain, for each
+chain side, the network/cluster, canonical token identity (Nexus register address or Solana mint),
+display symbol, decimals, custody accounts and quarantine/fee destinations. Symbols are display
+metadata only; no authorization, reconciliation or routing decision may compare a ticker such as
+`USDD` or `USDC` when an immutable address is available.
+
+The same configuration object must own the complete fee policy:
+
+- independent flat output fee and proportional basis-point fee for each direction;
+- configurable minimum, dust and sub-minimum retention policy for each input side;
+- explicit refund, quarantine/disposition and Nexus congestion-cost policy (zero is valid);
+- fee destination/account and accounting treatment;
+- exact base-unit representation, effective timestamp and a terms/configuration version.
+
+Production startup must reject missing token identities, implicit mainnet token defaults,
+negative or inexact fees, fees that can consume an otherwise accepted minimum swap, mismatched
+mint/account ownership, and unpublished terms. Public terms, payout math, refund math, fee-ledger
+entries, dashboard labels and reconciliation must all be derived from the same validated object so
+the service cannot advertise one schedule and execute another. Legacy `USDC_*`/`USDD_*` variables
+may remain temporarily as migration aliases, but conflicting legacy and canonical values must fail
+startup. Existing database column names and persisted lifecycle values remain frozen until an
+explicit, tested migration is provided; generic configuration does not justify rewriting in-flight
+fund records.
+
+### Provider asset identity and discovery (planned; not implemented)
+
+Using the local asset name as the heartbeat identity is the wrong long-term boundary. A local name
+is scoped to a Nexus signature chain and forces name coordination, while a provider may operate
+multiple swapService instances or token pairs from that chain. The target provider record therefore
+uses the exact immutable attribute `"distordia-type": "swapService"` for type discovery and the
+Nexus asset **address** as the canonical runtime identity. The local name becomes an optional human
+alias only.
+
+The type attribute is necessary but not sufficient for uniqueness: discovery can legitimately
+return several swapService assets. Every record must also carry an immutable `service_id`, provider
+owner, schema version and complete pair/custody identity. The running instance is configured with
+the selected asset address, then verifies the asset owner, `distordia-type`, `service_id`, token
+identities and custody addresses before reading a waterline or publishing a heartbeat. It must
+never update the first type match.
+
+One provider asset should give a user or auditor a complete, non-secret overview of the deployment:
+provider/contact/source and terms links; software and schema versions; Nexus network, token register,
+decimals and treasury; Solana cluster, mint, decimals and vault; enabled directions; memo/mapping
+contract; all fee, minimum and cap terms; quarantine/fee destinations; status/pause reason;
+liveness timestamps and per-chain safe waterlines. Volatile balances need not be copied into the
+asset because the published custody addresses are independently queryable. Secrets, private RPC
+URLs, PINs, sessions and key material must never be published. The proposed v2 field contract and
+migration are defined in [`../ASSET_STANDARD.md`](../ASSET_STANDARD.md#provider-swapservice-asset-standard-v2-planned).
+
 ---
 
 ## 7. Prioritized development plan
@@ -617,6 +677,60 @@ hold-resolution, incident-response and key-rotation procedures.
    fail-closed behavior; target-node and Solana devnet/testnet acceptance evidence remains required
    before deployment. Refresh this evaluation against the final reviewed commit before a production
    candidate is considered.
+
+### Batch 7 — Complete configurability and provider asset v2 **(in progress; provider v2 remains documentation only)**
+
+**Goal:** make one binary safely deployable for an arbitrary Nexus-token/Solana-mint pair and allow
+several independently discoverable swapService instances under one Nexus signature chain.
+
+**Expected implementation surfaces:** `src/config.py`, `src/nexus_client.py`,
+`src/solana_client.py`, `src/swap_solana.py`, `src/swap_nexus.py`, `src/fees.py`,
+`src/startup_recovery.py`, `src/dashboard.py`, `register_service.py`,
+`create_heartbeat_asset.py`, `.env.example`, `CONFIG.md`, `SETUP.md`, `README.md` and new focused
+tests under `tests/`. Treat `src/state_db.py` and existing SQLite/status identifiers as frozen
+compatibility surfaces unless a separate append-only migration and upgrade test are part of the
+same change.
+
+1. ✅ Inventory every USDC/USDD literal, legacy config attribute, account name, database label,
+   dashboard label, helper script default and public example. Classify each as runtime semantics,
+   display-only metadata, migration alias or frozen persisted compatibility state.
+2. Introduce canonical chain-neutral token, custody and fee-policy configuration. Require explicit
+   production token identities and fee terms; retain legacy names only through one conflict-detecting
+   compatibility adapter.
+3. Route payout, refund, micro-amount handling, fee collection, fee accounting, thresholds,
+   reconciliation, alerts, dashboard and public terms through the same validated configuration.
+   Remove or implement the currently inert congestion-fee setting rather than continuing to publish
+   a setting that does not affect execution.
+4. Add startup validation for exact representability at both token precisions, non-negative fee
+   values, coherent minima/dust/caps, correct mint/account ownership and a deterministic
+   configuration/terms fingerprint.
+5. Replace name-based provider-record reads and updates with address-based access. On every startup,
+   verify asset owner, exact `distordia-type=swapService`, schema version, `service_id`, canonical
+   token identities and custody addresses before trusting its waterlines.
+6. Update `register_service.py` and retire `create_heartbeat_asset.py` behind a migration path that
+   creates the complete v2 record from validated config. Because `format=basic` fixes the field set,
+   do not relabel an incomplete v1 heartbeat as v2; create a new asset and record its address.
+7. Support a compatibility release that can read the old named v1 heartbeat only when explicitly
+   enabled, while writing/advertising the selected v2 address. Remove the name requirement after
+   operators and monitors have migrated.
+8. Add tests for two or more records owned by one signature chain, multiple token pairs, duplicate
+   type matches, wrong-owner/type/service-id records, address/name disagreement, altered on-chain
+   terms, every zero/non-zero fee component and legacy/canonical configuration conflicts.
+9. Update `.env.example`, `CONFIG.md`, `SETUP.md`, `README.md`, the dashboard and inspection output
+   only when the implementation exists; until then, label the v2 contract as planned.
+
+**Required verification:** focused configuration tests must cover every fee component and conflict
+case; provider-record tests must cover schema completeness, size budget, address-only updates and
+multiple assets per owner; `tests/legacy_token_pair.py` must continue to prove all mixed-decimal
+cases; `tests/legacy_frozen_names.py` must prove upgrade compatibility; and the final local gate is
+`python -m pytest -q` plus the Batch 4 target-chain matrix.
+
+**Exit:** no runtime financial decision or user-facing label depends on a USDC/USDD literal; a test
+matrix proves independently configurable fee components in both directions and exact mixed-decimal
+behavior; two services on one signature chain update only their configured asset addresses; and an
+external reader can derive the complete current pair, custody, fee, limit and liveness contract from
+each v2 provider asset. Target-node acceptance must also prove that Nexus supports the exact
+hyphenated `distordia-type` field and address-based read/update calls before v1 is retired.
 
 ---
 

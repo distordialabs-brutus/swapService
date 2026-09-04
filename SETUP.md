@@ -238,6 +238,32 @@ existing `.env` files need no changes.
 > The rationale is recorded in the header block of `src/state_db.py`, and
 > `tests/legacy_frozen_names.py` is enforced through the isolated pytest suite and fails the build if any of them drifts.
 
+### Target pair, fee and provider-record architecture (planned)
+
+The variables above make the main payout calculations partly generic, but they do not yet make the
+whole deployment completely configurable. USDC/USDD-specific aliases, account attributes, helper
+defaults, public examples and fee-handling branches still exist. The current flat and proportional
+fees are environment-controlled, while micro-amount retention and the currently inert Nexus
+congestion fee remain separate policy surfaces. Treat the current support for another token pair as
+an incomplete compatibility layer, not as a production guarantee.
+
+Batch 7 in [`docs/EVALUATION.md`](docs/EVALUATION.md#batch-7--complete-configurability-and-provider-asset-v2-in-progress-provider-v2-remains-documentation-only)
+is incrementally replacing those distributed settings with one validated, chain-neutral pair/custody
+configuration and one complete per-direction fee policy. Payouts, refunds, micro handling, fee collection,
+accounting, reconciliation, dashboard labels and published terms must all consume that same object.
+Production will require explicit canonical token identities and fee terms; legacy `USDC_*` and
+`USDD_*` names will be migration aliases only and conflicting values will fail startup. Existing
+database/state-machine names stay frozen until a tested migration protects in-flight swaps.
+
+The provider/heartbeat record will also move from a required local asset name to a canonical Nexus
+asset address. Each v2 provider asset will include the exact immutable discriminator
+`"distordia-type": "swapService"`, a unique `service_id`, complete pair/custody/fee/limit terms and
+liveness/waterlines. Type-based lookup is for discovery only because one signature chain can own
+many swapService records; a running instance must update only its explicitly configured address.
+See [ASSET_STANDARD.md § Provider swapService Asset Standard v2](ASSET_STANDARD.md#provider-swapservice-asset-standard-v2-planned)
+for the proposed schema and migration. **This is documentation of planned work, not current runtime
+behavior.**
+
 ## Solana Setup
 
 Creates the service's Solana keypair and the token account (ATA) that holds vault liquidity.
