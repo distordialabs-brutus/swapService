@@ -97,4 +97,4 @@ The new reference lookup requests `confirmations` and returns incomplete below `
 4. Run the target Nexus pagination/finality/multi-contract/crash matrix and Solana devnet/testnet acceptance matrix on the exact candidate commit.
 5. Keep automatic Nexus refund/quarantine execution disabled and admit no real funds until all release gates pass.
 
-The pre-existing uncommitted architecture work in `ASSET_STANDARD.md`, `SETUP.md`, and `docs/EVALUATION.md` was reviewed as context and preserved. This review adds only a dated evidence document and a targeted current-status note to `docs/EVALUATION.md`; it does not alter application code.
+The pre-existing uncommitted architecture work in `ASSET_STANDARD.md`, `SETUP.md`, and `docs/EVALUATION.md` was reviewed as context and preserved. The committed review adds only this dated evidence document and does not alter application code. `docs/EVALUATION.md` remains an uncommitted architecture draft so its coordinated token-literal inventory update can be handled atomically.
