@@ -1,10 +1,21 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
-**Date:** 2026-08-31
-**Evaluated code:** `cc175cb595ebe7d1fedd8173020e2a133627906a`
+**Date:** 2026-09-04
+**Evaluated code:** `0e4900b82632e3544d774f5568f869902a4ea0fe`
 **Status:** Current issue register and repair priority for `swapService`
+**Architecture-plan update:** 2026-09-01 (documentation only; no runtime changes)
 
-This document replaces the old June code-level audit as the current engineering evaluation. Historical findings and their original line references remain available in [`AUDIT_FINDINGS.md`](AUDIT_FINDINGS.md) and [`RISK_ASSESSMENT.md`](RISK_ASSESSMENT.md). The current independent evidence is in [`DEVELOPMENT_REVIEW_2026-08-31.md`](DEVELOPMENT_REVIEW_2026-08-31.md); earlier reviews remain historical evidence.
+This document replaces the old June code-level audit as the current engineering evaluation. Historical findings and their original line references remain available in [`AUDIT_FINDINGS.md`](AUDIT_FINDINGS.md) and [`RISK_ASSESSMENT.md`](RISK_ASSESSMENT.md). The latest independent evidence is in [`DEVELOPMENT_REVIEW_2026-09-04.md`](DEVELOPMENT_REVIEW_2026-09-04.md); earlier reviews remain historical evidence.
+
+> **Scheduled-review correction (2026-09-04):** the shared Nexus-credit classifier, reference
+> finality check, canonical backing vault and canonical account-reconciliation treasury are useful
+> local improvements, and the complete suite plus exact-head CI are green. Production remains hard
+> blocked. A positive CREDIT with excess precision is silently skipped while its timestamp can
+> advance the Nexus waterline; wipeout recovery can select a non-treasury sibling CREDIT and cannot
+> distinguish a complete scan from a page failure or exhausted page budget. Canonical Nexus
+> token/register and treasury identity enforcement is also not yet end-to-end. Treat the dated
+> severity counts and individual remediation snapshots below as historical detail where they conflict
+> with the 2026-09-04 review.
 
 ## 1. Executive verdict
 
