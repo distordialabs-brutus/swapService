@@ -1,8 +1,8 @@
 # swapService Independent Repository Evaluation — 2026-09-04 21:05 CEST
 
-**Baseline:** `1e1314288a126c7ae120bdd1f007d93052bf6399`  
-**Reviewed head:** `7208f8b252bec85c7a70670477fce6a1faf32471`  
-**Scope:** 3 commits; 9 files; 715 insertions and 126 deletions  
+**Baseline:** `1e1314288a126c7ae120bdd1f007d93052bf6399`
+**Reviewed head:** `7208f8b252bec85c7a70670477fce6a1faf32471`
+**Scope:** 3 commits; 9 files; 715 insertions and 126 deletions
 **Deployment verdict:** **HARD BLOCKED for production and real funds**
 
 ## Executive result

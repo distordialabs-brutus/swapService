@@ -424,7 +424,7 @@ def perform_startup_recovery() -> dict:
         }
     nexus_waterline = waterlines.nexus
     solana_waterline = waterlines.solana
-    
+
     # The heartbeat waterlines are custody checkpoints, not workload hints.  Advancing an
     # old checkpoint would make liabilities in the omitted interval unrecoverable after a
     # database wipe.  Recovery must enumerate the entire published range (or return an

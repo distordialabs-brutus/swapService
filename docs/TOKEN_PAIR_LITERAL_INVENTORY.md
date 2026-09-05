@@ -56,11 +56,11 @@ Excluded surfaces are explicit:
 | `SETUP.md` | Public pair-specific example + Migration alias | Update only after runtime validation and terms generation are shipped, so documentation never overstates generic support. |
 <!-- token-pair-inventory: create_heartbeat_asset.py:24,26,42,43,44,250,251,253,318,319,328,329,338,339,380,382 -->
 | `create_heartbeat_asset.py` | Runtime semantics + Public pair-specific example | Retire default pair/ticker arguments behind a config-derived address-based v2 creation workflow. |
-<!-- token-pair-inventory: docs/EVALUATION.md:240,441,485,496,510,644,645,694,728 -->
+<!-- token-pair-inventory: docs/EVALUATION.md:239,440,484,495,509,646,647,696,730 -->
 | `docs/EVALUATION.md` | Planned/schema example | Maintain as evaluated remediation evidence; change only with verified implementation evidence. |
 <!-- token-pair-inventory: docs/SECURITY.md:35,42,55,56,59,73,100 -->
 | `docs/SECURITY.md` | Public pair-specific example | Derive risk/control naming from the selected validated pair once behavior changes. |
-<!-- token-pair-inventory: docs/STATE_MACHINES.md:3,7,82,86,89,104,108,115,127,130,136,142,146,148,149,151,154,165,187,191,192,195,197,206,208,216,226,227,232,233,234,245,246,247,248,249,254,255,265,266,271,280,286,288,332,334,336,337,338,339,347,348,349,350,351,352,353,354,355,356,357,360,379,383 -->
+<!-- token-pair-inventory: docs/STATE_MACHINES.md:3,7,91,95,98,113,117,124,136,139,145,151,155,157,158,160,163,174,196,200,201,204,206,215,217,225,235,236,241,242,243,254,255,256,257,258,263,264,274,275,280,289,295,300,349,351,353,354,355,356,364,365,366,367,368,369,370,371,372,373,374,377,396,400 -->
 | `docs/STATE_MACHINES.md` | Public pair-specific example + Frozen compatibility state | Preserve current lifecycle terminology; migrate persisted names only with append-only database evidence. |
 <!-- token-pair-inventory: docs/SWAP_INITIATOR_STATE_MACHINES.md:7,9,13,15,16,25,26,27,28,31,34,41,44,47,50,51,60,65,66,68,71,75,77,78,80,87,88,89,90,91,95,97,99,100,101,107,108,114,120,121,122,123,124,128,130,134,136,139,140,154,162,164,173,174,176,179,182,183,192,199,200,202,203,206,210,211,212,213,218,225,226,227,228,229,238,245,248,251,272,274,277,279,280,282,292,293,294,295,296,298,302,304,312,313,314,316,318,320,341,342,348,349,351,354,355,357,359 -->
 | `docs/SWAP_INITIATOR_STATE_MACHINES.md` | Public pair-specific example | Keep user flows, thresholds and fees specific until generated selected-pair terms exist. |

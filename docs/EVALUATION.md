@@ -1,11 +1,11 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
-**Date:** 2026-09-04
-**Evaluated code:** `7208f8b252bec85c7a70670477fce6a1faf32471`
+**Date:** 2026-09-05
+**Evaluated code:** `c2d07aa990627da758f10be6c765a59039b05d4d`
 **Status:** Current issue register and repair priority for `swapService`
-**Architecture-plan update:** 2026-09-04 (provider-v2 target; runtime foundation remains partial)
+**Architecture-plan update:** 2026-09-05 (recovery repairs reviewed; provider-v2 target remains planned)
 
-This document replaces the old June code-level audit as the current engineering evaluation. Historical findings and their original line references remain available in [`AUDIT_FINDINGS.md`](AUDIT_FINDINGS.md) and [`RISK_ASSESSMENT.md`](RISK_ASSESSMENT.md). The current independent evidence is in [`DEVELOPMENT_REVIEW_2026-09-04_2105.md`](DEVELOPMENT_REVIEW_2026-09-04_2105.md); earlier reviews remain historical evidence.
+This document replaces the old June code-level audit as the current engineering evaluation. Historical findings and their original line references remain available in [`AUDIT_FINDINGS.md`](AUDIT_FINDINGS.md) and [`RISK_ASSESSMENT.md`](RISK_ASSESSMENT.md). The current independent evidence is in [`DEVELOPMENT_REVIEW_2026-09-05.md`](DEVELOPMENT_REVIEW_2026-09-05.md); earlier reviews remain historical evidence.
 
 ## 1. Executive verdict
 
@@ -35,26 +35,25 @@ The repair work through the evaluated head materially improved the bridge:
 - one composable pytest command exists and is green locally.
 
 Those controls are valuable. They do not make the service production-ready.
-The 2026-09-04 21:05 independent review found four Critical skipped-liability paths.
-Live and wipeout-recovery deposit scans address the token register rather than the treasury account,
-so ordinary account-to-account credits are not guaranteed to appear. Nexus permits multiple CREDIT
-contracts in one transaction, but every Nexus-side queue/archive table is keyed only by `txid` and
-both live and recovery logic persist at most one payable sibling. The current top-level heartbeat
-waterline schema is incompatible with recovery's legacy nested parser; even a legacy waterline more
-than seven days old is silently moved forward. Malformed recovery evidence can still be called
-complete, mutable offset pagination can omit a boundary transaction, and startup does not latch or
-abort exposure on recovery failure. Automatic Nexus refunds remain disabled and the live-chain
-acceptance matrix has not been run. See
-`DEVELOPMENT_REVIEW_2026-09-04_2105.md`.
+The 2026-09-05 review verifies three local repairs: deposit enumeration now targets the canonical
+treasury account, runtime and recovery share one strict top-level heartbeat parser, and recovery no
+longer moves an old custody waterline forward. Nexus can still place multiple CREDIT contracts in
+one transaction, while every incoming Nexus queue/archive table remains keyed only by `txid`.
+Current code rejects such a transaction and holds the page rather than silently losing a sibling;
+that is fail-closed containment, not the required `(txid, contract_id)` repair. Malformed recovery
+evidence can still be called complete, mutable offset pagination can omit a boundary transaction,
+and startup does not latch or abort exposure on recovery failure. The canonical treasury query also
+lacks target-node acceptance evidence. Automatic Nexus refunds remain disabled and the live-chain
+matrix has not been run. See `DEVELOPMENT_REVIEW_2026-09-05.md`.
 
 ### Current severity summary
 
 | Severity | Count | Meaning |
 |---|---:|---|
-| Critical release gate | 4 | Deposit scan scope, contract identity, heartbeat schema and lossy recovery cutoff |
+| Critical release gate | 1 | Incoming Nexus contract identity remains txid-only; multi-CREDIT transactions are contained but unrepresentable |
 | High release blocker | 3 | Malformed recovery, mutable pagination and non-latching startup failure |
 | Medium / operational | 5 | Fee atomicity, hidden discrepancy amount, finality coercion, regression gaps and live acceptance |
-| Low / documentation | 0 | The v1-creator and setup-field documentation drift found in this review was corrected |
+| Locally repaired, externally gated | 3 | Treasury scan scope, heartbeat schema and exact old-waterline preservation |
 
 ### Release gates
 
@@ -545,14 +544,17 @@ migration are defined in [`../ASSET_STANDARD.md`](../ASSET_STANDARD.md#provider-
 The plan is sequenced by expected fund-safety value from the evaluated head. Completed
 containment and engineering-gate work stays visible because every later batch depends on it.
 
-### Batch 0 — Immediate containment **REOPENED**
+### Batch 0 — Immediate containment **PARTIAL / REOPENED**
 
 1. Disable automatic Nexus refunds; hold and alert instead.
 2. Remove heuristic Nexus server filtering from normal and recovery enumeration.
 3. Surface every held state with chain references, reason, age and safe operator guidance.
 4. Bind deposit admission/recovery to canonical treasury history and `(txid, contract_id)`.
-**Exit not met:** refunds remain contained, but the current scan scope and txid-only identity can
-omit ordinary or sibling credits before they become a held state.
+
+**Exit not met:** refunds remain contained and canonical treasury-account history is now used
+locally, but target-node account-history semantics are unproven and txid-only state cannot represent
+sibling credits. Multi-CREDIT transactions are rejected atomically and hold the waterline rather
+than being silently truncated.
 
 ### Batch 1 — Engineering and exact-money gate ✅
 
@@ -743,13 +745,13 @@ hyphenated `distordia-type` field and address-based read/update calls before v1 
 | `tests/legacy_session.py` | Enforced as an isolated pytest case |
 | `tests/legacy_frozen_names.py` | Enforced as an isolated pytest case |
 | `tests/legacy_dashboard.py` | Enforced as an isolated pytest case |
-| `python -m pytest -q tests/test_critical_safety.py` | 122 passed plus 19 subtests passed on `7208f8b` |
+| `python -m pytest -q tests/test_critical_safety.py` | Covered by the green full suite on `c2d07aa`; exact focused count is not asserted here |
 | Python byte-compilation | Passed |
 | Dependency consistency | Passed |
 | Local Markdown links | Passed |
-| Current-tree whitespace | Passed |
-| Full `python -m pytest -q` | 145 passed, 19 subtests passed locally on `7208f8b` (Python 3.11) |
-| CI workflow | Passed on reviewed head `7208f8b` — [run 33908593661](https://github.com/distordialabs-brutus/swapService/actions/runs/33908593661) |
+| Current-tree whitespace | Passed after removing four trailing-whitespace defects in the review commit |
+| Full `python -m pytest -q` | 154 passed, 19 subtests passed locally on `c2d07aa` (Python 3.11) |
+| CI workflow | Passed on reviewed implementation head `c2d07aa` — [run 33961339438](https://github.com/distordialabs-brutus/swapService/actions/runs/33961339438); the review commit requires its own exact-head read-back |
 | `pip-audit -r requirements.txt` | No known vulnerabilities found after the targeted E-013 pins |
 | `pyflakes` current tree | Not green; unused/redefinition/f-string diagnostics remain and lint is not enforced in CI |
 | Live integration | Not run |
@@ -786,3 +788,19 @@ exact-head CI remain green, proving that these fixtures are missing rather than 
 gate has passed. Medium follow-up also requires crash-atomic fee classification, direct reporting of
 unmatched canonical token emissions, strict built-in-integer timestamp/confirmation validation, and
 producer-level enumeration regressions rather than only injected `DepositScan` results.
+
+## 11. Independent review update — 2026-09-05 CEST
+
+The current evidence review at [`DEVELOPMENT_REVIEW_2026-09-05.md`](DEVELOPMENT_REVIEW_2026-09-05.md)
+verifies that C-1, C-3 and C-4 are repaired in local code: both admission and recovery query the
+canonical treasury account; one strict top-level heartbeat DTO is shared across producers and
+consumers; and old custody checkpoints are preserved exactly. The target Nexus node has not yet
+validated account-history coverage or stable pagination, so these local repairs do not clear the
+external acceptance gate.
+
+C-2 remains Critical. Current txid-only state rejects a transaction with multiple treasury CREDITs
+and holds the waterline, preventing silent sibling loss but making the transaction unrepresentable.
+H-1 through H-3 also remain open: malformed qualifying evidence can pass producer completeness and
+be silently skipped, mutable offset pagination can omit a boundary item, and startup only logs
+recovery errors instead of aborting or latching a recovery-specific exposure pause. Production and
+real-fund admission remain hard-blocked.
