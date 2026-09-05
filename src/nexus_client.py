@@ -1956,6 +1956,24 @@ class DepositScan:
     reason: str | None = None
 
 
+def treasury_credit_contracts(transaction: dict, treasury_addr: str) -> list[dict]:
+    """Return CREDIT contracts addressed to one canonical treasury account.
+
+    A Nexus transaction can carry multiple independently payable treasury credits.  Callers
+    that still persist legacy txid-only rows must treat more than one returned contract as
+    incomplete evidence rather than collapsing siblings into a single liability.
+    """
+    contracts = transaction.get("contracts")
+    if not isinstance(contracts, list):
+        return []
+    return [
+        contract for contract in contracts
+        if isinstance(contract, dict)
+        and str(contract.get("OP") or "").upper() == "CREDIT"
+        and _parse_nexus_contract_address(contract.get("to")) == treasury_addr
+    ]
+
+
 def treasury_deposit_history_command(treasury_addr: str) -> list[str]:
     """Build the public register-history query for the configured treasury account.
 

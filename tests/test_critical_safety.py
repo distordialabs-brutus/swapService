@@ -434,6 +434,53 @@ class CriticalSafetyTests(unittest.TestCase):
         self.assertEqual(row["to"], "TREASURY")
         self.assertEqual(row["amount_usdd_units"], 3_000_000)
 
+    def test_live_admission_holds_a_multi_credit_transaction_until_contract_identity_migrates(self):
+        """A txid-only table must never admit only the first of two treasury credits."""
+        tx = {
+            "txid": "two-treasury-credits", "timestamp": 1_000, "confirmations": 2,
+            "contracts": [
+                {"id": 0, "OP": "CREDIT", "from": "sender-a", "to": "TREASURY", "amount": "3"},
+                {"id": 1, "OP": "CREDIT", "from": "sender-b", "to": "TREASURY", "amount": "4"},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "state.db")
+            with patch.object(state_db, "DB_PATH", db_path), patch.object(
+                nexus_client, "_run", return_value=(0, json.dumps([tx]), "")
+            ), patch.object(swap_nexus.alerts, "critical") as critical:
+                state_db.init_db()
+                swap_nexus.poll_nexus_deposits()
+                queued = state_db.get_unprocessed_txids_as_dicts()
+
+        self.assertEqual(queued, [])
+        critical.assert_called_once_with(
+            "nexus_multi_credit_identity_unsupported",
+            "Nexus transaction contains multiple treasury credits before contract identity migration",
+            txid="two-treasury-credits",
+            credit_count=2,
+        )
+
+    def test_recovery_holds_a_multi_credit_transaction_until_contract_identity_migrates(self):
+        """Wipeout recovery must not rebuild only one sibling under a txid-only identity."""
+        tx = {
+            "txid": "two-recovery-credits", "timestamp": 1_000, "confirmations": 2,
+            "contracts": [
+                {"id": 0, "OP": "CREDIT", "from": "sender-a", "to": "TREASURY", "amount": "3"},
+                {"id": 1, "OP": "CREDIT", "from": "sender-b", "to": "TREASURY", "amount": "4"},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "state.db")
+            with patch.object(state_db, "DB_PATH", db_path), patch.object(
+                nexus_client, "fetch_deposits_since", return_value=nexus_client.DepositScan([tx], True)
+            ):
+                state_db.init_db()
+                summary = startup_recovery._rebuild_nexus_from_waterline(0)
+                queued = state_db.get_unprocessed_txids_as_dicts()
+
+        self.assertEqual(queued, [])
+        self.assertEqual(summary["error"], "nexus_deposit_scan_incomplete:multi_treasury_credit_identity")
+
     def test_recovery_does_not_admit_deposits_from_an_incomplete_enumeration(self):
         """A page failure or page budget exhaust must not advance recovery state."""
         credit = {

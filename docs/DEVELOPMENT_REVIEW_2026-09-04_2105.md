@@ -56,6 +56,13 @@ recovery persisted:  3,000,000 base units in one row
 
 **Required exit:** migrate every Nexus-side state table and durable action reference to at least `(txid, contract_id)`, classify and persist each treasury CREDIT independently, and test two payable, mixed fee/payable, mixed over-cap/payable, duplicate-page, restart, and migration cases.
 
+**Interim containment (current branch):** while the state schema remains txid-only, both live
+admission and wipeout recovery reject a transaction containing more than one CREDIT to the
+canonical treasury. Live polling emits a Critical alert and holds its waterline; recovery returns
+an incomplete-scan error before writing any reconstructed row. This prevents a known two-credit
+transaction from being silently reduced to its first sibling, but it does **not** satisfy the
+required `(txid, contract_id)` migration or make the deployment gate pass.
+
 ### C-3 — Runtime heartbeat fields and recovery's parser use incompatible schemas
 
 The current basic heartbeat record publishes and validates top-level fields named `last_safe_timestamp_nexus` and `last_safe_timestamp_solana` (`src/nexus_client.py:1728-1767,1900-1925`). Recovery instead parses `heartbeat["data"]` for `nexus_waterline` and `solana_waterline` (`src/startup_recovery.py:392-405`).

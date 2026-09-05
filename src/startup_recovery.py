@@ -61,6 +61,25 @@ def _rebuild_nexus_from_waterline(waterline_timestamp: int) -> dict:
         }
     deposits = scan.deposits
 
+    # The legacy Nexus-side tables are keyed only by txid.  Persisting either sibling
+    # from a transaction with two treasury CREDITs would irreversibly omit the other.
+    # Refuse the entire rebuild before any durable write; the later `(txid, contract_id)`
+    # migration can represent and process both liabilities independently.
+    for tx in deposits:
+        if not isinstance(tx, dict):
+            return {
+                'nexus_deposits_added': 0,
+                'nexus_deposits_scanned': 0,
+                'error': 'nexus_deposit_scan_incomplete:invalid_transaction',
+            }
+        credit_count = len(nexus_client.treasury_credit_contracts(tx, treasury_addr))
+        if credit_count > 1:
+            return {
+                'nexus_deposits_added': 0,
+                'nexus_deposits_scanned': 0,
+                'error': 'nexus_deposit_scan_incomplete:multi_treasury_credit_identity',
+            }
+
     # Get existing sets from database
     conn = state_db.sqlite3.connect(state_db.DB_PATH)
     cursor = conn.cursor()

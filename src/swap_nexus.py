@@ -626,6 +626,7 @@ def poll_nexus_deposits():
                 break
             malformed = False
             invalid_exact_credit: tuple[str, str] | None = None
+            multi_treasury_credit: tuple[str, int] | None = None
             for tx in txs:
                 if not isinstance(tx, dict) or not tx.get("txid"):
                     malformed = True
@@ -669,8 +670,31 @@ def poll_nexus_deposits():
                     ):
                         invalid_exact_credit = (str(tx["txid"]), str(contract.get("amount")))
                         break
-                if malformed or invalid_exact_credit:
+                if malformed:
                     break
+                credit_count = len(nexus_client.treasury_credit_contracts(tx, treasury_addr))
+                if credit_count > 1:
+                    multi_treasury_credit = (str(tx["txid"]), credit_count)
+                    break
+                if invalid_exact_credit:
+                    break
+            if multi_treasury_credit:
+                txid, credit_count = multi_treasury_credit
+                _log(
+                    "NEXUS_ENUMERATION_FAILED",
+                    page=page,
+                    reason="multi_treasury_credit_identity",
+                    txid=txid,
+                    credit_count=credit_count,
+                )
+                alerts.critical(
+                    "nexus_multi_credit_identity_unsupported",
+                    "Nexus transaction contains multiple treasury credits before contract identity migration",
+                    txid=txid,
+                    credit_count=credit_count,
+                )
+                enumeration_complete = False
+                break
             if invalid_exact_credit:
                 txid, amount = invalid_exact_credit
                 _log(
