@@ -425,19 +425,11 @@ def perform_startup_recovery() -> dict:
     nexus_waterline = waterlines.nexus
     solana_waterline = waterlines.solana
     
-    # Safety: Don't scan too far back (avoid overwhelming recovery)
-    max_lookback_sec = int(getattr(config, "MAX_WATERLINE_LOOKBACK_SEC", 7 * 24 * 3600))  # 7 days
-    current_ts = int(time.time())
-    min_allowed_waterline = current_ts - max_lookback_sec
-    
-    if nexus_waterline and nexus_waterline < min_allowed_waterline:
-        print(f"   ⚠ Nexus waterline too old ({nexus_waterline}), limiting to {max_lookback_sec}s lookback")
-        nexus_waterline = min_allowed_waterline
-    
-    if solana_waterline and solana_waterline < min_allowed_waterline:
-        print(f"   ⚠ Solana waterline too old ({solana_waterline}), limiting to {max_lookback_sec}s lookback")
-        solana_waterline = min_allowed_waterline
-    
+    # The heartbeat waterlines are custody checkpoints, not workload hints.  Advancing an
+    # old checkpoint would make liabilities in the omitted interval unrecoverable after a
+    # database wipe.  Recovery must enumerate the entire published range (or return an
+    # explicit incomplete result); callers decide how to schedule the work, never which
+    # credits may be skipped.
     # If no waterlines set, use fallback
     if not nexus_waterline and not solana_waterline:
         print("   ⚠ No waterlines set in heartbeat, using fallback scan")

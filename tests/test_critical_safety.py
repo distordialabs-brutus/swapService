@@ -3280,6 +3280,28 @@ class CriticalSafetyTests(unittest.TestCase):
         rebuild_solana.assert_called_once_with(1_999_999_500)
         fallback.assert_not_called()
 
+    def test_startup_recovery_never_clamps_a_custody_waterline_forward(self):
+        """A wipeout rebuild must scan the published checkpoint, however old it is."""
+        heartbeat = {
+            "address": "heartbeat-address",
+            "last_poll_timestamp": "2000000000",
+            "last_safe_timestamp_nexus": "1000000000",
+            "last_safe_timestamp_solana": "1000000500",
+        }
+        with patch.object(startup_recovery.state_db, "recover_interrupted_nexus_transfer_intents", return_value=0), patch.object(
+            startup_recovery.nexus_client, "get_heartbeat_asset", return_value=heartbeat
+        ), patch.object(startup_recovery.nexus_client, "get_last_reference", return_value=99), patch.object(
+            startup_recovery, "_rebuild_nexus_from_waterline", return_value={"nexus_rebuilt": True}
+        ) as rebuild_nexus, patch.object(
+            startup_recovery, "_rebuild_solana_from_waterline", return_value={"solana_rebuilt": True}
+        ) as rebuild_solana, patch.object(startup_recovery.time, "time", return_value=2_000_000_000):
+            stats = startup_recovery.perform_startup_recovery()
+
+        self.assertEqual(stats["nexus_waterline"], 1_000_000_000)
+        self.assertEqual(stats["solana_waterline"], 1_000_000_500)
+        rebuild_nexus.assert_called_once_with(1_000_000_000)
+        rebuild_solana.assert_called_once_with(1_000_000_500)
+
     def test_heartbeat_waterline_parser_rejects_duplicate_configured_field_names(self):
         """Two independent custody checkpoints must never be read from one asset field."""
         with patch.object(config, "HEARTBEAT_WATERLINE_NEXUS_FIELD", "shared_waterline"), patch.object(
