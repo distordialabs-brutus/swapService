@@ -2091,13 +2091,17 @@ def fetch_deposits_since(treasury_addr: str, since_timestamp: int, max_pages: in
         for tx in txs:
             if not isinstance(tx, dict):
                 return DepositScan(results, False, "invalid_transaction")
-            try:
-                ts = int(tx.get("timestamp"))
-            except (TypeError, ValueError):
+            txid = tx.get("txid")
+            if not isinstance(txid, str) or not txid.strip():
+                return DepositScan(results, False, "invalid_txid")
+            timestamp = tx.get("timestamp")
+            if isinstance(timestamp, bool) or not isinstance(timestamp, int) or timestamp <= 0:
                 return DepositScan(results, False, "invalid_timestamp")
-            if ts < 0:
-                return DepositScan(results, False, "invalid_timestamp")
-            if ts < since_timestamp:
+            confirmations = tx.get("confirmations")
+            if (isinstance(confirmations, bool) or not isinstance(confirmations, int)
+                    or confirmations < 0):
+                return DepositScan(results, False, "invalid_confirmations")
+            if timestamp < since_timestamp:
                 page_has_old_txs = True
                 continue
 
@@ -2109,9 +2113,19 @@ def fetch_deposits_since(treasury_addr: str, since_timestamp: int, max_pages: in
                     return DepositScan(results, False, "invalid_contract")
                 if str(contract.get("OP") or "").upper() != "CREDIT":
                     continue
-                if _parse_nexus_contract_address(contract.get("to")) == treasury_addr:
-                    results.append(tx)
-                    break
+                to_address = _parse_nexus_contract_address(contract.get("to"))
+                if to_address != treasury_addr:
+                    continue
+                contract_id = contract.get("id")
+                from_address = _parse_nexus_contract_address(contract.get("from"))
+                if isinstance(contract_id, bool) or not isinstance(contract_id, int) or contract_id < 0:
+                    return DepositScan(results, False, "invalid_contract_id")
+                if not from_address:
+                    return DepositScan(results, False, "invalid_credit_source")
+                if classify_nexus_credit(contract.get("amount")).disposition == "invalid":
+                    return DepositScan(results, False, "invalid_credit_amount")
+                results.append(tx)
+                break
 
         if page_has_old_txs or len(txs) < limit:
             return DepositScan(results, True)

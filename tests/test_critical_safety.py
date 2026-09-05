@@ -553,6 +553,40 @@ class CriticalSafetyTests(unittest.TestCase):
 
         self.assertEqual(summary["error"], "nexus_deposit_scan_incomplete:page_fetch_failed")
 
+    def test_recovery_deposit_producer_rejects_malformed_treasury_credit_evidence(self):
+        """Recovery must not call a malformed treasury CREDIT scan complete."""
+        valid = {
+            "txid": "credit-tx",
+            "timestamp": 1_000,
+            "confirmations": 2,
+            "contracts": [{
+                "id": 0,
+                "OP": "CREDIT",
+                "from": "sender",
+                "to": "TREASURY",
+                "amount": "3",
+            }],
+        }
+        malformed = {
+            "missing_txid": lambda tx: tx.pop("txid"),
+            "boolean_timestamp": lambda tx: tx.__setitem__("timestamp", True),
+            "boolean_confirmations": lambda tx: tx.__setitem__("confirmations", True),
+            "string_contract_id": lambda tx: tx["contracts"][0].__setitem__("id", "0"),
+            "missing_sender": lambda tx: tx["contracts"][0].pop("from"),
+            "inexact_amount": lambda tx: tx["contracts"][0].__setitem__("amount", "3.0000001"),
+        }
+        for name, mutate in malformed.items():
+            with self.subTest(field=name):
+                tx = json.loads(json.dumps(valid))
+                mutate(tx)
+                with patch.object(
+                    nexus_client, "_run", return_value=(0, json.dumps([tx]), "")
+                ):
+                    scan = nexus_client.fetch_deposits_since("TREASURY", 0, max_pages=1)
+
+                self.assertFalse(scan.complete)
+                self.assertEqual(scan.deposits, [])
+
     def test_service_record_terms_use_canonical_pair_fee_policy(self):
         """Nexus heartbeat terms must advertise the same policy that pays Solana users."""
         pair = replace(
