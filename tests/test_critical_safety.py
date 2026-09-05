@@ -3333,6 +3333,19 @@ class CriticalSafetyTests(unittest.TestCase):
         rebuild_solana.assert_called_once_with(1_999_999_500)
         fallback.assert_not_called()
 
+    def test_refunded_nexus_credit_identity_does_not_suppress_a_sibling(self):
+        """Refund terminal state must be keyed by the exact CREDIT contract, not txid alone."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "state.db")
+            with patch.object(state_db, "DB_PATH", db_path):
+                state_db.init_db()
+                state_db.mark_refunded_txid("shared-credit-tx", contract_id=0)
+                refunded_first = state_db.is_refunded_txid("shared-credit-tx", contract_id=0)
+                refunded_sibling = state_db.is_refunded_txid("shared-credit-tx", contract_id=1)
+
+        self.assertTrue(refunded_first)
+        self.assertFalse(refunded_sibling)
+
     def test_startup_recovery_never_clamps_a_custody_waterline_forward(self):
         """A wipeout rebuild must scan the published checkpoint, however old it is."""
         heartbeat = {

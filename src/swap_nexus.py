@@ -203,8 +203,8 @@ def process_unprocessed_txids(paused: bool = False):
         # Get refunded txids from database
         conn = state_db.sqlite3.connect(state_db.DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("SELECT txid FROM refunded_txids")
-        refunded_txids = {row[0] for row in cursor.fetchall()}
+        cursor.execute("SELECT txid, contract_id FROM refunded_txids")
+        refunded_txids = {(row[0], row[1]) for row in cursor.fetchall()}
         conn.close()
         
         _log("NEXUS_PROCESS_START", count=len(unprocessed), budget=PROCESS_BUDGET_SEC)

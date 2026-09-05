@@ -1463,6 +1463,8 @@ def mark_refunded_txid(
     owner_from_address: str | None = None,
     confirmations_credit: int | None = None,
     status: str | None = None,
+    *,
+    contract_id: int = -1,
 ):
     """Insert/update refunded txid.
 
@@ -1474,18 +1476,24 @@ def mark_refunded_txid(
     cursor.execute(
         """
         INSERT OR REPLACE INTO refunded_txids (
-            txid, timestamp, amount_usdd, from_address, to_address, owner_from_address, confirmations_credit, status, sig
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            txid, contract_id, timestamp, amount_usdd, from_address, to_address, owner_from_address, confirmations_credit, status, sig
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (txid, timestamp, amount_usdd, from_address, to_address, owner_from_address, confirmations_credit, status, sig),
+        (txid, contract_id, timestamp, amount_usdd, from_address, to_address, owner_from_address, confirmations_credit, status, sig),
     )
     conn.commit()
     conn.close()
 
-def is_refunded_txid(txid: str) -> bool:
+def is_refunded_txid(txid: str, contract_id: int | None = None) -> bool:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT 1 FROM refunded_txids WHERE txid = ?", (txid,))
+    if contract_id is None:
+        cursor.execute("SELECT 1 FROM refunded_txids WHERE txid = ?", (txid,))
+    else:
+        cursor.execute(
+            "SELECT 1 FROM refunded_txids WHERE txid = ? AND contract_id = ?",
+            (txid, contract_id),
+        )
     result = cursor.fetchone()
     conn.close()
     return result is not None
@@ -1502,6 +1510,8 @@ def mark_quarantined_txid(
     to_address: str | None = None,
     owner: str | None = None,
     status: str | None = None,
+    *,
+    contract_id: int = -1,
 ):
     """Record a quarantined Nexus txid.
 
@@ -1514,16 +1524,17 @@ def mark_quarantined_txid(
     cursor = conn.cursor()
     # Preserve any previously-recorded detail if this is a re-mark with fewer fields.
     cursor.execute("SELECT timestamp, amount_usdd, from_address, to_address, owner, status "
-                   "FROM quarantined_txids WHERE txid = ?", (txid,))
+                   "FROM quarantined_txids WHERE txid = ? AND contract_id = ?", (txid, contract_id))
     prev = cursor.fetchone() or (None, None, None, None, None, None)
     cursor.execute(
         """
         INSERT OR REPLACE INTO quarantined_txids
-        (txid, timestamp, amount_usdd, from_address, to_address, owner, sig, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (txid, contract_id, timestamp, amount_usdd, from_address, to_address, owner, sig, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             txid,
+            contract_id,
             timestamp if timestamp is not None else (prev[0] if prev[0] is not None else int(_time.time())),
             amount_usdd if amount_usdd is not None else prev[1],
             from_address if from_address is not None else prev[2],
@@ -1563,10 +1574,16 @@ def payouts_since(seconds: int) -> int:
     conn.close()
     return int(row[0]) if row and row[0] else 0
 
-def is_quarantined_txid(txid: str) -> bool:
+def is_quarantined_txid(txid: str, contract_id: int | None = None) -> bool:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT 1 FROM quarantined_txids WHERE txid = ?", (txid,))
+    if contract_id is None:
+        cursor.execute("SELECT 1 FROM quarantined_txids WHERE txid = ?", (txid,))
+    else:
+        cursor.execute(
+            "SELECT 1 FROM quarantined_txids WHERE txid = ? AND contract_id = ?",
+            (txid, contract_id),
+        )
     result = cursor.fetchone()
     conn.close()
     return result is not None
