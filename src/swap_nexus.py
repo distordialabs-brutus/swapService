@@ -90,6 +90,12 @@ def _row_amount_units(r: dict) -> int:
     return int((amt_dec * (Decimal(10) ** config.USDD_DECIMALS)).to_integral_value(rounding=ROUND_DOWN))
 
 
+def _row_contract_id(row: dict) -> int:
+    """Return a validated persisted credit contract id; -1 identifies legacy rows."""
+    value = row.get("contract_id")
+    return value if type(value) is int else -1
+
+
 def _hold_nexus_refund(r: dict, reason: str) -> None:
     """Stop an unsafe automatic Nexus refund and make it actionable for an operator.
 
@@ -99,12 +105,14 @@ def _hold_nexus_refund(r: dict, reason: str) -> None:
     queue and require manual resolution until that protocol is implemented.
     """
     txid = str(r.get("txid") or "")
+    contract_id = _row_contract_id(r)
     sender = r.get("from")
     amount_units = _row_amount_units(r)
     timestamp = int(r.get("ts") or 0)
     age_sec = max(0, int(time.time()) - timestamp) if timestamp else None
     state_db.update_unprocessed_txid(
         txid=txid,
+        contract_id=contract_id,
         status=NEXUS_STATUS_REFUND_HOLD,
         hold_reason=reason,
     )
@@ -215,7 +223,8 @@ def process_unprocessed_txids(paused: bool = False):
             if r.get("comment") == NEXUS_STATUS_PENDING and int(r.get("confirmations") or 0) <= 1:
                 continue
             txid = r.get("txid")
-            if txid in refunded_txids:
+            contract_id = _row_contract_id(r)
+            if (txid, contract_id) in refunded_txids:
                 continue
             owner = r.get("owner")
             asset_lookup = nexus_client.find_asset_receival_account_by_txid_and_owner(
@@ -235,6 +244,7 @@ def process_unprocessed_txids(paused: bool = False):
             if recv and asset_owner and str(asset_owner) == str(owner) and solana_client.is_valid_solana_token_account(recv):
                 state_db.update_unprocessed_txid(
                     txid=txid,
+                    contract_id=contract_id,
                     receival_account=recv,
                     status=NEXUS_STATUS_READY
                 )
@@ -265,10 +275,13 @@ def process_unprocessed_txids(paused: bool = False):
                 # (e.g. a crash between send and DB write): recover via the txid memo.
                 if r.get("comment") == NEXUS_STATUS_SENDING and not r.get("sig"):
                     try:
-                        found_sig = solana_client.find_signature_with_memo(f"nexus_txid:{r.get('txid')}")
+                        found_sig = solana_client.find_signature_with_memo(
+                            f"nexus_txid:{r.get('txid')}:{_row_contract_id(r)}"
+                        )
                         if found_sig:
                             state_db.update_unprocessed_txid(
                                 txid=r.get("txid"),
+                                contract_id=_row_contract_id(r),
                                 status=NEXUS_STATUS_AWAITING,
                                 sig=found_sig
                             )
@@ -283,6 +296,7 @@ def process_unprocessed_txids(paused: bool = False):
                     continue
                 
                 txid = r.get("txid")
+                contract_id = _row_contract_id(r)
                 recv_account = r.get("receival_account")
                 
                 if not recv_account:
@@ -319,8 +333,9 @@ def process_unprocessed_txids(paused: bool = False):
                         sig="",
                         status=NEXUS_STATUS_FEES,
                         amount_usdd_units=amount_nexus_units,
+                        contract_id=contract_id,
                     )
-                    state_db.remove_unprocessed_txid(txid)
+                    state_db.remove_unprocessed_txid(txid, contract_id)
                     _log("NEXUS_FEE_ONLY", txid=txid, amount_usdd=str(amt_nexus))
                     continue
 
@@ -341,24 +356,25 @@ def process_unprocessed_txids(paused: bool = False):
                     _log("NEXUS_LIQUIDITY_CHECK_ERROR", txid=txid, error=str(e))
 
                 # Mark as sending before attempting
-                state_db.update_unprocessed_txid(txid=txid, status=NEXUS_STATUS_SENDING)
+                state_db.update_unprocessed_txid(txid=txid, contract_id=contract_id, status=NEXUS_STATUS_SENDING)
 
                 # Attempt to send the Solana-side token
-                send_key = state_db.payout_attempt_key(txid)
+                send_key = state_db.payout_attempt_key(f"{txid}:{contract_id}")
                 if not state_db.should_attempt(send_key):
                     if state_db.attempts_exhausted(send_key):
-                        state_db.update_unprocessed_txid(txid=txid, status=NEXUS_STATUS_REFUND_PENDING)
+                        state_db.update_unprocessed_txid(txid=txid, contract_id=contract_id, status=NEXUS_STATUS_REFUND_PENDING)
                         _log("NEXUS_SEND_MAX_ATTEMPTS", txid=txid)
                     else:
                         # Only cooling down - keep it READY and retry on a later cycle.
-                        state_db.update_unprocessed_txid(txid=txid, status=NEXUS_STATUS_READY)
+                        state_db.update_unprocessed_txid(txid=txid, contract_id=contract_id, status=NEXUS_STATUS_READY)
                     continue
 
                 state_db.record_attempt(send_key)
                 
                 try:
-                    # Send the Solana-side token with memo referencing the Nexus txid
-                    memo = f"nexus_txid:{txid}"
+                    # A transaction can contain sibling CREDITS; the outbound memo must
+                    # therefore bind the Solana payout to the exact Nexus contract too.
+                    memo = f"nexus_txid:{txid}:{contract_id}"
                     ok, sig = solana_client.send_solana_token_to_account_with_sig(recv_account, net_solana_units, memo)
                     
                     if ok and sig:
@@ -378,18 +394,18 @@ def process_unprocessed_txids(paused: bool = False):
                                 amount_usdc_units=None,
                                 amount_usdd_units=total_fee_nexus_units
                             )
-                        state_db.update_unprocessed_txid(txid=txid, status=NEXUS_STATUS_AWAITING, sig=sig)
+                        state_db.update_unprocessed_txid(txid=txid, contract_id=contract_id, status=NEXUS_STATUS_AWAITING, sig=sig)
                         _log("NEXUS_SOLANA_SENT", txid=txid, sig=sig, amount=net_solana_units)
                     elif ok and not sig:
                         # Idempotency - already sent
-                        state_db.update_unprocessed_txid(txid=txid, status=NEXUS_STATUS_AWAITING)
+                        state_db.update_unprocessed_txid(txid=txid, contract_id=contract_id, status=NEXUS_STATUS_AWAITING)
                         _log("NEXUS_SOLANA_ALREADY_SENT", txid=txid)
                     else:
                         # Send failed, leave in SENDING for retry
                         attempts = state_db.get_attempt_count(send_key)
                         max_attempts = int(getattr(config, "MAX_ACTION_ATTEMPTS", 3))
                         if attempts >= max_attempts:
-                            state_db.update_unprocessed_txid(txid=txid, status=NEXUS_STATUS_REFUND_PENDING)
+                            state_db.update_unprocessed_txid(txid=txid, contract_id=contract_id, status=NEXUS_STATUS_REFUND_PENDING)
                             _log("NEXUS_SEND_FAILED_MAX", txid=txid, attempts=attempts)
                         else:
                             _log("NEXUS_SEND_FAILED", txid=txid, attempts=attempts)
@@ -407,6 +423,7 @@ def process_unprocessed_txids(paused: bool = False):
                     continue
                 
                 txid = r.get("txid")
+                contract_id = _row_contract_id(r)
                 
                 # Confirm the Solana send. Fast path: check the recorded signature directly
                 # (1 RPC, batchable) instead of scanning up to 50 txs by memo.
@@ -416,7 +433,9 @@ def process_unprocessed_txids(paused: bool = False):
                         found_sig = sent_sig if solana_client.get_signatures_confirmation([sent_sig]).get(sent_sig) else None
                     else:
                         # Legacy/crash fallback: recover the signature by its memo.
-                        found_sig = solana_client.find_signature_with_memo(f"nexus_txid:{txid}")
+                        found_sig = solana_client.find_signature_with_memo(
+                            f"nexus_txid:{txid}:{contract_id}"
+                        )
                     if found_sig:
                         # Solana send confirmed - mark as processed. Same exact-column
                         # derivation as the send path, so the archived amount matches the
@@ -432,8 +451,9 @@ def process_unprocessed_txids(paused: bool = False):
                             sig=found_sig,
                             status=NEXUS_STATUS_PROCESSED,
                             amount_usdd_units=_row_amount_units(r),
+                            contract_id=contract_id,
                         )
-                        state_db.remove_unprocessed_txid(txid)
+                        state_db.remove_unprocessed_txid(txid, contract_id)
                         _log("NEXUS_SOLANA_CONFIRMED", txid=txid, sig=found_sig)
                     else:
                         # Check for timeout - but DON'T auto-refund!
@@ -445,7 +465,7 @@ def process_unprocessed_txids(paused: bool = False):
                         if ts and (time.time() - ts) > confirm_timeout:
                             # Timeout waiting for confirmation - quarantine for manual review
                             # DO NOT auto-refund as the payout may have been sent successfully
-                            state_db.update_unprocessed_txid(txid=txid, status=NEXUS_STATUS_QUARANTINED)
+                            state_db.update_unprocessed_txid(txid=txid, contract_id=contract_id, status=NEXUS_STATUS_QUARANTINED)
                             _log("NEXUS_CONFIRM_TIMEOUT_QUARANTINE", txid=txid, age=int(time.time() - ts), reason="manual_review_required")
                 except Exception as e:
                     _log("NEXUS_CONFIRM_CHECK_ERROR", txid=txid, error=str(e))
@@ -461,6 +481,7 @@ def process_unprocessed_txids(paused: bool = False):
                     continue
                 
                 txid = r.get("txid")
+                contract_id = _row_contract_id(r)
                 sender = r.get("from")
                 
                 # Retry asset lookup one more time before refunding
@@ -566,12 +587,12 @@ def poll_nexus_deposits():
     
     conn = state_db.sqlite3.connect(state_db.DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT txid FROM processed_txids")
-    processed_txids = {row[0] for row in cursor.fetchall()}
-    cursor.execute("SELECT txid FROM refunded_txids")
-    refunded_txids = {row[0] for row in cursor.fetchall()}
-    cursor.execute("SELECT txid FROM unprocessed_txids")
-    unprocessed_txids = {row[0] for row in cursor.fetchall()}
+    cursor.execute("SELECT txid, contract_id FROM processed_txids")
+    processed_txids = {(row[0], row[1]) for row in cursor.fetchall()}
+    cursor.execute("SELECT txid, contract_id FROM refunded_txids")
+    refunded_txids = {(row[0], row[1]) for row in cursor.fetchall()}
+    cursor.execute("SELECT txid, contract_id FROM unprocessed_txids")
+    unprocessed_txids = {(row[0], row[1]) for row in cursor.fetchall()}
     conn.close()
 
     wl_cutoff = 0
@@ -634,7 +655,6 @@ def poll_nexus_deposits():
                 break
             malformed = False
             invalid_exact_credit: tuple[str, str] | None = None
-            multi_treasury_credit: tuple[str, int] | None = None
             for tx in txs:
                 if not isinstance(tx, dict) or not tx.get("txid"):
                     malformed = True
@@ -671,6 +691,12 @@ def poll_nexus_deposits():
                         ):
                             malformed = True
                             break
+                        if (_address_value(contract.get("to")) == treasury_addr and
+                                (isinstance(contract.get("id"), bool)
+                                 or not isinstance(contract.get("id"), int)
+                                 or contract["id"] < 0)):
+                            malformed = True
+                            break
                     if (
                         operation == "CREDIT"
                         and _address_value(contract.get("to")) == treasury_addr
@@ -680,29 +706,8 @@ def poll_nexus_deposits():
                         break
                 if malformed:
                     break
-                credit_count = len(nexus_client.treasury_credit_contracts(tx, treasury_addr))
-                if credit_count > 1:
-                    multi_treasury_credit = (str(tx["txid"]), credit_count)
-                    break
                 if invalid_exact_credit:
                     break
-            if multi_treasury_credit:
-                txid, credit_count = multi_treasury_credit
-                _log(
-                    "NEXUS_ENUMERATION_FAILED",
-                    page=page,
-                    reason="multi_treasury_credit_identity",
-                    txid=txid,
-                    credit_count=credit_count,
-                )
-                alerts.critical(
-                    "nexus_multi_credit_identity_unsupported",
-                    "Nexus transaction contains multiple treasury credits before contract identity migration",
-                    txid=txid,
-                    credit_count=credit_count,
-                )
-                enumeration_complete = False
-                break
             if invalid_exact_credit:
                 txid, amount = invalid_exact_credit
                 _log(
@@ -749,13 +754,7 @@ def poll_nexus_deposits():
                 conf = int(tx.get("confirmations") or 0)
                 if wl_cutoff and ts and ts < wl_cutoff:
                     continue  # below safety cutoff
-                if not txid or txid in processed_txids:
-                    continue
-                # If already queued as pending, refresh confirmations
-                if txid in unprocessed_txids:
-                    if conf > 1:
-                        state_db.update_unprocessed_txid(txid=txid, confirmations_credit=conf)
-                        _log("NEXUS_CONF_THRESHOLD", txid=txid, confirmations=conf)
+                if not txid:
                     continue
                 contracts = tx.get("contracts") or []
                 for c in contracts:
@@ -768,6 +767,18 @@ def poll_nexus_deposits():
                     to_addr = _address_value(to)
                     # Skip if this credit is not TO our treasury account
                     if to_addr != treasury_addr:
+                        continue
+                    contract_id = c["id"]
+                    identity = (txid, contract_id)
+                    if identity in processed_txids or identity in refunded_txids:
+                        continue
+                    if identity in unprocessed_txids:
+                        if conf > 1:
+                            state_db.update_unprocessed_txid(
+                                txid=txid, contract_id=contract_id, confirmations_credit=conf,
+                            )
+                            _log("NEXUS_CONF_THRESHOLD", txid=txid, contract_id=contract_id,
+                                 confirmations=conf)
                         continue
                     sender = _address_value(c.get("from"))
                     amount_dec = _parse_decimal_amount(c.get("amount"))
@@ -803,8 +814,9 @@ def poll_nexus_deposits():
                             sig="",
                             status=NEXUS_STATUS_FEES,
                             amount_usdd_units=credit_units,
+                            contract_id=contract_id,
                         )
-                        processed_txids.add(txid)
+                        processed_txids.add(identity)
                         processed_count += 1
                         _log("NEXUS_BELOW_MIN_CREDIT", txid=txid, amount=str(amount_dec),
                              minimum_units=config.MIN_CREDIT_NEXUS_UNITS, sender=sender)
@@ -816,12 +828,12 @@ def poll_nexus_deposits():
                     if classification.disposition == "over_cap":
                         owner = (nexus_client.get_account_info(sender) or {}).get("owner")
                         state_db.add_unprocessed_txid(
-                            txid=txid, timestamp=ts, amount_usdd=float(amount_dec),
+                            txid=txid, contract_id=contract_id, timestamp=ts, amount_usdd=float(amount_dec),
                             from_address=sender, to_address=to_addr, owner_from_address=owner,
                             confirmations_credit=conf, status=NEXUS_STATUS_REFUND_PENDING,
                             amount_usdd_units=credit_units,
                         )
-                        unprocessed_txids.add(txid)
+                        unprocessed_txids.add(identity)
                         processed_count += 1
                         alerts.warning("swap_over_cap",
                                        "Nexus credit exceeds MAX_SWAP_USDD; queued for refund",
@@ -855,16 +867,15 @@ def poll_nexus_deposits():
                             sig="",
                             status=NEXUS_STATUS_FEES,
                             amount_usdd_units=credit_units,
+                            contract_id=contract_id,
                         )
-                        processed_txids.add(txid)
+                        processed_txids.add(identity)
                         processed_count += 1
-                        continue
-                    if txid in unprocessed_txids:
                         continue
                     # Owner lookup only for non-micro credits
                     owner = (nexus_client.get_account_info(sender) or {}).get("owner")
                     state_db.add_unprocessed_txid(
-                        txid=txid,
+                        txid=txid, contract_id=contract_id,
                         timestamp=ts,
                         amount_usdd=float(amount_dec),
                         from_address=sender,
@@ -876,9 +887,9 @@ def poll_nexus_deposits():
                         # never from the lossy REAL column.
                         amount_usdd_units=credit_units,
                     )
-                    unprocessed_txids.add(txid)
+                    unprocessed_txids.add(identity)
                     processed_count += 1
-                    _log("NEXUS_QUEUED", txid=txid, amount=str(amount_dec))
+                    _log("NEXUS_QUEUED", txid=txid, contract_id=contract_id, amount=str(amount_dec))
             # Micro credits are fully ignored now (no aggregation flush)
 
             # Break conditions

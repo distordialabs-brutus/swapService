@@ -61,34 +61,16 @@ def _rebuild_nexus_from_waterline(waterline_timestamp: int) -> dict:
         }
     deposits = scan.deposits
 
-    # The legacy Nexus-side tables are keyed only by txid.  Persisting either sibling
-    # from a transaction with two treasury CREDITs would irreversibly omit the other.
-    # Refuse the entire rebuild before any durable write; the later `(txid, contract_id)`
-    # migration can represent and process both liabilities independently.
-    for tx in deposits:
-        if not isinstance(tx, dict):
-            return {
-                'nexus_deposits_added': 0,
-                'nexus_deposits_scanned': 0,
-                'error': 'nexus_deposit_scan_incomplete:invalid_transaction',
-            }
-        credit_count = len(nexus_client.treasury_credit_contracts(tx, treasury_addr))
-        if credit_count > 1:
-            return {
-                'nexus_deposits_added': 0,
-                'nexus_deposits_scanned': 0,
-                'error': 'nexus_deposit_scan_incomplete:multi_treasury_credit_identity',
-            }
-
-    # Get existing sets from database
+    # Get existing identities from database.  A transaction can fund more than one
+    # independently payable treasury CREDIT, so txid alone is never a duplicate key.
     conn = state_db.sqlite3.connect(state_db.DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT txid FROM processed_txids")
-    processed_txids = {row[0] for row in cursor.fetchall()}
-    cursor.execute("SELECT txid FROM refunded_txids")
-    refunded_txids = {row[0] for row in cursor.fetchall()}
-    cursor.execute("SELECT txid FROM unprocessed_txids")
-    unprocessed_txids = {row[0] for row in cursor.fetchall()}
+    cursor.execute("SELECT txid, contract_id FROM processed_txids")
+    processed_txids = {(row[0], row[1]) for row in cursor.fetchall()}
+    cursor.execute("SELECT txid, contract_id FROM refunded_txids")
+    refunded_txids = {(row[0], row[1]) for row in cursor.fetchall()}
+    cursor.execute("SELECT txid, contract_id FROM unprocessed_txids")
+    unprocessed_txids = {(row[0], row[1]) for row in cursor.fetchall()}
     conn.close()
     
     added_count = 0
@@ -101,47 +83,51 @@ def _rebuild_nexus_from_waterline(waterline_timestamp: int) -> dict:
         conf = int(tx.get("confirmations") or 0)
         
         if not txid:
-            continue
-        
-        # Skip if already in database
-        if txid in processed_txids or txid in refunded_txids or txid in unprocessed_txids:
-            skipped_processed += 1
-            continue
+            return {
+                'nexus_deposits_added': 0,
+                'nexus_deposits_scanned': 0,
+                'error': 'nexus_deposit_scan_incomplete:missing_txid',
+            }
         
         # Extract contract details. A transaction may carry multiple CREDITS; every
         # individual contract must independently prove that it targets the canonical
         # treasury. A sibling CREDIT never authorizes this one.
         contracts = tx.get("contracts") or []
         for c in contracts:
-            if not isinstance(c, dict):
-                continue
-            if str(c.get("OP") or "").upper() != "CREDIT":
+            if not isinstance(c, dict) or str(c.get("OP") or "").upper() != "CREDIT":
                 continue
             to_address = nexus_client._parse_nexus_contract_address(c.get("to"))
             if to_address != treasury_addr:
+                continue
+            contract_id = c.get("id")
+            if isinstance(contract_id, bool) or not isinstance(contract_id, int) or contract_id < 0:
+                return {
+                    'nexus_deposits_added': 0,
+                    'nexus_deposits_scanned': 0,
+                    'error': 'nexus_deposit_scan_incomplete:invalid_contract_id',
+                }
+            identity = (txid, contract_id)
+            if identity in processed_txids or identity in refunded_txids or identity in unprocessed_txids:
+                skipped_processed += 1
                 continue
             sender = nexus_client._parse_nexus_contract_address(c.get("from")) or ""
 
             amount_dec = _parse_decimal_amount(c.get("amount"))
             classification = nexus_client.classify_nexus_credit(c.get("amount"))
             if classification.disposition == "invalid":
-                # A finite, positive amount that is not an exact configured base-unit
-                # value is real but cannot be paid safely. Keep durable evidence rather
-                # than silently skipping it while reconstruction moves onward.
                 if amount_dec.is_finite() and amount_dec > 0:
                     owner = (nexus_client.get_account_info(sender) or {}).get("owner")
                     state_db.add_unprocessed_txid(
-                        txid=txid, timestamp=ts, amount_usdd=float(amount_dec),
+                        txid=txid, contract_id=contract_id, timestamp=ts, amount_usdd=float(amount_dec),
                         from_address=sender, to_address=to_address,
                         owner_from_address=owner, confirmations_credit=conf,
                         status="quarantined", amount_usdd_units=None,
                         hold_reason="invalid_exact_nexus_amount",
                     )
-                    unprocessed_txids.add(txid)
-                # Invalid chain evidence never becomes a fee, payout, or refund.
-                break
+                    unprocessed_txids.add(identity)
+                continue
             if classification.disposition == "dust":
-                break
+                continue
             credit_units = classification.amount_nexus_units
             owner = (nexus_client.get_account_info(sender) or {}).get("owner")
 
@@ -156,17 +142,17 @@ def _rebuild_nexus_from_waterline(waterline_timestamp: int) -> dict:
                     amount_usdd_units=credit_units,
                 )
                 state_db.mark_processed_txid(
-                    txid=txid, timestamp=ts, amount_usdd=float(amount_dec),
+                    txid=txid, contract_id=contract_id, timestamp=ts, amount_usdd=float(amount_dec),
                     from_address=sender, to_address=treasury_addr, owner=owner or "", sig="",
                     status="processed as fees", amount_usdd_units=credit_units,
                 )
-                processed_txids.add(txid)
+                processed_txids.add(identity)
                 skipped_fees += 1
-                break
+                continue
 
             status = "refund pending" if classification.disposition == "over_cap" else "pending_receival"
             state_db.add_unprocessed_txid(
-                txid=txid,
+                txid=txid, contract_id=contract_id,
                 timestamp=ts,
                 amount_usdd=float(amount_dec),
                 from_address=sender,
@@ -174,12 +160,10 @@ def _rebuild_nexus_from_waterline(waterline_timestamp: int) -> dict:
                 owner_from_address=owner,
                 confirmations_credit=conf,
                 status=status,
-                # Exact base units: every later payout/refund derives from this value.
                 amount_usdd_units=credit_units,
             )
-            unprocessed_txids.add(txid)
+            unprocessed_txids.add(identity)
             added_count += 1
-            break
     
     return {
         'nexus_deposits_added': added_count,

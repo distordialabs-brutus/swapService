@@ -174,6 +174,7 @@ class CriticalSafetyTests(unittest.TestCase):
         credit = {
             "txid": "canonical-admission", "timestamp": 1_000, "confirmations": 2,
             "contracts": [{
+                "id": 0,
                 "OP": "CREDIT", "from": "sender", "to": "canonical-treasury", "amount": "3",
             }],
         }
@@ -265,6 +266,7 @@ class CriticalSafetyTests(unittest.TestCase):
             "timestamp": 1_000,
             "confirmations": 2,
             "contracts": [{
+                "id": 0,
                 "OP": "CREDIT",
                 "from": "sender",
                 "to": "TREASURY",
@@ -306,6 +308,7 @@ class CriticalSafetyTests(unittest.TestCase):
             "timestamp": 1_000,
             "confirmations": 2,
             "contracts": [{
+                "id": 0,
                 "OP": "CREDIT",
                 "from": "sender",
                 "to": "TREASURY",
@@ -338,6 +341,7 @@ class CriticalSafetyTests(unittest.TestCase):
         )
         def credit(txid, amount):
             return {"txid": txid, "timestamp": 1_000, "confirmations": 2, "contracts": [{
+                "id": 0,
                 "OP": "CREDIT", "from": "sender", "to": "TREASURY", "amount": amount,
             }]}
         credits = [
@@ -383,6 +387,7 @@ class CriticalSafetyTests(unittest.TestCase):
         credit = {
             "txid": "inexact-credit", "timestamp": 1_000, "confirmations": 2,
             "contracts": [{
+                "id": 0,
                 "OP": "CREDIT", "from": "sender", "to": "TREASURY", "amount": "1.0000001",
             }],
         }
@@ -411,8 +416,8 @@ class CriticalSafetyTests(unittest.TestCase):
         tx = {
             "txid": "sibling-credits", "timestamp": 1_000, "confirmations": 2,
             "contracts": [
-                {"OP": "CREDIT", "from": "attacker", "to": "OTHER", "amount": "2"},
-                {"OP": "CREDIT", "from": "sender", "to": "TREASURY", "amount": "3"},
+                {"id": 0, "OP": "CREDIT", "from": "attacker", "to": "OTHER", "amount": "2"},
+                {"id": 0, "OP": "CREDIT", "from": "sender", "to": "TREASURY", "amount": "3"},
             ],
         }
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -434,8 +439,8 @@ class CriticalSafetyTests(unittest.TestCase):
         self.assertEqual(row["to"], "TREASURY")
         self.assertEqual(row["amount_usdd_units"], 3_000_000)
 
-    def test_live_admission_holds_a_multi_credit_transaction_until_contract_identity_migrates(self):
-        """A txid-only table must never admit only the first of two treasury credits."""
+    def test_live_admission_persists_each_treasury_credit_by_contract_identity(self):
+        """Two payable CREDITS in one transaction are separate durable liabilities."""
         tx = {
             "txid": "two-treasury-credits", "timestamp": 1_000, "confirmations": 2,
             "contracts": [
@@ -447,21 +452,20 @@ class CriticalSafetyTests(unittest.TestCase):
             db_path = os.path.join(tmpdir, "state.db")
             with patch.object(state_db, "DB_PATH", db_path), patch.object(
                 nexus_client, "_run", return_value=(0, json.dumps([tx]), "")
-            ), patch.object(swap_nexus.alerts, "critical") as critical:
+            ), patch.object(nexus_client, "get_account_info", return_value={"owner": "owner"}):
                 state_db.init_db()
                 swap_nexus.poll_nexus_deposits()
                 queued = state_db.get_unprocessed_txids_as_dicts()
 
-        self.assertEqual(queued, [])
-        critical.assert_called_once_with(
-            "nexus_multi_credit_identity_unsupported",
-            "Nexus transaction contains multiple treasury credits before contract identity migration",
-            txid="two-treasury-credits",
-            credit_count=2,
+        self.assertEqual(
+            {(row["txid"], row["contract_id"], row["from"], row["amount_usdd_units"])
+             for row in queued},
+            {("two-treasury-credits", 0, "sender-a", 3_000_000),
+             ("two-treasury-credits", 1, "sender-b", 4_000_000)},
         )
 
-    def test_recovery_holds_a_multi_credit_transaction_until_contract_identity_migrates(self):
-        """Wipeout recovery must not rebuild only one sibling under a txid-only identity."""
+    def test_recovery_persists_each_treasury_credit_by_contract_identity(self):
+        """Wipeout recovery restores every sibling CREDIT independently."""
         tx = {
             "txid": "two-recovery-credits", "timestamp": 1_000, "confirmations": 2,
             "contracts": [
@@ -473,19 +477,64 @@ class CriticalSafetyTests(unittest.TestCase):
             db_path = os.path.join(tmpdir, "state.db")
             with patch.object(state_db, "DB_PATH", db_path), patch.object(
                 nexus_client, "fetch_deposits_since", return_value=nexus_client.DepositScan([tx], True)
-            ):
+            ), patch.object(nexus_client, "get_account_info", return_value={"owner": "owner"}):
                 state_db.init_db()
                 summary = startup_recovery._rebuild_nexus_from_waterline(0)
                 queued = state_db.get_unprocessed_txids_as_dicts()
 
-        self.assertEqual(queued, [])
-        self.assertEqual(summary["error"], "nexus_deposit_scan_incomplete:multi_treasury_credit_identity")
+        self.assertEqual(summary["nexus_deposits_added"], 2)
+        self.assertEqual(
+            {(row["txid"], row["contract_id"], row["from"], row["amount_usdd_units"])
+             for row in queued},
+            {("two-recovery-credits", 0, "sender-a", 3_000_000),
+             ("two-recovery-credits", 1, "sender-b", 4_000_000)},
+        )
+
+    def test_credit_identity_migration_preserves_legacy_rows_without_colliding(self):
+        """Legacy txid-only rows stay explicitly unresolvable while new siblings persist."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "state.db")
+            conn = sqlite3.connect(db_path)
+            conn.execute("""CREATE TABLE unprocessed_txids (
+                txid TEXT PRIMARY KEY, timestamp INTEGER, amount_usdd REAL,
+                from_address TEXT, to_address TEXT, owner_from_address TEXT,
+                confirmations_credit INTEGER, status TEXT, receival_account TEXT
+            )""")
+            conn.execute("""CREATE TABLE processed_txids (
+                txid TEXT PRIMARY KEY, timestamp INTEGER, amount_usdd REAL,
+                from_address TEXT, to_address TEXT, owner TEXT, sig TEXT, status TEXT
+            )""")
+            conn.execute("""CREATE TABLE refunded_txids (
+                txid TEXT PRIMARY KEY, timestamp INTEGER, amount_usdd REAL,
+                from_address TEXT, to_address TEXT, owner_from_address TEXT,
+                confirmations_credit INTEGER, status TEXT, sig TEXT
+            )""")
+            conn.execute("""CREATE TABLE quarantined_txids (
+                txid TEXT PRIMARY KEY, timestamp INTEGER, amount_usdd REAL,
+                from_address TEXT, to_address TEXT, owner TEXT, sig TEXT, status TEXT
+            )""")
+            conn.execute("INSERT INTO unprocessed_txids VALUES ('legacy-credit', 1, 3.0, 'from', 'to', 'owner', 2, 'pending_receival', NULL)")
+            conn.commit()
+            conn.close()
+            with patch.object(state_db, "DB_PATH", db_path):
+                state_db.init_db()
+                state_db.add_unprocessed_txid(
+                    txid="legacy-credit", contract_id=0, timestamp=2, amount_usdd=4.0,
+                    from_address="from-2", to_address="to", owner_from_address="owner-2",
+                    confirmations_credit=2, status="pending_receival", amount_usdd_units=4_000_000,
+                )
+                rows = state_db.get_unprocessed_txids_as_dicts()
+
+        self.assertEqual(
+            {(row["txid"], row["contract_id"], row["amount_usdd_units"]) for row in rows},
+            {("legacy-credit", -1, None), ("legacy-credit", 0, 4_000_000)},
+        )
 
     def test_recovery_does_not_admit_deposits_from_an_incomplete_enumeration(self):
         """A page failure or page budget exhaust must not advance recovery state."""
         credit = {
             "txid": "incomplete-scan-credit", "timestamp": 1_000, "confirmations": 2,
-            "contracts": [{"OP": "CREDIT", "from": "sender", "to": "TREASURY", "amount": "3"}],
+            "contracts": [{"id": 0, "OP": "CREDIT", "from": "sender", "to": "TREASURY", "amount": "3"}],
         }
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = os.path.join(tmpdir, "state.db")
@@ -1307,6 +1356,7 @@ class CriticalSafetyTests(unittest.TestCase):
                         refund.assert_not_called()
                         update_txid.assert_any_call(
                             txid=f"credit-{reason}",
+                            contract_id=-1,
                             status=swap_nexus.NEXUS_STATUS_REFUND_HOLD,
                             hold_reason=reason,
                         )
@@ -1552,7 +1602,7 @@ class CriticalSafetyTests(unittest.TestCase):
         return_value=(0, json.dumps([{
             "txid": "credit-tx",
             "timestamp": 1_000,
-            "contracts": [{"OP": "CREDIT", "from": "sender", "to": "TREASURY"}],
+            "contracts": [{"id": 0, "OP": "CREDIT", "from": "sender", "to": "TREASURY"}],
         }]), ""),
     )
     def test_malformed_credit_contract_holds_waterline(self, _run, propose_waterline):
@@ -1574,6 +1624,7 @@ class CriticalSafetyTests(unittest.TestCase):
             {
                 "txid": "valid-sibling", "timestamp": 1_001,
                 "contracts": [{
+                    "id": 0,
                     "OP": "CREDIT", "from": "valid-sender", "to": "TREASURY",
                     "amount": "3",
                 }],
@@ -1581,6 +1632,7 @@ class CriticalSafetyTests(unittest.TestCase):
             {
                 "txid": "inexact-credit", "timestamp": 1_000,
                 "contracts": [{
+                    "id": 0,
                     "OP": "CREDIT", "from": "sender", "to": "TREASURY",
                     "amount": "1.0000001",
                 }],
@@ -1623,7 +1675,8 @@ class CriticalSafetyTests(unittest.TestCase):
                         run.return_value = (0, json.dumps([{
                             "txid": f"invalid-{amount}", "timestamp": 1_000,
                             "contracts": [{
-                                "OP": "CREDIT", "from": "sender", "to": "TREASURY",
+                                "id": 0,
+                    "OP": "CREDIT", "from": "sender", "to": "TREASURY",
                                 "amount": amount,
                             }],
                         }]), "")
