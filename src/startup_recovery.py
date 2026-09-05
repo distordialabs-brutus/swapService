@@ -12,7 +12,7 @@ Design notes:
  - We intentionally do NOT mutate historical database records except to add missing processed markers;
    reconstruction is additive and idempotent.
  - Waterline-based scanning allows full recovery from complete database loss.
- - Falls back to recent-only scan if waterlines unavailable or very old.
+ - Falls back to recent-only scan only if waterlines are unavailable or unset.
  - Reference seeding heuristic: choose max(reference found in database OR Nexus) + 1.
 """
 from __future__ import annotations
