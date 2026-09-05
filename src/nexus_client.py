@@ -1734,11 +1734,18 @@ class HeartbeatWaterlines:
 
 
 def heartbeat_waterline_field_names() -> tuple[str, str]:
-    """Return the configured (Nexus, Solana) top-level heartbeat fields."""
-    return (
-        getattr(config, "HEARTBEAT_WATERLINE_NEXUS_FIELD", "last_safe_timestamp_nexus"),
-        getattr(config, "HEARTBEAT_WATERLINE_SOLANA_FIELD", "last_safe_timestamp_solana"),
-    )
+    """Return two distinct, non-empty configured top-level heartbeat fields."""
+    nexus_field = getattr(config, "HEARTBEAT_WATERLINE_NEXUS_FIELD", "last_safe_timestamp_nexus")
+    solana_field = getattr(config, "HEARTBEAT_WATERLINE_SOLANA_FIELD", "last_safe_timestamp_solana")
+    if not isinstance(nexus_field, str) or not isinstance(solana_field, str):
+        raise ValueError("heartbeat waterline field names must be non-empty strings")
+    nexus_field = nexus_field.strip()
+    solana_field = solana_field.strip()
+    if not nexus_field or not solana_field:
+        raise ValueError("heartbeat waterline field names must be non-empty strings")
+    if nexus_field == solana_field:
+        raise ValueError("Nexus and Solana heartbeat waterline fields must be distinct")
+    return nexus_field, solana_field
 
 
 def _parse_heartbeat_timestamp(value: Any, field: str) -> int:

@@ -3280,6 +3280,14 @@ class CriticalSafetyTests(unittest.TestCase):
         rebuild_solana.assert_called_once_with(1_999_999_500)
         fallback.assert_not_called()
 
+    def test_heartbeat_waterline_parser_rejects_duplicate_configured_field_names(self):
+        """Two independent custody checkpoints must never be read from one asset field."""
+        with patch.object(config, "HEARTBEAT_WATERLINE_NEXUS_FIELD", "shared_waterline"), patch.object(
+            config, "HEARTBEAT_WATERLINE_SOLANA_FIELD", "shared_waterline"
+        ):
+            with self.assertRaises(ValueError):
+                nexus_client.parse_heartbeat_waterlines({"shared_waterline": "1000"})
+
     def test_heartbeat_waterline_parser_rejects_legacy_nested_schema(self):
         """Recovery must not reinterpret a legacy nested payload as a current heartbeat."""
         with self.assertRaises(ValueError):
