@@ -576,14 +576,22 @@ def poll_nexus_deposits():
 
     wl_cutoff = 0
     if getattr(config, "HEARTBEAT_WATERLINE_ENABLED", False):
-        try:
-            # Bug #16 fix: Use nexus_client.get_heartbeat_asset() instead of non-existent read_heartbeat_waterlines
-            heartbeat = nexus_client.get_heartbeat_asset()
-            if heartbeat:
-                wl_nexus = heartbeat.get("last_safe_timestamp_nexus") or heartbeat.get("last_safe_timestamp_usdd") or 0
-                wl_cutoff = max(0, int(wl_nexus) - int(getattr(config, "HEARTBEAT_WATERLINE_SAFETY_SEC", 0)))
-        except Exception:
-            wl_cutoff = 0
+        heartbeat = nexus_client.get_heartbeat_asset()
+        if heartbeat:
+            try:
+                waterlines = nexus_client.parse_heartbeat_waterlines(heartbeat)
+            except ValueError as exc:
+                _log("NEXUS_ENUMERATION_FAILED", reason="heartbeat_schema_incompatible", error=str(exc))
+                alerts.critical(
+                    "heartbeat_schema_incompatible",
+                    "Nexus deposit ingestion halted: heartbeat waterline schema is incompatible",
+                    error=str(exc),
+                )
+                return
+            wl_cutoff = max(
+                0,
+                waterlines.nexus - int(getattr(config, "HEARTBEAT_WATERLINE_SAFETY_SEC", 0)),
+            )
 
     try:
         page_ts_candidates: list[int] = []

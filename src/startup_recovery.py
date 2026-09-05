@@ -408,20 +408,22 @@ def perform_startup_recovery() -> dict:
             **stats,
         }
     
-    # Extract waterlines from heartbeat data field
+    # Every runtime heartbeat is a top-level Nexus basic-asset record.  Never interpret
+    # legacy nested ``data`` payloads as an empty checkpoint: that would bypass Nexus
+    # wipeout reconstruction and silently continue with only a recent Solana memo scan.
     try:
-        data_field = heartbeat.get("data") or "{}"
-        if isinstance(data_field, str):
-            import json
-            data = json.loads(data_field)
-        else:
-            data = data_field
-        
-        nexus_waterline = int(data.get("nexus_waterline") or 0)
-        solana_waterline = int(data.get("solana_waterline") or 0)
-    except Exception:
-        nexus_waterline = 0
-        solana_waterline = 0
+        waterlines = nexus_client.parse_heartbeat_waterlines(heartbeat)
+    except ValueError as exc:
+        print(f"   ⚠ Incompatible heartbeat waterline schema: {exc}")
+        seeded = nexus_client.get_last_reference()
+        return {
+            'reference_seeded': seeded,
+            'interrupted_nexus_transfers_held': interrupted_nexus_transfers_held,
+            'recovery_incomplete': True,
+            'error': f'heartbeat_waterline_schema_incompatible:{exc}',
+        }
+    nexus_waterline = waterlines.nexus
+    solana_waterline = waterlines.solana
     
     # Safety: Don't scan too far back (avoid overwhelming recovery)
     max_lookback_sec = int(getattr(config, "MAX_WATERLINE_LOOKBACK_SEC", 7 * 24 * 3600))  # 7 days

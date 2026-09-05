@@ -1725,12 +1725,61 @@ SERVICE_RECORD_FIELDS = SERVICE_RECORD_IMMUTABLE + SERVICE_RECORD_MUTABLE
 SERVICE_RECORD_MAX_BYTES = 1024
 
 
+@dataclass(frozen=True)
+class HeartbeatWaterlines:
+    """Validated current-schema heartbeat custody checkpoints."""
+
+    nexus: int
+    solana: int
+
+
+def heartbeat_waterline_field_names() -> tuple[str, str]:
+    """Return the configured (Nexus, Solana) top-level heartbeat fields."""
+    return (
+        getattr(config, "HEARTBEAT_WATERLINE_NEXUS_FIELD", "last_safe_timestamp_nexus"),
+        getattr(config, "HEARTBEAT_WATERLINE_SOLANA_FIELD", "last_safe_timestamp_solana"),
+    )
+
+
+def _parse_heartbeat_timestamp(value: Any, field: str) -> int:
+    """Accept only non-negative integer wire values for a custody checkpoint."""
+    if isinstance(value, bool):
+        raise ValueError(f"heartbeat field {field!r} must be a non-negative integer")
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str) and value.isascii() and value.isdecimal():
+        parsed = int(value)
+    else:
+        raise ValueError(f"heartbeat field {field!r} must be a non-negative integer")
+    if parsed < 0:
+        raise ValueError(f"heartbeat field {field!r} must be a non-negative integer")
+    return parsed
+
+
+def parse_heartbeat_waterlines(asset: dict[str, Any]) -> HeartbeatWaterlines:
+    """Parse the one supported, top-level heartbeat waterline schema.
+
+    Nexus basic assets expose their fields at the top level.  Deliberately do not accept
+    the obsolete nested ``data.nexus_waterline`` / ``data.solana_waterline`` payload:
+    treating an incompatible record as an empty checkpoint skips wipeout reconstruction.
+    """
+    if not isinstance(asset, dict):
+        raise ValueError("heartbeat asset must be an object")
+    nexus_field, solana_field = heartbeat_waterline_field_names()
+    missing = [field for field in (nexus_field, solana_field) if field not in asset]
+    if missing:
+        raise ValueError(f"heartbeat asset is missing required waterline fields: {missing}")
+    return HeartbeatWaterlines(
+        nexus=_parse_heartbeat_timestamp(asset[nexus_field], nexus_field),
+        solana=_parse_heartbeat_timestamp(asset[solana_field], solana_field),
+    )
+
+
 def build_service_record(status: str = "online", last_poll: int | None = None,
                          wline_sol: int | None = None, wline_nxs: int | None = None) -> dict:
     """The complete public description of this bridge, derived from config."""
     import time as _t
-    sol_field = getattr(config, "HEARTBEAT_WATERLINE_SOLANA_FIELD", "last_safe_timestamp_solana")
-    nxs_field = getattr(config, "HEARTBEAT_WATERLINE_NEXUS_FIELD", "last_safe_timestamp_nexus")
+    nxs_field, sol_field = heartbeat_waterline_field_names()
     rec = {
         # identity + pair (immutable)
         "distordiaType": "nexusBridgeHeartbeat",
@@ -1789,8 +1838,7 @@ def publish_service_record(status: str = "online", last_poll: int | None = None,
         return False
     rec = build_service_record(status=status, last_poll=last_poll,
                                wline_sol=wline_sol, wline_nxs=wline_nxs)
-    sol_field = getattr(config, "HEARTBEAT_WATERLINE_SOLANA_FIELD", "last_safe_timestamp_solana")
-    nxs_field = getattr(config, "HEARTBEAT_WATERLINE_NEXUS_FIELD", "last_safe_timestamp_nexus")
+    nxs_field, sol_field = heartbeat_waterline_field_names()
     mutable = set(SERVICE_RECORD_MUTABLE) | {sol_field, nxs_field}
     cmd = [config.NEXUS_CLI, "assets/update/asset", f"name={name}", "format=basic",
            f"pin={config.NEXUS_PIN}"]
@@ -1843,13 +1891,14 @@ def update_heartbeat_asset(last_poll: int, wline_nxs: int | None, wline_sol: int
     if last_poll is not None:
         cmd.append(f"last_poll_timestamp={last_poll}")
 
-    # Use the CONFIGURED field names. Hardcoding them here meant a config/asset mismatch
-    # silently failed every update, freezing the heartbeat and both waterlines.
+    # Use the same configured top-level names that creation, validation, polling, and
+    # wipeout recovery consume.  A basic asset cannot add a missing field atomically.
+    nxs_field, sol_field = heartbeat_waterline_field_names()
     if wline_nxs is not None:
-        cmd.append(f"{config.HEARTBEAT_WATERLINE_NEXUS_FIELD}={wline_nxs}")
+        cmd.append(f"{nxs_field}={wline_nxs}")
 
     if wline_sol is not None:
-        cmd.append(f"{config.HEARTBEAT_WATERLINE_SOLANA_FIELD}={wline_sol}")
+        cmd.append(f"{sol_field}={wline_sol}")
 
     try:
         code, out, err = _run(cmd, timeout=5)
@@ -1911,17 +1960,17 @@ def validate_heartbeat_asset() -> tuple[bool, str]:
     asset = get_heartbeat_asset()
     if not asset:
         return (False, f"heartbeat asset '{config.NEXUS_HEARTBEAT_ASSET_NAME}' not readable")
-    required = [
-        "last_poll_timestamp",
-        config.HEARTBEAT_WATERLINE_NEXUS_FIELD,
-        config.HEARTBEAT_WATERLINE_SOLANA_FIELD,
-    ]
+    required = ["last_poll_timestamp", *heartbeat_waterline_field_names()]
     missing = [f for f in required if f not in asset]
     if missing:
         return (False,
                 f"heartbeat asset is missing {missing}; every update will fail atomically. "
                 f"Recreate the asset with these fields, or set HEARTBEAT_WATERLINE_*_FIELD "
                 f"to the names it actually has: {sorted(k for k in asset.keys())}")
+    try:
+        parse_heartbeat_waterlines(asset)
+    except ValueError as exc:
+        return (False, f"heartbeat asset has incompatible waterline values: {exc}")
     return (True, f"heartbeat asset OK ({', '.join(required)})")
 
 

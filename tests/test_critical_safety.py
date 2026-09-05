@@ -610,6 +610,7 @@ class CriticalSafetyTests(unittest.TestCase):
     def test_solana_poll_money_path_summaries_are_structured_events(self):
         """A Nexus→Solana payout operator must not have to parse console prose."""
         with patch.object(swap_solana.nexus_client, "get_heartbeat_asset", return_value={
+            "last_safe_timestamp_nexus": 100,
             "last_safe_timestamp_solana": 100,
         }), patch.object(
             swap_solana.solana_client, "fetch_incoming_deposits_via_helius", return_value=[]
@@ -3250,6 +3251,42 @@ class CriticalSafetyTests(unittest.TestCase):
             "prepared_refund", "authorized_execution", "execution_requested", "finalized_refund",
         ])
         self.assertTrue(all(event["actor"] == "alice" for event in events))
+
+    @patch.object(startup_recovery.nexus_client, "get_last_reference", return_value=99)
+    @patch.object(startup_recovery, "_rebuild_solana_from_waterline", return_value={"solana_rebuilt": True})
+    @patch.object(startup_recovery, "_rebuild_nexus_from_waterline", return_value={"nexus_rebuilt": True})
+    @patch.object(startup_recovery, "_fallback_recent_scan")
+    @patch.object(state_db, "recover_interrupted_nexus_transfer_intents", return_value=0)
+    @patch.object(
+        startup_recovery.nexus_client,
+        "get_heartbeat_asset",
+        return_value={
+            "address": "heartbeat-address",
+            "last_poll_timestamp": "2000000000",
+            "last_safe_timestamp_nexus": "1999999000",
+            "last_safe_timestamp_solana": "1999999500",
+        },
+    )
+    def test_startup_recovery_reads_runtime_top_level_heartbeat_waterlines(
+        self, _heartbeat, _recover, fallback, rebuild_nexus, rebuild_solana, _reference
+    ):
+        """A standard runtime heartbeat must rebuild both chains, never take the legacy fallback."""
+        stats = startup_recovery.perform_startup_recovery()
+
+        self.assertTrue(stats["waterline_mode"])
+        self.assertEqual(stats["nexus_waterline"], 1_999_999_000)
+        self.assertEqual(stats["solana_waterline"], 1_999_999_500)
+        rebuild_nexus.assert_called_once_with(1_999_999_000)
+        rebuild_solana.assert_called_once_with(1_999_999_500)
+        fallback.assert_not_called()
+
+    def test_heartbeat_waterline_parser_rejects_legacy_nested_schema(self):
+        """Recovery must not reinterpret a legacy nested payload as a current heartbeat."""
+        with self.assertRaises(ValueError):
+            nexus_client.parse_heartbeat_waterlines({
+                "address": "heartbeat-address",
+                "data": '{"nexus_waterline": 1000, "solana_waterline": 1500}',
+            })
 
 
 if __name__ == "__main__":
