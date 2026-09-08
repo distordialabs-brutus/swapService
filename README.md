@@ -4,7 +4,7 @@ A custodial, bidirectional bridge for **one operator-configured Solana SPL token
 
 The bridge uses a **1:1 whole-token backing/conversion model before fees and conservative decimal rounding**. It is not a market-price exchange, a multi-pair router, or a general cross-chain adapter. The current Solana transfer implementation uses the classic SPL Token program; configurable mint selection does not imply native-SOL or Token-2022 support.
 
-> **Release safety:** local engineering checks do not establish production readiness. Target-chain, custody, migration and crash/recovery acceptance remain required before real funds are admitted. See the [current evaluation](docs/EVALUATION.md) and [safety repair evidence](docs/POST_CHANGE_REVIEW_2026-09-07.md).
+> **Release safety:** local engineering checks do not establish production readiness. Target-chain, custody, migration and crash/recovery acceptance remain required before real funds are admitted. See the [current evaluation](docs/EVALUATION.md), [2026-09-08 development review](docs/DEVELOPMENT_REVIEW_2026-09-08.md), and [2026-09-07 safety repair evidence](docs/POST_CHANGE_REVIEW_2026-09-07.md).
 
 ## Documentation
 
@@ -15,7 +15,7 @@ The bridge uses a **1:1 whole-token backing/conversion model before fees and con
 | Asset/client integrations | [ASSET_STANDARD.md](ASSET_STANDARD.md) |
 | Developers | [runtime state machines](docs/STATE_MACHINES.md), [engineering guidance](.github/copilot-instructions.md) |
 | Security and release decisions | [SECURITY.md](docs/SECURITY.md), [EVALUATION.md](docs/EVALUATION.md) |
-| Previous verification | [2026-09-07 repair report](docs/POST_CHANGE_REVIEW_2026-09-07.md), [baseline review](docs/DEVELOPMENT_REVIEW_2026-09-07.md) |
+| Current and previous verification | [2026-09-08 development review](docs/DEVELOPMENT_REVIEW_2026-09-08.md), [2026-09-07 repair report](docs/POST_CHANGE_REVIEW_2026-09-07.md), [baseline review](docs/DEVELOPMENT_REVIEW_2026-09-07.md) |
 
 Dated review/audit reports retain their original snapshots, token examples and test counts. They are historical evidence, not a substitute for checking the current code and deployment.
 

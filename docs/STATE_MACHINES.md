@@ -95,6 +95,14 @@ State machine diagrams for both directions of the service's single configured So
 > and can requeue an already-paid credit. Mutable offset pagination and non-latching
 > startup recovery remain open. Production remains hard-blocked; see
 > `DEVELOPMENT_REVIEW_2026-09-07.md`.
+>
+> **Development review (2026-09-08, `917505b`):** the subsequent exact
+> payout-evidence repair remains present. Opt-in Solana→Nexus receipts now freeze one
+> publication obligation with exact payout finalization and use an at-most-once
+> create/readback protocol. Receipt creation spends NXS according to current upstream
+> API documentation and has no NXS budget/accounting control or target-node acceptance,
+> so it remains production-disabled. The main Nexus→Solana helper still bypasses the
+> configured rolling payout cap. See `DEVELOPMENT_REVIEW_2026-09-08.md`.
 
 ---
 
@@ -123,6 +131,32 @@ status or memo alone is not settlement. Only then does one transaction archive t
 book its unique fee and remove that source. Missing/mismatched evidence, missing frozen terms,
 failed liquidity reads and ambiguous signatures hold rather than resubmit or refund.
 Only pending admission resolves a destination; it cannot reopen an operator hold.
+
+## Optional receipt publication state machine
+
+`NEXUS_SWAP_RECEIPTS_ENABLED` defaults false. When enabled, exact Solana→Nexus payout
+finalization inserts the immutable `swap_receipts` obligation in the same SQLite transaction as
+the completed payout, fee entry and source-row removal. Publication is not evidence used to retry,
+refund or reissue the payout.
+
+```mermaid
+flowchart LR
+    Confirmed[Exact Nexus payout confirmed] --> Pending["pending"]
+    Pending -->|authoritative provider owner matches + atomic claim| Creating["creating"]
+    Creating -->|create response parsed| Verifying["verifying"]
+    Creating -->|timeout / unknown / rejected response| Creating
+    Verifying -->|one exact owner + immutable payload readback| Published["published"]
+    Verifying -->|missing / malformed / duplicate / full page| Verifying
+    Creating -->|later exact readback| Published
+```
+
+`creating` is an accepted-until-proven-otherwise boundary: restart performs readback and never
+submits a second create. This prevents duplicate receipt assets from an ambiguous result. It does
+not make the operation non-financial: current upstream Nexus API documentation assigns NXS fees to
+asset and optional-name creation. No receipt NXS budget or fee ledger exists, and the target node
+has not established filtered-list completeness or indexing visibility. An existing fixed-field v1
+registration also cannot add `receipt_schema` through a heartbeat update. Receipt mode therefore
+remains a separately gated, default-disabled extension.
 
 ## Solana token → Nexus token state machine
 

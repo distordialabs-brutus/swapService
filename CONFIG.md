@@ -129,6 +129,24 @@ There are currently no generic environment aliases for the three cap keys; prese
 
 The operator-intent CLI in [`nexus_transfer_operator.py`](nexus_transfer_operator.py) is separate from the service loop. Automatic Nexus refund/quarantine debits remain disabled. A timeout, nonzero result or unparseable execution response is outcome-unknown and must not be blindly retried.
 
+## Optional Nexus payout receipts
+
+| Key | Default | Notes |
+|---|---:|---|
+| `NEXUS_SWAP_RECEIPTS_ENABLED` | `false` | Strict boolean. When enabled, a confirmed Solana→Nexus payout atomically enqueues an immutable public `nexus-swap-receipt-v1` asset obligation. |
+| `NEXUS_SWAP_RECEIPT_TIMEOUT_SEC` | `20` | Positive integer timeout used by each receipt create/readback Nexus call and by the loop watchdog. It is not an NXS-spend cap. |
+
+Keep receipt publication disabled for production until the receipt-specific gates in
+[the 2026-09-08 review](docs/DEVELOPMENT_REVIEW_2026-09-08.md) pass. Creating a named Nexus
+asset costs NXS; the current code has no separate receipt-spend budget or fee ledger. The
+create/query/readback contract has local mocked coverage but has not been exercised against the
+target Nexus build.
+
+`receipt_schema` is an immutable optional field in the v1 provider record. Because a Nexus
+`format=basic` asset cannot add fields, enabling receipts does not add this advertisement to an
+existing registration. Create and verify a new receipt-capable registration as part of a reviewed
+migration; do not assume the runtime heartbeat update changes the fixed field set.
+
 ## Polling, timeouts and state
 
 | Key | Default | Notes |
@@ -194,7 +212,7 @@ An unavailable, malformed, incomplete or discrepant balance reconciliation latch
 
 ## Production admission
 
-`SWAP_PRODUCTION_MODE` defaults to `false`. It is the only boolean parsed strictly: accepted values are `1/true/yes/on` and `0/false/no/off`, case-insensitively with surrounding whitespace ignored. Any other present value raises.
+`SWAP_PRODUCTION_MODE` defaults to `false`. It and `NEXUS_SWAP_RECEIPTS_ENABLED` are parsed strictly: accepted values are `1/true/yes/on` and `0/false/no/off`, case-insensitively with surrounding whitespace ignored. Any other present value raises. Receipt enablement is not itself part of production admission and defaults off.
 
 When true, startup refuses before polling unless all of these are present:
 

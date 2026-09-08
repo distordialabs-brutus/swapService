@@ -1,11 +1,11 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
-**Date:** 2026-09-07
-**Documentation/code comparison baseline:** `0851b774d1cbe4eabcdabe2cccb04a0307aa9d7c` (includes the committed safety repair and immutable mint-recipient validation). This documentation refresh is local and uncommitted.
+**Date:** 2026-09-08
+**Documentation/code comparison baseline:** `917505b74f0b095d7c6ed202f55d4b94fb1378a5` (includes the payout-evidence repair, opt-in receipt implementation and committed inventory refresh). This review refresh is local and uncommitted.
 **Status:** Current issue register and repair priority for `swapService`
-**Architecture-plan update:** 2026-09-07 (source identity, atomic fees and recovery safety repaired locally; provider-v2 remains planned).
+**Architecture-plan update:** 2026-09-08 (source identity, atomic fees and recovery safety repaired locally; receipt publication is implemented but externally/operationally gated; provider-v2 remains planned).
 
-This document replaces the old June code-level audit as the current engineering evaluation. Historical findings and their original line references remain available in [`AUDIT_FINDINGS.md`](AUDIT_FINDINGS.md) and [`RISK_ASSESSMENT.md`](RISK_ASSESSMENT.md). The baseline independent evidence is in [`DEVELOPMENT_REVIEW_2026-09-07.md`](DEVELOPMENT_REVIEW_2026-09-07.md). The [post-change report](POST_CHANGE_REVIEW_2026-09-07.md) records the earlier repair and its verification at that snapshot; its publication state and test counts are historical. Dated sections 10–12 below are historical snapshots, not current open-finding assertions. Current local documentation verification is recorded in section 8; no exact-head CI or live-chain approval is implied.
+This document replaces the old June code-level audit as the current engineering evaluation. Historical findings and their original line references remain available in [`AUDIT_FINDINGS.md`](AUDIT_FINDINGS.md) and [`RISK_ASSESSMENT.md`](RISK_ASSESSMENT.md). The [2026-09-08 independent review](DEVELOPMENT_REVIEW_2026-09-08.md) is the current executed evidence. The [post-change report](POST_CHANGE_REVIEW_2026-09-07.md) records the earlier payout repair and its verification at that snapshot; its publication state and test counts are historical. Dated sections 10–12 below are historical snapshots, not current open-finding assertions. Current candidate verification must include the documentation and index-aware inventory; no live-chain approval is implied.
 
 ## 1. Executive verdict
 
@@ -61,8 +61,10 @@ evidence remains held. These are local code repairs, not target-chain production
 | Atomic fee and terminal source state | Implemented with rollback, replay and frozen-term fixtures |
 | Installed-SDK recovery request construction | Signature-typed transaction lookups and recovery cursor are locally verified through real SDK encoders with a mocked provider; target-chain acceptance remains required |
 | Exact mixed-decimal money math | Existing local regression coverage retained; target-chain matrix required |
-| Complete local engineering gate | See final command results in the post-change report; do not substitute prior-head CI |
-| Exact-candidate CI and live devnet/testnet matrix | Not established by this local documentation review; require separate verification before release |
+| Rolling Solana payout cap | **Open Critical:** the main Nexus→Solana helper bypasses cap read and payout-ledger write; reproduced on `917505b` |
+| Optional public receipt assets | Atomic exact obligation/readback implemented; **keep disabled** pending NXS spend controls, registration migration and target-node create/query acceptance |
+| Complete local engineering gate | Isolated installed-dependency suite passed 271 tests and 33 subtests; test-module order isolation remains open |
+| Exact-head CI and live devnet/testnet matrix | Committed `917505b` fork CI passed; no live-chain matrix or CI exists for this documentation candidate |
 
 ---
 
@@ -202,6 +204,24 @@ independently verified snapshot/cursor protocol, not removal of this refusal.
 - Unsupported/malformed query behavior produces an explicit incomplete scan and holds the waterline.
 - Empty results hold locally unless a future target-node integration proves an independently stable, complete range.
 - Pagination, processing caps and concurrent new transactions cannot move the checkpoint past an unpersisted credit.
+
+---
+
+### E-015 — Rolling Solana payout cap does not cover the primary payout helper
+
+**Severity:** Critical deployment blocker
+**Priority:** P0 — enforce before real-fund admission
+
+**Current status:** **open and reproduced on `917505b`.** `send_solana_token()` checks the
+rolling cap and writes the payout ledger, but the primary Nexus→Solana path calls
+`send_solana_token_to_account_with_sig()`, which does neither. An offline probe configured a
+one-unit cap, submitted 900 synthetic units and observed zero cap-read and payout-ledger calls.
+Production admission currently proves only that a positive value was configured.
+
+**Required exit:** claim/reserve cap capacity atomically with the frozen exact payout before RPC;
+retain it across unknown outcomes; settle it only from exact finalized evidence; and use the same
+protocol for primary payouts, refunds and quarantine sends. Cover concurrency, rolling-window,
+timeout-after-acceptance, crash/restart and payout-ledger failure.
 
 ---
 
@@ -436,6 +456,34 @@ This is deliberately a narrow HTTP/environment-layer update: Nexus HTTPS API wra
 JSON-RPC/Jupiter callers, and the pinned Solana SDK pair were not changed. It is local compatibility
 evidence only; the target Nexus node and Solana devnet/testnet matrix remains a separate release gate.
 
+### E-016 — Opt-in receipt publication needs a financial and external-semantics gate
+
+**Priority:** P1 before enabling receipts in production — **default-off containment is active**
+
+The receipt payload, exact payout/fee/queue transaction, durable create claim and exact owner/payload
+readback are useful local controls. The current upstream `ASSETS.MD` pinned at Nexus core commit
+[`1185145534a20ed4d2288e4513c505f271be536d`](https://github.com/Nexusoft/LLL-TAO/blob/1185145534a20ed4d2288e4513c505f271be536d/docs/API/COMMANDS/ASSETS.MD)
+states a 1 NXS asset fee plus 1 NXS for the optional name. The publisher therefore spends NXS even
+though it does not move bridged tokens. There is no receipt NXS budget, accounting ledger or
+production admission rule.
+
+The fixed-field v1 registration cannot gain `receipt_schema` through normal heartbeat updates, and
+startup does not require that field when receipt mode is enabled. JSON creation, global filtered
+query completeness, owner/address projection and indexing delay also remain unverified on the target
+node. Keep receipts disabled until cost controls, registration migration and the target-node matrix
+pass. Do not treat the pinned documentation as proof of the configured live node's behavior.
+
+### E-017 — Test collection order contaminates SDK/config boundaries
+
+**Priority:** P1 engineering gate
+
+The clean installed-dependency suite passes 271 tests and 33 subtests, but combined focused module
+orders produced three payout failures in one selection and two recovery failures in another. The
+same modules pass independently, the isolated installed-SDK test passes, and an explicit real-SDK
+payout-evidence probe passes. The divergence comes from collection-time `sys.modules` SDK stubs and
+process-global `setdefault` environment setup. Move fakes to fixture/subprocess scope and add
+installed-SDK CI shards in multiple orders; a green default order is not isolation proof.
+
 ---
 
 ## 5. Low-priority cleanup
@@ -651,7 +699,7 @@ unless reconciliation explicitly returns `healthy=True`.
 
 ### Batch 5 — Production operational gates
 
-1. ✅ In explicit `SWAP_PRODUCTION_MODE`, require positive per-swap and daily payout caps and at least one configured alert route before startup.
+1. **Partial:** explicit `SWAP_PRODUCTION_MODE` requires positive per-swap/daily payout-cap values and an alert route, but the primary Nexus→Solana helper still bypasses the daily cap.
 2. ✅ Require configured Solana and Nexus quarantine destinations before production startup; test at least one alert channel operationally.
 3. ✅ Refuse production mode when mandatory controls are absent, including the required `NEXUS_SESSION` when `NEXUS_MULTIUSER=true`.
 4. Complete the operator hold-resolution workflow with evidence, authorization and audit.
@@ -872,3 +920,18 @@ in [`POST_CHANGE_REVIEW_2026-09-07.md`](POST_CHANGE_REVIEW_2026-09-07.md) and th
 above; the historical review is not rewritten as if it examined the repaired tree. Production and
 real-fund admission remain hard-blocked pending live/operational acceptance. No live financial side
 effect was performed.
+
+## 13. Independent review update — 2026-09-08 CEST
+
+The current evidence review at [`DEVELOPMENT_REVIEW_2026-09-08.md`](DEVELOPMENT_REVIEW_2026-09-08.md)
+examines committed `917505b`. The exact payout proof and atomic receipt obligation controls pass their
+local regressions. An isolated installed-dependency environment returned 271 tests and 33 subtests, the
+isolated real-SDK boundary passed, and the fork's exact-head CI run
+[`34158353970`](https://github.com/distordialabs-brutus/swapService/actions/runs/34158353970)
+succeeded.
+
+Production remains hard-blocked. The review reproduced the primary payout's daily-cap bypass. Receipt
+mode remains default-disabled because named asset creation has NXS costs documented by current
+upstream Nexus API material, while no receipt-spend budget/accounting or target-node create/query
+acceptance exists. Combined focused test orders also exposed process-global SDK/config contamination,
+so test isolation remains an engineering gate. No live financial or Nexus asset mutation was run.
