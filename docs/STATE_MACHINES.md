@@ -156,7 +156,8 @@ not make the operation non-financial: current upstream Nexus API documentation a
 asset and optional-name creation. No receipt NXS budget or fee ledger exists, and the target node
 has not established filtered-list completeness or indexing visibility. An existing fixed-field v1
 registration also cannot add `receipt_schema` through a heartbeat update. Receipt mode therefore
-remains a separately gated, default-disabled extension.
+remains a separately gated, default-disabled extension; production admission rejects an explicit
+enablement until receipt-specific NXS-spend controls and registration migration are implemented.
 
 ## Solana token → Nexus token state machine
 

@@ -1,7 +1,8 @@
 """Durable, opt-in publication of public Nexus payout receipt assets.
 
-This module owns no money movement.  It consumes only obligations frozen by exact payout
-finalization and treats every uncertain create result as accepted-until-proven-otherwise.
+Receipt creation spends operator NXS even though it does not move bridged tokens. This
+development-only extension consumes only obligations frozen by exact payout finalization
+and treats every uncertain create result as accepted-until-proven-otherwise.
 """
 from __future__ import annotations
 

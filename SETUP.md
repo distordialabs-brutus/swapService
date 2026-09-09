@@ -197,6 +197,7 @@ Set `SWAP_PRODUCTION_MODE=true` only after configuring and testing all controls.
 - `ALERT_WEBHOOK_URL` or `ALERT_COMMAND`;
 - valid Nexus HTTPS API URL, user and password;
 - `NEXUS_SESSION` when multiuser mode is enabled.
+- `NEXUS_SWAP_RECEIPTS_ENABLED=false`; named receipt assets spend NXS, and receipt-specific budget/accounting, registration migration and target-node acceptance are not yet implemented.
 
 The production switch accepts only `1/true/yes/on` and `0/false/no/off`, case-insensitively. A typo fails closed. A configured alert route is not proof of delivery; test it separately before live operation.
 

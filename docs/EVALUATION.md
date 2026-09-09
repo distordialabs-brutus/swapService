@@ -467,10 +467,12 @@ evidence only; the target Nexus node and Solana devnet/testnet matrix remains a 
 
 ### E-016 — Opt-in receipt publication needs a financial and external-semantics gate
 
-**Priority:** P1 before enabling receipts in production — **default-off containment is active**
+**Priority:** P1 before enabling receipts in production — **production admission containment is active**
 
 The receipt payload, exact payout/fee/queue transaction, durable create claim and exact owner/payload
-readback are useful local controls. The current upstream `ASSETS.MD` pinned at Nexus core commit
+readback are useful local controls. Production startup now rejects an explicit
+`NEXUS_SWAP_RECEIPTS_ENABLED=true`, so the default-off extension cannot become an uncapped NXS
+spend path merely through configuration. The current upstream `ASSETS.MD` pinned at Nexus core commit
 [`1185145534a20ed4d2288e4513c505f271be536d`](https://github.com/Nexusoft/LLL-TAO/blob/1185145534a20ed4d2288e4513c505f271be536d/docs/API/COMMANDS/ASSETS.MD)
 states a 1 NXS asset fee plus 1 NXS for the optional name. The publisher therefore spends NXS even
 though it does not move bridged tokens. There is no receipt NXS budget, accounting ledger or
