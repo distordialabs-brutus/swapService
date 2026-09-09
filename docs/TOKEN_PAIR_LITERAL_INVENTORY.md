@@ -82,7 +82,7 @@ Excluded surfaces are explicit:
 | `src/solana_client.py` | Runtime semantics + Frozen compatibility state | Route transfers, payout caps and persisted labels through the canonical pair object without renaming live state prematurely. |
 
 | `src/startup_recovery.py` | Runtime semantics | Recovery must preserve the validated pair/custody identity and exact integer amounts. |
-<!-- token-pair-inventory: src/state_db.py:14,3300 -->
+<!-- token-pair-inventory: src/state_db.py:14,3309 -->
 | `src/state_db.py` | Frozen compatibility state + Display metadata | Existing SQLite names stay stable until a separately tested append-only migration; new labels derive from canonical metadata. |
 <!-- token-pair-inventory: src/swap_nexus.py:90,325,443,842 -->
 | `src/swap_nexus.py` | Runtime semantics | Nexus-to-Solana processing must use canonical token/custody/fee configuration and durable intent rules. |
