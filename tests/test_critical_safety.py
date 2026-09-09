@@ -693,6 +693,8 @@ class CriticalSafetyTests(unittest.TestCase):
             solana_client.state_db, "is_quarantined_sig", return_value=False
         ), patch.object(solana_client.state_db, "refund_attempt_key", return_value="refund-key"), patch.object(
             solana_client.state_db, "get_attempt_count", return_value=0
+        ), patch.object(solana_client.state_db, "prepare_solana_sig_disposition", return_value=True
+        ), patch.object(solana_client.state_db, "record_solana_sig_disposition_submission", return_value=True
         ), patch.object(solana_client.state_db, "record_attempt"), patch.object(
             solana_client, "_is_token_account_for_mint", return_value=True
         ), patch.object(solana_client.state_db, "add_fee_entry"
@@ -701,7 +703,7 @@ class CriticalSafetyTests(unittest.TestCase):
         ), patch.object(solana_client.state_db, "update_unprocessed_sig_status"), patch.object(
             solana_client.state_db, "mark_refunded_sig"
         ), patch.object(
-            solana_client, "send_solana_token", return_value=(True, "refund-tx")
+            solana_client, "send_solana_token_owner_or_account_with_sig", return_value=(True, "refund-tx")
         ) as send:
             processed = solana_client.process_solana_deposits_refunding(limit=1)
 
@@ -725,6 +727,10 @@ class CriticalSafetyTests(unittest.TestCase):
         ), patch.object(solana_client.state_db, "should_attempt", return_value=True), patch.object(
             solana_client.state_db, "quarantine_send_attempt_key", return_value="quarantine-key"
         ), patch.object(solana_client.state_db, "get_attempt_count", return_value=0), patch.object(
+            solana_client.state_db, "prepare_solana_sig_disposition", return_value=True
+        ), patch.object(
+            solana_client.state_db, "record_solana_sig_disposition_submission", return_value=True
+        ), patch.object(
             solana_client.state_db, "record_attempt"), patch.object(
             solana_client, "_is_token_account_for_mint", return_value=True
         ), patch.object(
@@ -736,7 +742,7 @@ class CriticalSafetyTests(unittest.TestCase):
         ), patch.object(solana_client.state_db, "update_unprocessed_sig_status"), patch.object(
             solana_client.state_db, "mark_quarantined_sig"
         ), patch.object(
-            solana_client, "send_solana_token", return_value=(True, "quarantine-tx")
+            solana_client, "send_solana_token_owner_or_account_with_sig", return_value=(True, "quarantine-tx")
         ) as send:
             processed = solana_client.process_solana_deposits_quarantine(limit=1)
 

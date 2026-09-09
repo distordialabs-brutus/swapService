@@ -107,7 +107,7 @@ All decimal settings below are whole-token values. They are converted to integer
 | `DUST_CREDIT_NEXUS_TOKEN` | derived | Nexus input token | Default is max(one Nexus base unit, one tenth of the Nexus-scale Solana-output flat fee). Credits below it are ignored; credits below the minimum but at/above dust are durably booked as fees. |
 | `MAX_SWAP_USDC` | `0` | Solana token | Literal legacy-named active key; `0` disables outside production. Oversized Solana deposits follow the Solana refund path. |
 | `MAX_SWAP_USDD` | `0` | Nexus token | Literal legacy-named active key; `0` disables outside production. Oversized Nexus credits are held for operator disposition, not automatically refunded. |
-| `DAILY_PAYOUT_CAP_USDC` | `0` | Solana token | Legacy-named rolling 24-hour check in `send_solana_token()` (refund/quarantine paths). **The main Nexus→Solana payout helper bypasses this check.** `0` disables outside production; a positive production value does not close the bypass. |
+| `DAILY_PAYOUT_CAP_USDC` | `0` | Solana token | Legacy-named rolling 24-hour cap. Every automated Solana payout reserves the exact durable obligation before RPC; pending, submitted and unknown outcomes consume capacity until authoritative settlement/disposition. `0` disables the cap outside production. |
 
 There are currently no generic environment aliases for the three cap keys; preserve their literal spelling until code adds and validates a migration path.
 

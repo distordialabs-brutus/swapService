@@ -184,10 +184,10 @@ Source: [`src/startup_recovery.py`](src/startup_recovery.py) and [`src/main.py`]
 
 ## Production admission controls
 
-> **Unresolved code gap:** the daily-cap check covers `send_solana_token()` refund/quarantine
-> sends, but the main Nexus→Solana payout helper bypasses it. The positive-cap startup requirement
-> below is configuration validation, not proof of an enforced service-wide limit. See
-> [SECURITY.md](docs/SECURITY.md). Production acceptance must close this bypass.
+> **Payout-budget control:** all automated Solana token sends reserve rolling-cap capacity in
+> SQLite before RPC, retain it across submitted or unknown outcomes, and settle it only from the
+> exact confirmed signature. The positive-cap startup requirement is therefore enforced locally;
+> target-chain timeout/crash/finality acceptance remains required. See [SECURITY.md](docs/SECURITY.md).
 
 Set `SWAP_PRODUCTION_MODE=true` only after configuring and testing all controls. Production startup requires:
 

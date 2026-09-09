@@ -88,9 +88,11 @@ Solana-side refund and quarantine mechanisms exist for eligible failed deposits,
 
 ## Nexus token → Solana token
 
-> **Known operator-safety limitation:** the configured daily payout cap does not cover this
-> direction's current send helper. It is checked on refund/quarantine sends only. See
-> [the cap bypass in SECURITY.md](docs/SECURITY.md); configuring a positive cap is not a fix.
+> **Payout-budget control:** all automated Solana token sends—including Nexus→Solana
+> payouts, Solana refunds and quarantine sends—reserve the configured rolling cap in
+> SQLite before RPC. Pending, submitted and unknown outcomes continue to consume
+> capacity. A timeout or missing returned signature becomes an operator hold, not a
+> retry or cap release. Target-chain crash/finality acceptance is still required.
 
 1. Use an **existing token-account address for the configured Solana mint**. The payout path does not resolve a wallet-owner address to its ATA and does not create missing token accounts.
 2. Send the configured Nexus token from your token account to the verified service treasury, respecting the deployment's effective minimum. Normal holders use the account-debit flow, not a token-creator supply-debit example.

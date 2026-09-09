@@ -784,7 +784,11 @@ def process_solana_deposits_refunding(limit: int = 1000, timeout: float = 8.0) -
                 state_db.remove_unprocessed_sig(sig)
                 continue
             
-            # 4. Check refund net amount
+            # 4. Check refund net amount. Persisted money must remain an exact base-unit integer.
+            if type(amount_usdc_units) is not int or amount_usdc_units <= 0:
+                state_db.update_unprocessed_sig_status(sig, "refund submission held")
+                _log("solana_refund_invalid_source_units", level=logging.ERROR, sig=sig)
+                continue
             net_amount = amount_usdc_units - int(config.SWAP_PAIR.fees.refund_solana_units)
             if net_amount <= 0:
                 # Bug #12 fix: Track the fee (entire deposit amount is kept as fee for failed refunds)
@@ -808,44 +812,46 @@ def process_solana_deposits_refunding(limit: int = 1000, timeout: float = 8.0) -
                 state_db.update_unprocessed_sig_status(sig, "to be quarantined")
                 continue
 
-            # 6. On-chain idempotency: only scan the chain when a prior attempt may have
-            #    already sent a refund (e.g. crash between send and DB write). This avoids
-            #    a ~50-tx signature scan on every first-time refund.
+            # 6. A prior legacy attempt has no durable pre-RPC obligation. A positive
+            # memo match may be adopted, but a bounded miss is never permission to
+            # submit again; hold it for operator evidence instead.
             refund_key = state_db.refund_attempt_key(sig)
             if state_db.get_attempt_count(refund_key) > 0:
                 existing_refund = find_signature_with_memo(f"refundSig:{sig}")
                 if existing_refund:
                     state_db.update_unprocessed_sig_status(sig, "refund sent, awaiting confirmation")
-                    state_db.mark_refunded_sig(sig, timestamp, from_address, amount_usdc_units, memo, existing_refund, net_amount, "awaiting confirmation")
+                    state_db.mark_refunded_sig(sig, timestamp, from_address, amount_usdc_units, memo,
+                                                existing_refund, net_amount, "awaiting confirmation")
                     processed_count += 1
-                    continue
+                else:
+                    state_db.update_unprocessed_sig_status(sig, "refund submission held")
+                    _log("solana_refund_legacy_attempt_held", level=logging.WARNING, sig=sig)
+                continue
 
-            # 7. Process the refund. Memo prefix MUST match the startup-recovery scanner
-            #    (refundSig:) so a crash mid-refund is reconstructed, not double-paid.
+            # 7. Reserve the exact rolling-cap capacity and persist the source before
+            # RPC. A later timeout/crash retains this reservation and becomes a hold.
+            if not state_db.prepare_solana_sig_disposition(
+                source_sig=sig, kind="refund", timestamp=timestamp,
+                from_address=from_address, amount_usdc_units=amount_usdc_units, memo=memo,
+                payout_units=net_amount,
+                cap_units=int(getattr(config, "DAILY_PAYOUT_CAP_SOLANA_UNITS", 0) or 0),
+            ):
+                _log("solana_refund_budget_or_claim_refused", level=logging.WARNING, sig=sig)
+                continue
             state_db.record_attempt(refund_key)
-            try:
-                sig_r = send_solana_token(from_address, net_amount, memo=f"refundSig:{sig}")
-            except PayoutCapExceeded as e:
-                # Throttled, not failed: leave status as "to be refunded" and retry later.
-                _log("solana_refund_deferred", level=logging.WARNING, sig=sig, reason=str(e))
+            ok, refund_signature = send_solana_token_owner_or_account_with_sig(
+                from_address, net_amount, memo=f"refundSig:{sig}",
+            )
+            if not ok or not refund_signature:
+                _log("solana_refund_submission_held", level=logging.ERROR, sig=sig)
                 continue
-            if sig_r[0]:
-                processed_count += 1
-                # Bug #12 fix: Track the flat refund fee
-                refund_fee = int(amount_usdc_units) - int(net_amount)
-                if refund_fee > 0:
-                    state_db.add_fee_entry(
-                        sig=sig,
-                        txid=None,
-                        kind="refund_flat_fee",
-                        amount_usdc_units=refund_fee,
-                        amount_usdd_units=None
-                    )
-                state_db.update_unprocessed_sig_status(sig, "refund sent, awaiting confirmation")
-                state_db.mark_refunded_sig(sig, timestamp, from_address, amount_usdc_units, memo, sig_r[1], net_amount, "awaiting confirmation")
-            if not sig_r[0]:
-                state_db.update_unprocessed_sig_status(sig, "to be quarantined")
+            if not state_db.record_solana_sig_disposition_submission(
+                source_sig=sig, kind="refund", payout_signature=refund_signature,
+            ):
+                _log("solana_refund_submission_ledger_hold", level=logging.ERROR,
+                     sig=sig, refund_signature=refund_signature)
                 continue
+            processed_count += 1
 
         except Exception as e:
             _log("solana_refund_processing_failed", level=logging.ERROR, sig=sig, error=str(e))
@@ -896,13 +902,16 @@ def process_solana_deposits_quarantine(limit: int = 1000, timeout: float = 25.0)
                 state_db.remove_unprocessed_sig(sig)
                 continue
             
-            # 4. Check quarantine net amount
+            # 4. Check quarantine net amount. Persisted money must be exact base units.
+            if type(amount_usdc_units) is not int or amount_usdc_units <= 0:
+                state_db.update_unprocessed_sig_status(sig, "quarantine submission held")
+                _log("solana_quarantine_invalid_source_units", level=logging.ERROR, sig=sig)
+                continue
             net_amount = amount_usdc_units - int(config.SWAP_PAIR.fees.refund_solana_units)
 
             # 4b. Nothing left after the fee: there is nothing to move, so finalise here.
-            # Without this, send_solana_token() returns (True, None) for a non-positive amount and
-            # the row is marked "awaiting confirmation" with a NULL signature - which the
-            # confirmation pass filters out, leaving it stuck in unprocessed_sigs forever.
+            # A durable disposition requires positive exact output units; otherwise an
+            # awaiting-confirmation row could carry no signature and remain stuck forever.
             if net_amount <= 0:
                 state_db.add_fee_entry(sig=sig, txid=None, kind="quarantine_micro_fee",
                                        amount_usdc_units=int(amount_usdc_units), amount_usdd_units=None)
@@ -912,45 +921,45 @@ def process_solana_deposits_quarantine(limit: int = 1000, timeout: float = 25.0)
                 processed_count += 1
                 continue
 
-            # 5. On-chain idempotency: only scan after a prior attempt (avoids a per-item
-            #    scan on the common first attempt). Double-quarantine is not an external
-            #    loss, but this keeps state consistent after a crash.
+            # 5. A prior legacy attempt is ambiguous unless a positive memo match
+            # proves it. A bounded absence must become a visible hold, not a resend.
             quar_key = state_db.quarantine_attempt_key(sig)
             if state_db.get_attempt_count(quar_key) > 0:
                 existing_quar = find_signature_with_memo(f"quarantinedSig:{sig}")
                 if existing_quar:
                     state_db.update_unprocessed_sig_status(sig, "quarantine sent, awaiting confirmation")
-                    state_db.mark_quarantined_sig(sig, timestamp, from_address, amount_usdc_units, memo, existing_quar, net_amount, "awaiting confirmation")
+                    state_db.mark_quarantined_sig(sig, timestamp, from_address, amount_usdc_units, memo,
+                                                   existing_quar, net_amount, "awaiting confirmation")
                     processed_count += 1
-                    continue
+                else:
+                    state_db.update_unprocessed_sig_status(sig, "quarantine submission held")
+                    _log("solana_quarantine_legacy_attempt_held", level=logging.WARNING, sig=sig)
+                continue
 
-            # 6. Process the quarantine. Memo prefix MUST match the startup-recovery
-            #    scanner (quarantinedSig:) for crash reconstruction.
+            # 6. Freeze the exact obligation and reserve capacity before RPC. The
+            # reservation survives any unreturned/ambiguous send outcome.
+            if not state_db.prepare_solana_sig_disposition(
+                source_sig=sig, kind="quarantine", timestamp=timestamp,
+                from_address=from_address, amount_usdc_units=amount_usdc_units, memo=memo,
+                payout_units=net_amount,
+                cap_units=int(getattr(config, "DAILY_PAYOUT_CAP_SOLANA_UNITS", 0) or 0),
+            ):
+                _log("solana_quarantine_budget_or_claim_refused", level=logging.WARNING, sig=sig)
+                continue
             state_db.record_attempt(quar_key)
-            try:
-                sig_q = send_solana_token(config.USDC_QUARANTINE_ACCOUNT, net_amount, memo=f"quarantinedSig:{sig}")
-            except PayoutCapExceeded as e:
-                _log("solana_quarantine_deferred", level=logging.WARNING, sig=sig, reason=str(e))
+            ok, quarantine_signature = send_solana_token_owner_or_account_with_sig(
+                config.USDC_QUARANTINE_ACCOUNT, net_amount, memo=f"quarantinedSig:{sig}",
+            )
+            if not ok or not quarantine_signature:
+                _log("solana_quarantine_submission_held", level=logging.ERROR, sig=sig)
                 continue
-            if sig_q[0]:
-                processed_count += 1
-                # Bug #8 fix: Track the quarantine fee
-                quarantine_fee = int(amount_usdc_units) - int(net_amount)
-                if quarantine_fee > 0:
-                    state_db.add_fee_entry(
-                        sig=sig,
-                        txid=None,
-                        kind="quarantine_flat_fee",
-                        amount_usdc_units=quarantine_fee,
-                        amount_usdd_units=None
-                    )
-                # Bug #8 fix: Update status but DON'T remove from unprocessed yet
-                # Confirmation will be checked by check_quarantine_confirmations()
-                state_db.update_unprocessed_sig_status(sig, "quarantine sent, awaiting confirmation")
-                state_db.mark_quarantined_sig(sig, timestamp, from_address, amount_usdc_units, memo, sig_q[1], net_amount, "awaiting confirmation")
-            if not sig_q[0]:
-                state_db.update_unprocessed_sig_status(sig, "quarantine failed")
+            if not state_db.record_solana_sig_disposition_submission(
+                source_sig=sig, kind="quarantine", payout_signature=quarantine_signature,
+            ):
+                _log("solana_quarantine_submission_ledger_hold", level=logging.ERROR,
+                     sig=sig, quarantine_signature=quarantine_signature)
                 continue
+            processed_count += 1
 
         except Exception as e:
             _log("solana_quarantine_processing_failed", level=logging.ERROR, sig=sig, error=str(e))
@@ -962,94 +971,15 @@ def process_solana_deposits_quarantine(limit: int = 1000, timeout: float = 25.0)
 
 
 def send_solana_token(destination: str, amount_base_units: int, memo: str | None = None) -> tuple[bool, str | None]:
+    """Disabled legacy sender retained only for import compatibility.
+
+    This helper had a non-atomic cap check followed by RPC and best-effort ledger
+    recording. Every runtime financial caller must instead reserve a durable source
+    obligation before using an RPC-only sender.
     """
-    Unified function to send the Solana-side token from vault to various destinations.
-    
-    Args:
-        destination: Target address (owner address or token account address)
-        amount_base_units: Amount in base units
-        memo: Optional memo string for transaction
-        
-    Returns:
-        Tuple of (success: bool, signature: str | None)
-    """
-    if amount_base_units <= 0:
-        return True, None
-
-    # Rolling 24h exposure cap, enforced at the single choke point every Solana payout
-    # passes through, so a runaway loop or a stolen key cannot drain the vault at once.
-    cap = int(getattr(config, "DAILY_PAYOUT_CAP_SOLANA_UNITS", 0) or 0)
-    if cap > 0:
-        try:
-            spent = state_db.payouts_since(86400)
-            if spent + int(amount_base_units) > cap:
-                from . import alerts
-                alerts.critical(
-                    "payout_cap_exceeded",
-                    "24h outbound payout cap would be breached; payment deferred",
-                    spent_units=spent, requested_units=int(amount_base_units), cap_units=cap,
-                    destination=str(destination),
-                )
-                raise PayoutCapExceeded(
-                    f"24h payout cap {cap} would be exceeded (spent {spent}, "
-                    f"requested {int(amount_base_units)})")
-        except PayoutCapExceeded:
-            raise  # genuine cap breach - propagate as-is
-        except Exception as e:
-            raise PayoutCapExceeded(f"payout cap check failed, deferring payment to stay safe: {e}")
-
-    try:
-        kp = load_vault_keypair()
-        client = _get_client()
-        
-        # Determine the actual destination token account
-        # If destination is a wallet address (not a token account), derive the ATA
-        dest_token_account = destination
-        if not _is_token_account_for_mint(destination, config.USDC_MINT):
-            # Destination is a wallet address - derive its token ATA
-            try:
-                owner_pubkey = PublicKey.from_string(destination)
-                dest_token_account = str(get_associated_token_address(owner=owner_pubkey, mint=config.USDC_MINT))
-            except Exception as e:
-                _log("solana_payout_destination_invalid", level=logging.WARNING,
-                     destination=destination, error=str(e))
-                return False, None
-        
-        # Build transfer instruction
-        ix = transfer_checked(
-            program_id=TOKEN_PROGRAM_ID,
-            source=config.VAULT_USDC_ACCOUNT,
-            mint=config.USDC_MINT,
-            dest=PublicKey.from_string(dest_token_account),
-            owner=kp.pubkey(),
-            amount=amount_base_units,
-            decimals=config.USDC_DECIMALS,
-            signers=[],
-        )
-        
-        # Build instructions list
-        ixs = [ix]
-        mix = _memo_ix(memo)
-        if mix:
-            ixs.append(mix)
-        
-        # Send transaction
-        sig = _build_and_send_legacy_tx(ixs, kp)
-
-        # Record against the rolling cap only after the send actually succeeded.
-        try:
-            state_db.record_payout("solana_send", int(amount_base_units), sig)
-        except Exception as e:
-            _log("solana_payout_ledger_record_failed", level=logging.ERROR, signature=sig, error=str(e))
-
-        _log("solana_payout_submitted", signature=sig, amount_units=int(amount_base_units),
-             token=config.SOLANA_TOKEN_SYMBOL)
-        return True, sig
-
-    except Exception as e:
-        _log("solana_payout_submission_failed", level=logging.ERROR,
-             token=config.SOLANA_TOKEN_SYMBOL, error=str(e))
-        return False, None
+    _log("legacy_solana_sender_refused", level=logging.ERROR,
+         destination=str(destination), amount_units=amount_base_units)
+    return False, None
 
 
 def get_signatures_confirmation(sigs: list, min_confirmations: int = 1) -> dict:
@@ -1130,7 +1060,20 @@ def check_sig_confirmations(min_confirmations: int, timeout: float) -> int:
         if refund_sig and finalized.get(refund_sig):
             # Confirmed: update refunded_sigs status
             try:
-                # Update refunded_sigs status to confirmed
+                settled = state_db.confirm_solana_sig_disposition(
+                    source_sig=deposit_sig, kind="refund", payout_signature=refund_sig,
+                )
+                if settled is True:
+                    processed_count += 1
+                    _log("solana_refund_confirmed", deposit_sig=deposit_sig,
+                         refund_signature=refund_sig)
+                    continue
+                if settled is False:
+                    _log("solana_refund_confirmation_held", level=logging.ERROR,
+                         deposit_sig=deposit_sig, refund_signature=refund_sig)
+                    continue
+                # Rows created before the durable reservation protocol remain readable
+                # and can be terminalized by the historical compatibility path below.
                 conn = state_db.sqlite3.connect(state_db.DB_PATH)
                 cursor = conn.cursor()
                 cursor.execute("""
@@ -1138,10 +1081,7 @@ def check_sig_confirmations(min_confirmations: int, timeout: float) -> int:
                 """, (deposit_sig,))
                 conn.commit()
                 conn.close()
-                
-                # Also remove from unprocessed_sigs if still present
                 state_db.remove_unprocessed_sig(deposit_sig)
-                
                 processed_count += 1
                 _log("solana_refund_confirmed", deposit_sig=deposit_sig, refund_signature=refund_sig)
             except Exception as e:
@@ -1185,7 +1125,19 @@ def check_quarantine_confirmations(min_confirmations: int, timeout: float) -> in
         if quarantine_sig and finalized.get(quarantine_sig):
             # Confirmed: update quarantined_sigs status
             try:
-                # Update quarantined_sigs status to confirmed
+                settled = state_db.confirm_solana_sig_disposition(
+                    source_sig=deposit_sig, kind="quarantine", payout_signature=quarantine_sig,
+                )
+                if settled is True:
+                    processed_count += 1
+                    _log("solana_quarantine_confirmed", deposit_sig=deposit_sig,
+                         quarantine_signature=quarantine_sig)
+                    continue
+                if settled is False:
+                    _log("solana_quarantine_confirmation_held", level=logging.ERROR,
+                         deposit_sig=deposit_sig, quarantine_signature=quarantine_sig)
+                    continue
+                # Compatibility for rows created before durable disposition reservations.
                 conn = state_db.sqlite3.connect(state_db.DB_PATH)
                 cursor = conn.cursor()
                 cursor.execute("""
@@ -1193,10 +1145,7 @@ def check_quarantine_confirmations(min_confirmations: int, timeout: float) -> in
                 """, (deposit_sig,))
                 conn.commit()
                 conn.close()
-                
-                # Now safe to remove from unprocessed_sigs
                 state_db.remove_unprocessed_sig(deposit_sig)
-                
                 processed_count += 1
                 _log("solana_quarantine_confirmed", deposit_sig=deposit_sig,
                      quarantine_signature=quarantine_sig)
@@ -1605,6 +1554,32 @@ def send_solana_token_to_account_with_sig(dest_token_account_addr: str, amount_b
     except Exception as e:
         _log("solana_token_account_payout_failed", level=logging.ERROR, error=str(e))
         return False, None
+
+
+def send_solana_token_owner_or_account_with_sig(
+    destination: str, amount_base_units: int, memo: str | None = None,
+) -> tuple[bool, str | None]:
+    """Submit to an existing token account or to an owner's existing ATA.
+
+    This is an RPC-only helper. Callers must have already persisted a durable
+    obligation and must record the returned signature before treating the send as
+    retryable or settled.
+    """
+    if _is_token_account_for_mint(destination, config.USDC_MINT):
+        return send_solana_token_to_account_with_sig(destination, amount_base_units, memo)
+    if not _is_solana_wallet_with_ata(destination):
+        _log("solana_payout_destination_invalid", level=logging.WARNING,
+             destination=destination, reason="missing_token_account_or_ata")
+        return False, None
+    try:
+        destination = str(get_associated_token_address(
+            owner=PublicKey.from_string(destination), mint=config.USDC_MINT,
+        ))
+    except Exception as exc:
+        _log("solana_payout_destination_invalid", level=logging.WARNING,
+             destination=destination, error=str(exc))
+        return False, None
+    return send_solana_token_to_account_with_sig(destination, amount_base_units, memo)
 
 
 def ensure_send_token_to_account(dest_token_account_addr: str, amount_base_units: int, memo: str | None = None) -> bool:

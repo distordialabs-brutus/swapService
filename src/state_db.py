@@ -2283,6 +2283,266 @@ def payout_budget_used(seconds: int = 86400) -> int:
     finally:
         conn.close()
 
+_SOLANA_SIG_DISPOSITION = {
+    "refund": {
+        "table": "refunded_sigs",
+        "signature_column": "refund_sig",
+        "units_column": "refunded_units",
+        "ready_statuses": ("to be refunded",),
+        "held_status": "refund submission held",
+        "awaiting_status": "refund sent, awaiting confirmation",
+        "terminal_status": "refund_confirmed",
+        "budget_kind": "solana_refund",
+    },
+    "quarantine": {
+        "table": "quarantined_sigs",
+        "signature_column": "quarantine_sig",
+        "units_column": "quarantined_units",
+        "ready_statuses": ("to be quarantined", "quarantine failed"),
+        "held_status": "quarantine submission held",
+        "awaiting_status": "quarantine sent, awaiting confirmation",
+        "terminal_status": "quarantine_confirmed",
+        "budget_kind": "solana_quarantine",
+    },
+}
+
+
+def _solana_sig_disposition(source_sig: str, kind: str) -> tuple[str, dict]:
+    source_sig = _require_solana_payout_budget_text(source_sig, "source signature")
+    details = _SOLANA_SIG_DISPOSITION.get(kind)
+    if details is None:
+        raise ValueError("Solana disposition kind must be refund or quarantine")
+    return source_sig, details
+
+
+def _solana_sig_disposition_obligation_id(kind: str, source_sig: str) -> str:
+    # The exact incoming Solana signature is immutable and already the primary key of
+    # unprocessed_sigs.  A deterministic ID makes a restart see the same capacity claim.
+    return f"{kind}:{source_sig}"
+
+
+def prepare_solana_sig_disposition(
+    *, source_sig: str, kind: str, timestamp: int, from_address: str,
+    amount_usdc_units: int, memo: str | None, payout_units: int, cap_units: int,
+) -> bool:
+    """Atomically freeze and cap-reserve one refund/quarantine before Solana RPC.
+
+    Once this returns true, the source is deliberately held in a durable pre-submit
+    state.  A process loss before a returned signature is an unknown outcome, not
+    permission to resend or to release the cap reservation.
+    """
+    source_sig, details = _solana_sig_disposition(source_sig, kind)
+    timestamp = _require_solana_payout_budget_units(timestamp, "source timestamp")
+    from_address = _require_solana_payout_budget_text(from_address, "source address")
+    amount_usdc_units = _require_solana_payout_budget_units(amount_usdc_units, "source amount")
+    payout_units = _require_solana_payout_budget_units(payout_units, "amount")
+    cap_units = _require_solana_payout_budget_units(cap_units, "cap", positive=False)
+    if memo is not None and not isinstance(memo, str):
+        raise ValueError("Solana disposition memo must be text or null")
+    obligation_id = _solana_sig_disposition_obligation_id(kind, source_sig)
+
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            """SELECT timestamp, memo, from_address, amount_usdc_units, status
+               FROM unprocessed_sigs WHERE sig = ?""", (source_sig,)
+        ).fetchone()
+        if (row is None or row[0] != timestamp or row[1] != memo or row[2] != from_address
+                or type(row[3]) is not int or row[3] != amount_usdc_units
+                or row[4] not in details["ready_statuses"]):
+            conn.commit()
+            return False
+        # One incoming deposit can never authorize both a refund and a quarantine send.
+        if any(conn.execute(f"SELECT 1 FROM {table} WHERE sig = ?", (source_sig,)).fetchone()
+               for table in ("refunded_sigs", "quarantined_sigs")):
+            conn.commit()
+            return False
+        if not _reserve_solana_payout_budget_in_transaction(
+            conn, obligation_id=obligation_id, kind=details["budget_kind"],
+            amount_usdc_units=payout_units, cap_units=cap_units, window_sec=86400,
+            now=int(time.time()),
+        ):
+            conn.commit()
+            return False
+        signature_column = details["signature_column"]
+        units_column = details["units_column"]
+        conn.execute(
+            f"""INSERT INTO {details['table']}
+               (sig, timestamp, from_address, amount_usdc_units, memo, {signature_column}, {units_column}, status)
+               VALUES (?, ?, ?, ?, ?, NULL, ?, 'submitting')""",
+            (source_sig, timestamp, from_address, amount_usdc_units, memo, payout_units),
+        )
+        updated = conn.execute(
+            """UPDATE unprocessed_sigs SET status = ?
+               WHERE sig = ? AND status IN (""" + ", ".join("?" for _ in details["ready_statuses"]) + ")",
+            (details["held_status"], source_sig, *details["ready_statuses"]),
+        ).rowcount
+        if updated != 1:
+            raise RuntimeError("Solana disposition source changed during preparation")
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def record_solana_sig_disposition_submission(
+    *, source_sig: str, kind: str, payout_signature: str,
+) -> bool:
+    """Atomically append a returned Solana signature and advance its held source."""
+    source_sig, details = _solana_sig_disposition(source_sig, kind)
+    payout_signature = _require_solana_payout_budget_text(payout_signature, "signature")
+    obligation_id = _solana_sig_disposition_obligation_id(kind, source_sig)
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("BEGIN IMMEDIATE")
+        reserved = conn.execute(
+            """SELECT amount_usdc_units FROM solana_payout_budget_events
+               WHERE obligation_id = ? AND event = 'reserved'""", (obligation_id,)
+        ).fetchone()
+        if reserved is None:
+            conn.commit()
+            return False
+        signature_column = details["signature_column"]
+        row = conn.execute(
+            f"""SELECT {signature_column}, status FROM {details['table']} WHERE sig = ?""",
+            (source_sig,),
+        ).fetchone()
+        if row is None:
+            conn.commit()
+            return False
+        existing_signature, existing_status = row
+        if existing_signature is not None or existing_status != "submitting":
+            conn.commit()
+            return existing_signature == payout_signature and existing_status == "awaiting confirmation"
+        existing_submission = conn.execute(
+            """SELECT signature FROM solana_payout_budget_events
+               WHERE obligation_id = ? AND event = 'submitted'""", (obligation_id,)
+        ).fetchone()
+        if existing_submission is not None:
+            conn.commit()
+            return existing_submission[0] == payout_signature
+        conn.execute(
+            """INSERT INTO solana_payout_budget_events
+               (obligation_id, kind, event, amount_usdc_units, signature, evidence, timestamp)
+               VALUES (?, ?, 'submitted', ?, ?, NULL, ?)""",
+            (obligation_id, details["budget_kind"], reserved[0], payout_signature, int(time.time())),
+        )
+        conn.execute(
+            f"""UPDATE {details['table']} SET {signature_column} = ?, status = 'awaiting confirmation'
+               WHERE sig = ? AND status = 'submitting' AND {signature_column} IS NULL""",
+            (payout_signature, source_sig),
+        )
+        updated = conn.execute(
+            "UPDATE unprocessed_sigs SET status = ? WHERE sig = ? AND status = ?",
+            (details["awaiting_status"], source_sig, details["held_status"]),
+        ).rowcount
+        if updated != 1:
+            raise RuntimeError("Solana disposition source changed during submission recording")
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def confirm_solana_sig_disposition(
+    *, source_sig: str, kind: str, payout_signature: str,
+) -> bool | None:
+    """Settle a new disposition reservation only with its exact confirmed signature.
+
+    ``None`` means the row predates the durable disposition protocol and must use the
+    legacy confirmation compatibility path.  ``False`` is a conflicting/incomplete
+    durable row and must remain held.
+    """
+    source_sig, details = _solana_sig_disposition(source_sig, kind)
+    payout_signature = _require_solana_payout_budget_text(payout_signature, "signature")
+    obligation_id = _solana_sig_disposition_obligation_id(kind, source_sig)
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("BEGIN IMMEDIATE")
+        signature_column = details["signature_column"]
+        units_column = details["units_column"]
+        row = conn.execute(
+            f"""SELECT {signature_column}, {units_column}, amount_usdc_units, status
+               FROM {details['table']} WHERE sig = ?""", (source_sig,),
+        ).fetchone()
+        if row is None:
+            conn.commit()
+            return None
+        recorded_signature, payout_units, source_units, status = row
+        has_reservation = conn.execute(
+            """SELECT 1 FROM solana_payout_budget_events
+               WHERE obligation_id = ? AND event = 'reserved'""", (obligation_id,)
+        ).fetchone() is not None
+        if not has_reservation:
+            conn.commit()
+            return None
+        if (recorded_signature != payout_signature or type(payout_units) is not int
+                or payout_units <= 0 or type(source_units) is not int
+                or source_units < payout_units):
+            conn.commit()
+            return False
+        if status == details["terminal_status"]:
+            confirmed = conn.execute(
+                """SELECT signature, amount_usdc_units FROM solana_payout_budget_events
+                   WHERE obligation_id = ? AND event = 'confirmed'""", (obligation_id,)
+            ).fetchone()
+            conn.commit()
+            return confirmed == (payout_signature, payout_units)
+        if status != "awaiting confirmation":
+            conn.commit()
+            return False
+        if not _settle_solana_payout_budget_in_transaction(
+            conn, obligation_id=obligation_id, signature=payout_signature,
+            amount_usdc_units=payout_units,
+        ):
+            conn.commit()
+            return False
+        fee_units = source_units - payout_units
+        if fee_units:
+            fee_kind = f"{kind}_flat_fee"
+            existing_fee = conn.execute(
+                """SELECT amount_usdc_units FROM fee_entries
+                   WHERE sig = ? AND txid IS NULL AND kind = ?""",
+                (source_sig, fee_kind),
+            ).fetchall()
+            if existing_fee and existing_fee != [(fee_units,)]:
+                raise RuntimeError("Solana disposition fee evidence conflicts with frozen payout")
+            if not existing_fee:
+                conn.execute(
+                    """INSERT INTO fee_entries
+                       (sig, txid, kind, amount_usdc_units, amount_usdd_units, contract_id, timestamp)
+                       VALUES (?, NULL, ?, ?, NULL, -1, ?)""",
+                    (source_sig, fee_kind, fee_units, int(time.time())),
+                )
+        conn.execute(
+            f"UPDATE {details['table']} SET status = ? WHERE sig = ?",
+            (details["terminal_status"], source_sig),
+        )
+        deleted = conn.execute(
+            "DELETE FROM unprocessed_sigs WHERE sig = ? AND status = ?",
+            (source_sig, details["awaiting_status"]),
+        ).rowcount
+        if deleted != 1:
+            raise RuntimeError("Solana disposition source changed during confirmation")
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def record_payout(kind: str, amount_usdc_units: int, reference: str | None = None):
     """Log an outbound Solana-side payment for rolling-cap accounting."""
     import time as _time
