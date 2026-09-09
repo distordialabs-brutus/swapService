@@ -11,13 +11,16 @@ from dataclasses import replace
 from unittest.mock import patch
 
 import pytest
+from solders.signature import Signature
 
-from test_critical_safety import config, nexus_client, solana_client, state_db, swap_nexus
+from src import config, nexus_client, solana_client, state_db, swap_nexus
 from src.nexus_memo import NexusPayoutEvidence
 
 
 NEXUS_TXID = "ab" * 64
 PAYOUT_SIGNATURE = "1" * 64
+OTHER_PAYOUT_SIGNATURE = str(Signature.from_bytes(bytes([2]) * 64))
+RECIPIENT_TOKEN_ACCOUNT = "11111111111111111111111111111111"
 
 
 @contextmanager
@@ -40,7 +43,7 @@ def isolated_state(tmp_path):
 
 class _Keypair:
     def pubkey(self):
-        return "OWNER"
+        return str(config.SOL_MAIN_ACCOUNT)
 
 
 def test_successful_submit_helper_does_not_archive_nexus_source(tmp_path):
@@ -56,7 +59,7 @@ def test_successful_submit_helper_does_not_archive_nexus_source(tmp_path):
         solana_client, "_build_and_send_legacy_tx", return_value=PAYOUT_SIGNATURE
     ):
         result = solana_client.send_solana_token_to_account_with_sig(
-            "receiver", 900, f"nexus_txid:{NEXUS_TXID}:7"
+            RECIPIENT_TOKEN_ACCOUNT, 900, f"nexus_txid:{NEXUS_TXID}:7"
         )
         with sqlite3.connect(state_db.DB_PATH) as conn:
             processed = conn.execute("SELECT * FROM processed_txids").fetchall()
@@ -78,9 +81,9 @@ def payout_transaction(
     memo=f"nexus_txid:{NEXUS_TXID}:7",
     destination="receiver",
     amount=900,
-    authority="OWNER",
-    source="VAULT",
-    mint="MINT",
+    authority=str(config.SOL_MAIN_ACCOUNT),
+    source=str(config.VAULT_USDC_ACCOUNT),
+    mint=str(config.USDC_MINT),
     transaction_signature=PAYOUT_SIGNATURE,
 ):
     return {
@@ -288,7 +291,7 @@ def test_recovered_mismatch_keeps_liability_and_never_resubmits(tmp_path):
 
 
 def test_duplicate_same_source_payouts_are_ambiguous():
-    other_signature = "2" * 64
+    other_signature = OTHER_PAYOUT_SIGNATURE
     entries = [
         {"signature": PAYOUT_SIGNATURE, "confirmationStatus": "finalized", "err": None},
         {"signature": other_signature, "confirmationStatus": "finalized", "err": None},

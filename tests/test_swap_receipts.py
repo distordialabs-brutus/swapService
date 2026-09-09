@@ -1,12 +1,9 @@
 import json
 import os
 import sqlite3
-import sys
-import types
 
 import pytest
 
-sys.modules.setdefault("dotenv", types.SimpleNamespace(load_dotenv=lambda *args, **kwargs: None))
 os.environ.setdefault("SOLANA_RPC_URL", "http://127.0.0.1:8899")
 os.environ.setdefault("VAULT_KEYPAIR", "/tmp/nonexistent-keypair.json")
 os.environ.setdefault("VAULT_USDC_ACCOUNT", "11111111111111111111111111111111")

@@ -19,49 +19,15 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 
-def _stub(name, **attrs):
-    module = type(sys)(name)
-    for key, value in attrs.items():
-        setattr(module, key, value)
-    sys.modules[name] = module
-
-
-class _PublicKey:
-    @staticmethod
-    def from_string(value):
-        return value
-
-    @staticmethod
-    def find_program_address(seeds, program_id):
-        return ("ATA", 0)
-
-    def __init__(self, *args):
-        pass
-
-
-_stub("solana")
-_stub("solana.rpc")
-_stub("solana.rpc.api", Client=lambda *args, **kwargs: None)
-_stub("solders")
-_stub("solders.pubkey", Pubkey=_PublicKey)
-_stub("solders.keypair", Keypair=object)
-_stub("solders.signature", Signature=_PublicKey)
-_stub("solders.hash", Hash=object)
-_stub("solders.instruction", Instruction=object, AccountMeta=object)
-_stub("solders.transaction", Transaction=object, VersionedTransaction=object)
-_stub("solders.message", Message=object)
-_stub("requests", post=lambda *args, **kwargs: None, get=lambda *args, **kwargs: None)
-_stub("dotenv", load_dotenv=lambda *args, **kwargs: None)
-
 os.environ.setdefault("SOLANA_RPC_URL", "http://127.0.0.1:8899")
 os.environ.setdefault("VAULT_KEYPAIR", "/tmp/nonexistent-keypair.json")
-os.environ.setdefault("VAULT_USDC_ACCOUNT", "VAULT")
-os.environ.setdefault("USDC_MINT", "MINT")
+os.environ.setdefault("VAULT_USDC_ACCOUNT", "11111111111111111111111111111111")
+os.environ.setdefault("USDC_MINT", "11111111111111111111111111111111")
 os.environ.setdefault("SOL_MINT", "SOL")
 os.environ.setdefault("NEXUS_PIN", "1234")
 os.environ.setdefault("NEXUS_USDD_TREASURY_ACCOUNT", "TREASURY")
 os.environ.setdefault("NEXUS_TOKEN_REGISTER_ADDRESS", "TOKEN-REGISTER")
-os.environ.setdefault("SOL_MAIN_ACCOUNT", "OWNER")
+os.environ.setdefault("SOL_MAIN_ACCOUNT", "11111111111111111111111111111111")
 os.environ.setdefault("NEXUS_CLI_PATH", "/bin/false")
 
 from src import (  # noqa: E402

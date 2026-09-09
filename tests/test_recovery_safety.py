@@ -36,6 +36,7 @@ from src.nexus_memo import (  # noqa: E402
 
 
 NEXUS_TXID = "ab" * 64
+SOLANA_PAYOUT_SIGNATURE = "1" * 64
 
 
 class NexusPayoutMemoTests(unittest.TestCase):
@@ -112,7 +113,7 @@ class SolanaMemoScannerTests(unittest.TestCase):
         with patch.object(solana_client, "_get_client", return_value=_MemoRpcClient()), patch.object(
             solana_client,
             "_rpc_call",
-            side_effect=[[{"signature": "solana-payout-sig", "blockTime": 200, "confirmationStatus": "finalized", "err": None}], _memo_transaction(memo)],
+            side_effect=[[{"signature": SOLANA_PAYOUT_SIGNATURE, "blockTime": 200, "confirmationStatus": "finalized", "err": None}], _memo_transaction(memo)],
         ):
             result = solana_client.scan_recent_memos(search_limit=10)
 
@@ -121,7 +122,7 @@ class SolanaMemoScannerTests(unittest.TestCase):
             {(NEXUS_TXID, 7): NexusPayoutEvidence(
                 txid=NEXUS_TXID,
                 contract_id=7,
-                solana_signature="solana-payout-sig",
+                solana_signature=SOLANA_PAYOUT_SIGNATURE,
                 to_token_account="recipient-token-account",
                 amount_solana_units=3_000_000,
             )},
@@ -132,7 +133,7 @@ class SolanaMemoScannerTests(unittest.TestCase):
         with patch.object(solana_client, "_get_client", return_value=_MemoRpcClient()), patch.object(
             solana_client,
             "_rpc_call",
-            side_effect=[[{"signature": "solana-payout-sig", "blockTime": 200, "confirmationStatus": "finalized", "err": None}], _memo_transaction(memo)],
+            side_effect=[[{"signature": SOLANA_PAYOUT_SIGNATURE, "blockTime": 200, "confirmationStatus": "finalized", "err": None}], _memo_transaction(memo)],
         ):
             result = solana_client.scan_memos_since_timestamp(100)
 
@@ -143,7 +144,7 @@ class SolanaMemoScannerTests(unittest.TestCase):
             {(NEXUS_TXID, 7): NexusPayoutEvidence(
                 txid=NEXUS_TXID,
                 contract_id=7,
-                solana_signature="solana-payout-sig",
+                solana_signature=SOLANA_PAYOUT_SIGNATURE,
                 to_token_account="recipient-token-account",
                 amount_solana_units=3_000_000,
             )},
@@ -192,7 +193,7 @@ class StartupReconstructionTests(unittest.TestCase):
         scan = {
             "complete": False,
             "reason": "pagination_truncated",
-            "nexus_payouts": {(NEXUS_TXID, 7): "solana-payout-sig"},
+            "nexus_payouts": {(NEXUS_TXID, 7): SOLANA_PAYOUT_SIGNATURE},
             "legacy_nexus_txids": {},
             "malformed_nexus_memos": [],
             "refund_sigs": {},
@@ -218,7 +219,7 @@ class StartupReconstructionTests(unittest.TestCase):
             "complete": True,
             "reason": None,
             "nexus_payouts": {},
-            "legacy_nexus_txids": {NEXUS_TXID: "solana-payout-sig"},
+            "legacy_nexus_txids": {NEXUS_TXID: SOLANA_PAYOUT_SIGNATURE},
             "malformed_nexus_memos": [],
             "refund_sigs": {},
             "quarantined_sigs": {},
@@ -254,7 +255,7 @@ class StartupReconstructionTests(unittest.TestCase):
             "nexus_payouts": {(NEXUS_TXID, 1): NexusPayoutEvidence(
                 txid=NEXUS_TXID,
                 contract_id=1,
-                solana_signature="solana-payout-sig",
+                solana_signature=SOLANA_PAYOUT_SIGNATURE,
                 to_token_account="recipient-token-account",
                 amount_solana_units=nexus_client.get_solana_send_amount_units(4_000_000),
             )},
@@ -301,7 +302,7 @@ class StartupReconstructionTests(unittest.TestCase):
         self.assertTrue(second_result["recovery_complete"], second_result)
         self.assertEqual(
             processed,
-            [(NEXUS_TXID, 1, 4_000_000, "sender-b", "solana-payout-sig")],
+            [(NEXUS_TXID, 1, 4_000_000, "sender-b", SOLANA_PAYOUT_SIGNATURE)],
         )
         self.assertEqual(queued, [(NEXUS_TXID, 0, 3_000_000, "sender-a")])
 

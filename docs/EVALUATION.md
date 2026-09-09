@@ -63,7 +63,7 @@ evidence remains held. These are local code repairs, not target-chain production
 | Exact mixed-decimal money math | Existing local regression coverage retained; target-chain matrix required |
 | Rolling Solana payout cap | **Locally repaired:** primary payouts plus Solana refunds/quarantine sends atomically reserve their frozen exact payout before RPC, retain capacity across unknown outcomes, record submission identity and settle only from exact confirmation. Target-chain timeout/crash/finality acceptance remains required |
 | Optional public receipt assets | Atomic exact obligation/readback implemented; **keep disabled** pending NXS spend controls, registration migration and target-node create/query acceptance |
-| Complete local engineering gate | Installed-dependency default order passed 271 tests and 33 subtests; standalone recovery and alternate combined orders still fail from process-global SDK/config contamination |
+| Complete local engineering gate | Installed-dependency default order passed 285 tests and 33 subtests; standalone recovery and the receipt→payout→fee→SDK order now pass under the real pinned SDK/configuration boundary |
 | Exact-head CI and live devnet/testnet matrix | Committed `1116a4a` matches `origin/main`; no live-chain matrix or exact-candidate CI exists for this documentation refresh |
 
 ---
@@ -482,18 +482,20 @@ query completeness, owner/address projection and indexing delay also remain unve
 node. Keep receipts disabled until cost controls, registration migration and the target-node matrix
 pass. Do not treat the pinned documentation as proof of the configured live node's behavior.
 
-### E-017 — Test collection order contaminates SDK/config boundaries
+### E-017 — Test collection order contaminated SDK/config boundaries
 
-**Priority:** P1 engineering gate
+**Priority:** P1 engineering gate — **remediated locally; CI verification added**
 
-The clean installed-dependency suite passes 271 tests and 33 subtests, but the 2026-09-09 rerun
-reproduced three payout failures in the receipt→payout→fee→SDK order. The recovery module also
-fails two payout-scanner cases when run alone with the installed SDK, while those cases pass after
-the default suite has collected the global stubs. The receipt, payout, fee, identity, critical-safety
-and real-SDK modules pass in their separately suitable processes. This is test-harness/configuration
-contamination, not evidence that the production parser accepts bad evidence. Move fakes to
-fixture/subprocess scope, make each module establish and restore exact environment/config state, and
-add installed-SDK CI shards in multiple orders; a green default order is not isolation proof.
+`test_critical_safety.py` no longer replaces Solana, solders, requests or dotenv modules in
+`sys.modules` at collection time. Its baseline is now valid for the pinned real SDK, receipt tests
+do not replace dotenv, and payout regressions import runtime modules directly instead of importing
+the critical-safety module for its global state. Scanner fixtures use parseable real-SDK signatures.
+
+The installed-dependency default suite passes 285 tests and 33 subtests. The standalone recovery
+module passes 15 tests and 8 subtests; recovery→SDK passes 16 tests and 8 subtests; and the
+receipt→payout→fee→SDK sequence passes 57 tests. CI now runs standalone recovery and the latter
+sequence after the full suite. These checks prevent a future fake-module injection, invalid fixture
+identity or collection-order dependency from being masked by the default order.
 
 ---
 
@@ -648,9 +650,10 @@ account-history, real finality and crash/restart matrix remain release gates.
 5. Remove collection-time dependency-module replacement and process-global environment leakage;
    require the payout/recovery/receipt/SDK shards to pass independently and in multiple orders.
 
-**Partial exit:** the default installed-dependency suite is green and historical GitHub Actions run
-`33258188981` passed, but the 2026-09-09 standalone/alternate-order probes still fail under E-017.
-The mixed-decimal contract also requires target-chain evidence in Batch 4.
+**Local engineering exit:** the default installed-dependency suite plus standalone recovery,
+recovery→SDK and receipt→payout→fee→SDK probes pass with the real pinned SDK; CI enforces the
+standalone recovery and receipt→payout→fee→SDK checks. The mixed-decimal contract still requires
+target-chain evidence in Batch 4.
 
 ### Batch 2 — Durable completed-state model and fail-closed reconciliation **PARTIAL**
 
