@@ -355,7 +355,11 @@ def process_unprocessed_txids(paused: bool = False):
                     amount_usdd_units=amount_nexus_units,
                     payout_solana_units=net_solana_units,
                     payout_fee_nexus_units=total_fee_nexus_units,
+                    payout_cap_solana_units=int(
+                        getattr(config, "DAILY_PAYOUT_CAP_SOLANA_UNITS", 0) or 0
+                    ),
                 ):
+                    _log("NEXUS_PAYOUT_BUDGET_OR_CLAIM_REFUSED", txid=txid, contract_id=contract_id)
                     continue  # Another worker already claimed this exact source credit.
                 state_db.record_attempt(send_key)
                 
@@ -366,6 +370,16 @@ def process_unprocessed_txids(paused: bool = False):
                     ok, sig = solana_client.send_solana_token_to_account_with_sig(recv_account, net_solana_units, memo)
                     
                     if ok and sig:
+                        # The durable reservation was written before RPC.  If this append
+                        # fails after an accepted send, leave the source in ``sending`` and
+                        # retain the reservation: recovery must prove the memo/evidence
+                        # before it can settle, and must never submit again.
+                        if not state_db.record_solana_payout_submission(
+                            f"nexus:{txid}:{contract_id}", sig
+                        ):
+                            _log("NEXUS_PAYOUT_SUBMISSION_LEDGER_HOLD", txid=txid,
+                                 contract_id=contract_id, sig=sig)
+                            continue
                         # Submission is not settlement. Terms were persisted before RPC;
                         # book the fee atomically with confirmed terminal source state.
                         state_db.update_unprocessed_txid(txid=txid, contract_id=contract_id, status=NEXUS_STATUS_AWAITING, sig=sig)

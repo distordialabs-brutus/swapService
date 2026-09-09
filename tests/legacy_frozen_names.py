@@ -103,6 +103,10 @@ EXPECTED_SCHEMA = {
                                "amount_usdd_units", "reference", "status", "remote_txid", "contract_id",
                                "created_timestamp", "last_attempt_timestamp", "resolved_timestamp"],
     "payouts": ["id", "kind", "amount_usdc_units", "reference", "timestamp"],
+    # E-015 additive payout-cap journal. It never renames or rewrites an existing
+    # payout row; its append-only events retain capacity across unknown outcomes.
+    "solana_payout_budget_events": ["id", "obligation_id", "kind", "event",
+                                    "amount_usdc_units", "signature", "evidence", "timestamp"],
     # These append-only fields are intentionally introduced by the E-004 durable
     # reconciliation migration. Existing rows retain their original columns and are
     # treated as incomplete evidence until a separately verified backfill exists.
@@ -133,7 +137,7 @@ EXPECTED_SCHEMA = {
     "waterline_proposals": ["chain", "proposed_timestamp"],
 }
 
-print("\n[1] State database schema is unchanged")
+print("\n[1] State database schema matches frozen names and approved additive journals")
 conn = sqlite3.connect(DB)
 actual = {}
 for (t,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"):

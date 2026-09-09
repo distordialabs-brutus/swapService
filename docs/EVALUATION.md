@@ -61,7 +61,7 @@ evidence remains held. These are local code repairs, not target-chain production
 | Atomic fee and terminal source state | Implemented with rollback, replay and frozen-term fixtures |
 | Installed-SDK recovery request construction | Signature-typed transaction lookups and recovery cursor are locally verified through real SDK encoders with a mocked provider; target-chain acceptance remains required |
 | Exact mixed-decimal money math | Existing local regression coverage retained; target-chain matrix required |
-| Rolling Solana payout cap | **Open Critical:** the main Nexus→Solana helper bypasses cap read and payout-ledger write. The alternate helper's read-then-send-then-record sequence is itself non-atomic and swallows ledger-write failure, so routing through it alone would not meet the exit |
+| Rolling Solana payout cap | **P0 partial repair:** the primary Nexus→Solana path now atomically reserves the frozen exact payout before RPC, retains capacity across unknown outcomes, records submission identity and settles from exact finalized evidence. The legacy refund/quarantine helper still uses a non-atomic read/send/best-effort-record sequence, so the global-budget exit remains open |
 | Optional public receipt assets | Atomic exact obligation/readback implemented; **keep disabled** pending NXS spend controls, registration migration and target-node create/query acceptance |
 | Complete local engineering gate | Installed-dependency default order passed 271 tests and 33 subtests; standalone recovery and alternate combined orders still fail from process-global SDK/config contamination |
 | Exact-head CI and live devnet/testnet matrix | Committed `1116a4a` matches `origin/main`; no live-chain matrix or exact-candidate CI exists for this documentation refresh |
@@ -212,18 +212,22 @@ independently verified snapshot/cursor protocol, not removal of this refusal.
 **Severity:** Critical deployment blocker
 **Priority:** P0 — enforce before real-fund admission
 
-**Current status:** **open; unchanged at `1116a4a`.** `send_solana_token()` checks the
-rolling cap and writes the payout ledger, but the primary Nexus→Solana path calls
-`send_solana_token_to_account_with_sig()`, which does neither. An offline probe configured a
-one-unit cap, submitted 900 synthetic units and observed zero cap-read and payout-ledger calls in
-the 2026-09-08 review. The runtime/test diff from that reviewed implementation to current HEAD is
-empty, and the call graph remains unchanged. Production admission currently proves only that a
-positive value was configured.
+**Current status:** **P0 partial repair in the working candidate.** The primary
+Nexus→Solana path now passes the configured cap to `prepare_nexus_payout()`. That
+single SQLite write transaction freezes the exact payout, reserves its capacity under
+`nexus:<txid>:<contract_id>`, and claims the exact source before RPC. A returned
+signature is append-recorded before the row advances to awaiting evidence; failure to
+record it leaves the source held and its capacity reserved. Exact finalized payout
+evidence settles the same reservation atomically with terminal source/fee state.
+Focused regressions cover exhaustion before RPC, reservation/submission/confirmation
+identity and a post-send submission-ledger failure; the full local suite passed `280
+passed, 1 skipped, 33 subtests` for this candidate.
 
-The alternate helper is not a sufficient repair target by itself: it reads aggregate spend before
-submission without reserving capacity atomically, records only after submission, and logs then
-continues when the ledger write fails. Concurrent workers can oversubscribe the same remaining
-capacity, and a successful but unrecorded send can disappear from later cap calculations.
+**The global-budget exit remains open.** `send_solana_token()` is still used for
+Solana refunds and quarantine sends and retains its older read-then-send-then-
+best-effort-record sequence. Those paths must be migrated to the same durable
+obligation protocol, including authoritative settlement/release, before E-015 can be
+closed.
 
 **Required exit:** claim/reserve cap capacity atomically with the frozen exact payout before RPC;
 retain it across unknown outcomes; settle it only from exact finalized evidence; and use the same
@@ -695,7 +699,7 @@ semantics are unproven; local code holds whenever those properties cannot be est
 **Remaining exit:** run the target-node matrix at every acceptance and crash boundary. Review and
 resolve pre-upgrade ambiguity from real chain evidence; do not relabel legacy rows to bypass a hold.
 
-### Batch 3A — One global Solana payout-budget protocol **OPEN P0**
+### Batch 3A — One global Solana payout-budget protocol **PARTIAL P0**
 
 1. Add an append-only reservation/settlement ledger keyed by the exact durable obligation, not by
    a helper invocation or process-local counter.
@@ -744,7 +748,7 @@ unless reconciliation explicitly returns `healthy=True`.
 
 ### Batch 5 — Production operational gates
 
-1. **Partial:** explicit `SWAP_PRODUCTION_MODE` requires positive per-swap/daily payout-cap values and an alert route, but the primary Nexus→Solana helper still bypasses the daily cap.
+1. **Partial:** explicit `SWAP_PRODUCTION_MODE` requires positive per-swap/daily payout-cap values and an alert route. The primary Nexus→Solana path now reserves its cap atomically, but the refund/quarantine sender remains outside that durable protocol.
 2. ✅ Require configured Solana and Nexus quarantine destinations before production startup; test at least one alert channel operationally.
 3. ✅ Refuse production mode when mandatory controls are absent, including the required `NEXUS_SESSION` when `NEXUS_MULTIUSER=true`.
 4. Complete the operator hold-resolution workflow with evidence, authorization and audit.

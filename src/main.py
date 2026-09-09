@@ -512,7 +512,7 @@ def run():
                                 vault_usdc_units=vault_solana,
                                 circulating_usdd_units=circ_nexus,
                                 paused=bool(should_pause),
-                                payouts_24h_units=state_db.payouts_since(86400),
+                                payouts_24h_units=state_db.payout_budget_used(86400),
                                 fees_usdc_units=f_solana,
                                 fees_usdd_units=f_nexus,
                                 # state_db deliberately does not import config, so it cannot

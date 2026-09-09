@@ -324,6 +324,31 @@ def init_db():
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_payouts_ts ON payouts(timestamp)")
 
+    # Append-only budget events make every outbound-cap decision durable.  A reservation
+    # is keyed by the underlying financial obligation, never by a helper call: retries,
+    # restarts, and concurrent workers therefore all see the same capacity claim.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS solana_payout_budget_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            obligation_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            event TEXT NOT NULL CHECK (event IN ('reserved', 'submitted', 'confirmed', 'released')),
+            amount_usdc_units INTEGER NOT NULL,
+            signature TEXT,
+            evidence TEXT,
+            timestamp INTEGER NOT NULL,
+            UNIQUE(obligation_id, event)
+        )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_solana_payout_budget_events_obligation "
+        "ON solana_payout_budget_events(obligation_id, event)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_solana_payout_budget_events_event_ts "
+        "ON solana_payout_budget_events(event, timestamp)"
+    )
+
     # Public receipt publication is a separate, non-monetary side effect. Its frozen
     # payload is committed with payout finalization so a crash cannot lose the obligation.
     cursor.execute("""
@@ -2037,6 +2062,218 @@ def mark_quarantined_txid(
 
 ## Outbound payout ledger (rolling exposure caps)
 
+def _require_solana_payout_budget_text(value: str, field: str, max_length: int = 500) -> str:
+    text = str(value or "").strip()
+    if not text or len(text) > max_length:
+        raise ValueError(f"Solana payout budget {field} is required and must be at most {max_length} characters")
+    return text
+
+
+def _require_solana_payout_budget_units(value: int, field: str, *, positive: bool = True) -> int:
+    if type(value) is not int or (value <= 0 if positive else value < 0):
+        comparator = "positive" if positive else "nonnegative"
+        raise ValueError(f"Solana payout budget {field} must be an exact {comparator} integer")
+    return value
+
+
+def _payout_budget_usage_in_transaction(conn, cutoff: int) -> int:
+    """Return capacity consumed by unsettled obligations plus recent final spend."""
+    row = conn.execute(
+        """SELECT COALESCE(SUM(amount_usdc_units), 0) FROM (
+               SELECT reserved.amount_usdc_units
+               FROM solana_payout_budget_events AS reserved
+               WHERE reserved.event = 'reserved'
+                 AND NOT EXISTS (
+                     SELECT 1 FROM solana_payout_budget_events AS terminal
+                     WHERE terminal.obligation_id = reserved.obligation_id
+                       AND terminal.event IN ('confirmed', 'released')
+                 )
+               UNION ALL
+               SELECT confirmed.amount_usdc_units
+               FROM solana_payout_budget_events AS confirmed
+               WHERE confirmed.event = 'confirmed' AND confirmed.timestamp >= ?
+               UNION ALL
+               SELECT payouts.amount_usdc_units
+               FROM payouts WHERE payouts.timestamp >= ?
+           )""",
+        (cutoff, cutoff),
+    ).fetchone()
+    return int(row[0]) if row and row[0] else 0
+
+
+def _reserve_solana_payout_budget_in_transaction(
+    conn, *, obligation_id: str, kind: str, amount_usdc_units: int,
+    cap_units: int, window_sec: int, now: int,
+) -> bool:
+    """Reserve one exact obligation while the caller owns a SQLite write transaction."""
+    existing = conn.execute(
+        """SELECT amount_usdc_units FROM solana_payout_budget_events
+           WHERE obligation_id = ? AND event = 'reserved'""",
+        (obligation_id,),
+    ).fetchone()
+    if existing is not None:
+        # A caller must not mistake an earlier claim for permission to submit again.
+        # The durable source lifecycle owns retry/recovery; this reservation API only
+        # authorizes the first claimant.
+        return False
+    if cap_units > 0 and _payout_budget_usage_in_transaction(conn, now - window_sec) + amount_usdc_units > cap_units:
+        return False
+    conn.execute(
+        """INSERT INTO solana_payout_budget_events
+           (obligation_id, kind, event, amount_usdc_units, signature, evidence, timestamp)
+           VALUES (?, ?, 'reserved', ?, NULL, NULL, ?)""",
+        (obligation_id, kind, amount_usdc_units, now),
+    )
+    return True
+
+
+def reserve_solana_payout_budget(
+    *, obligation_id: str, kind: str, amount_usdc_units: int, cap_units: int,
+    window_sec: int = 86400,
+) -> bool:
+    """Atomically reserve rolling payout capacity for one durable obligation.
+
+    Unsettled reservations consume capacity indefinitely; only a confirmed payout is
+    allowed to age out of the rolling window.  This intentionally fails closed when a
+    submitted transfer's outcome cannot yet be proven.
+    """
+    obligation_id = _require_solana_payout_budget_text(obligation_id, "obligation id")
+    kind = _require_solana_payout_budget_text(kind, "kind", 100)
+    amount_usdc_units = _require_solana_payout_budget_units(amount_usdc_units, "amount")
+    cap_units = _require_solana_payout_budget_units(cap_units, "cap", positive=False)
+    window_sec = _require_solana_payout_budget_units(window_sec, "window")
+    now = int(time.time())
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("BEGIN IMMEDIATE")
+        reserved = _reserve_solana_payout_budget_in_transaction(
+            conn, obligation_id=obligation_id, kind=kind,
+            amount_usdc_units=amount_usdc_units, cap_units=cap_units,
+            window_sec=window_sec, now=now,
+        )
+        conn.commit()
+        return reserved
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def record_solana_payout_submission(obligation_id: str, signature: str) -> bool:
+    """Append the returned signature without making an ambiguous payout retryable."""
+    obligation_id = _require_solana_payout_budget_text(obligation_id, "obligation id")
+    signature = _require_solana_payout_budget_text(signature, "signature")
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("BEGIN IMMEDIATE")
+        reserved = conn.execute(
+            """SELECT kind, amount_usdc_units FROM solana_payout_budget_events
+               WHERE obligation_id = ? AND event = 'reserved'""",
+            (obligation_id,),
+        ).fetchone()
+        if reserved is None or conn.execute(
+            """SELECT 1 FROM solana_payout_budget_events
+               WHERE obligation_id = ? AND event IN ('confirmed', 'released')""",
+            (obligation_id,),
+        ).fetchone() is not None:
+            conn.commit()
+            return False
+        prior = conn.execute(
+            """SELECT signature FROM solana_payout_budget_events
+               WHERE obligation_id = ? AND event = 'submitted'""",
+            (obligation_id,),
+        ).fetchone()
+        if prior is not None:
+            conn.commit()
+            return prior[0] == signature
+        conn.execute(
+            """INSERT INTO solana_payout_budget_events
+               (obligation_id, kind, event, amount_usdc_units, signature, evidence, timestamp)
+               VALUES (?, ?, 'submitted', ?, ?, NULL, ?)""",
+            (obligation_id, reserved[0], reserved[1], signature, int(time.time())),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _settle_solana_payout_budget_in_transaction(
+    conn, *, obligation_id: str, signature: str, amount_usdc_units: int,
+) -> bool:
+    reserved = conn.execute(
+        """SELECT kind, amount_usdc_units FROM solana_payout_budget_events
+           WHERE obligation_id = ? AND event = 'reserved'""",
+        (obligation_id,),
+    ).fetchone()
+    if reserved is None or int(reserved[1]) != amount_usdc_units:
+        return False
+    submitted = conn.execute(
+        """SELECT signature FROM solana_payout_budget_events
+           WHERE obligation_id = ? AND event = 'submitted'""",
+        (obligation_id,),
+    ).fetchone()
+    if submitted is not None and submitted[0] != signature:
+        return False
+    confirmed = conn.execute(
+        """SELECT signature, amount_usdc_units FROM solana_payout_budget_events
+           WHERE obligation_id = ? AND event = 'confirmed'""",
+        (obligation_id,),
+    ).fetchone()
+    if confirmed is not None:
+        return confirmed[0] == signature and int(confirmed[1]) == amount_usdc_units
+    if conn.execute(
+        """SELECT 1 FROM solana_payout_budget_events
+           WHERE obligation_id = ? AND event = 'released'""",
+        (obligation_id,),
+    ).fetchone() is not None:
+        return False
+    conn.execute(
+        """INSERT INTO solana_payout_budget_events
+           (obligation_id, kind, event, amount_usdc_units, signature, evidence, timestamp)
+           VALUES (?, ?, 'confirmed', ?, ?, NULL, ?)""",
+        (obligation_id, reserved[0], amount_usdc_units, signature, int(time.time())),
+    )
+    return True
+
+
+def settle_solana_payout_budget(obligation_id: str, signature: str, amount_usdc_units: int) -> bool:
+    """Settle a reserved obligation only after exact finalized payout evidence."""
+    obligation_id = _require_solana_payout_budget_text(obligation_id, "obligation id")
+    signature = _require_solana_payout_budget_text(signature, "signature")
+    amount_usdc_units = _require_solana_payout_budget_units(amount_usdc_units, "amount")
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("BEGIN IMMEDIATE")
+        settled = _settle_solana_payout_budget_in_transaction(
+            conn, obligation_id=obligation_id, signature=signature,
+            amount_usdc_units=amount_usdc_units,
+        )
+        conn.commit()
+        return settled
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def payout_budget_used(seconds: int = 86400) -> int:
+    """Capacity consumed by unsettled reservations plus finalized rolling-window spend."""
+    seconds = _require_solana_payout_budget_units(seconds, "window")
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        return _payout_budget_usage_in_transaction(conn, int(time.time()) - seconds)
+    finally:
+        conn.close()
+
 def record_payout(kind: str, amount_usdc_units: int, reference: str | None = None):
     """Log an outbound Solana-side payment for rolling-cap accounting."""
     import time as _time
@@ -2441,8 +2678,9 @@ def prepare_nexus_payout(
     amount_usdd_units: int,
     payout_solana_units: int,
     payout_fee_nexus_units: int,
+    payout_cap_solana_units: int | None = None,
 ) -> bool:
-    """Atomically freeze payout terms and claim one exact Nexus credit for RPC."""
+    """Atomically freeze, cap-reserve, and claim one exact Nexus credit for RPC."""
     txid = str(txid or "").strip()
     receival_account = str(receival_account or "").strip()
     if not txid or not receival_account:
@@ -2457,6 +2695,10 @@ def prepare_nexus_payout(
             or payout_fee_nexus_units < 0
             or payout_fee_nexus_units > amount_usdd_units):
         raise ValueError("Nexus payout fee must be exact, nonnegative, and no more than source")
+    if payout_cap_solana_units is not None:
+        _require_solana_payout_budget_units(
+            payout_cap_solana_units, "cap", positive=False
+        )
 
     conn = sqlite3.connect(DB_PATH)
     try:
@@ -2496,6 +2738,17 @@ def prepare_nexus_payout(
                 or stored_source_units != amount_usdd_units
                 or stored_payout is not None
                 or stored_fee is not None):
+            conn.commit()
+            return False
+        if payout_cap_solana_units is not None and not _reserve_solana_payout_budget_in_transaction(
+            conn,
+            obligation_id=f"nexus:{txid}:{contract_id}",
+            kind="nexus_payout",
+            amount_usdc_units=payout_solana_units,
+            cap_units=payout_cap_solana_units,
+            window_sec=86400,
+            now=int(time.time()),
+        ):
             conn.commit()
             return False
         updated = conn.execute(
@@ -2654,6 +2907,21 @@ def finalize_nexus_credit(
                    VALUES (NULL, ?, ?, NULL, ?, ?, ?)""",
                 (txid, fee_kind, fee_nexus_units, contract_id, int(time.time())),
             )
+        if sig:
+            obligation_id = f"nexus:{txid}:{contract_id}"
+            budget_reserved = conn.execute(
+                """SELECT 1 FROM solana_payout_budget_events
+                   WHERE obligation_id = ? AND event = 'reserved'""",
+                (obligation_id,),
+            ).fetchone() is not None
+            if budget_reserved and not _settle_solana_payout_budget_in_transaction(
+                conn,
+                obligation_id=obligation_id,
+                signature=sig,
+                amount_usdc_units=int(payout_evidence[0]),
+            ):
+                conn.commit()
+                return False
         conn.execute(
             """INSERT INTO processed_txids
                (txid, contract_id, timestamp, amount_usdd, amount_usdd_units,
