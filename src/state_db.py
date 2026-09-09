@@ -2094,7 +2094,16 @@ def _payout_budget_usage_in_transaction(conn, cutoff: int) -> int:
                WHERE confirmed.event = 'confirmed' AND confirmed.timestamp >= ?
                UNION ALL
                SELECT payouts.amount_usdc_units
-               FROM payouts WHERE payouts.timestamp >= ?
+               FROM payouts
+               WHERE payouts.timestamp >= ?
+                 -- Primary sends retain this legacy compatibility row, but their
+                 -- exact finalized signature is already represented above.
+                 AND NOT EXISTS (
+                     SELECT 1 FROM solana_payout_budget_events AS confirmed
+                     WHERE confirmed.event = 'confirmed'
+                       AND confirmed.signature = payouts.reference
+                       AND confirmed.amount_usdc_units = payouts.amount_usdc_units
+                 )
            )""",
         (cutoff, cutoff),
     ).fetchone()

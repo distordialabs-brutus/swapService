@@ -60,6 +60,27 @@ def test_concurrent_reservations_cannot_oversubscribe_a_cap(tmp_path):
         assert state_db.payout_budget_used(86400) == 60
 
 
+def test_confirmed_primary_payout_is_not_counted_again_through_legacy_payouts(tmp_path):
+    """The primary durable event and compatibility record describe one Solana transfer."""
+    with isolated_state(tmp_path):
+        obligation_id = "nexus:credit-a:9"
+        signature = "solana-signature"
+        assert state_db.reserve_solana_payout_budget(
+            obligation_id=obligation_id, kind="nexus_payout", amount_usdc_units=60,
+            cap_units=100,
+        )
+        assert state_db.record_solana_payout_submission(obligation_id, signature)
+        assert state_db.settle_solana_payout_budget(obligation_id, signature, 60)
+        # The legacy helper still records every successful outbound send for the
+        # unmigrated refund/quarantine paths. A primary send has both rows, but it
+        # must consume its cap capacity exactly once.
+        state_db.record_payout("solana_send", 60, signature)
+        state_db.record_payout("solana_refund", 10, "legacy-refund-signature")
+
+        # The separate, unmigrated legacy payment still occupies capacity.
+        assert state_db.payout_budget_used(86400) == 70
+
+
 def test_submitted_and_confirmed_events_preserve_exact_obligation_identity(tmp_path):
     with isolated_state(tmp_path):
         obligation_id = "nexus:credit-a:7"
