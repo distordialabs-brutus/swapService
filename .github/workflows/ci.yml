@@ -52,6 +52,9 @@ jobs:
         run: |
           python -m pytest -q tests/test_recovery_safety.py
           python -m pytest -q \
+            tests/test_recovery_safety.py \
+            tests/test_solana_sdk_boundary.py
+          python -m pytest -q \
             tests/test_swap_receipts.py \
             tests/test_payout_review_regressions.py \
             tests/test_nexus_fee_lifecycle.py \
