@@ -1,11 +1,11 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
-**Date:** 2026-09-08
-**Documentation/code comparison baseline:** `917505b74f0b095d7c6ed202f55d4b94fb1378a5` (includes the payout-evidence repair, opt-in receipt implementation and committed inventory refresh). This review refresh is local and uncommitted.
+**Date:** 2026-09-09
+**Documentation/code comparison baseline:** `1116a4a867553fa4d37ea338f121ee56aa702075` (`main`, matching `origin/main` at review start). Runtime, tests, dependencies and CI are byte-for-byte unchanged from the `917505b74f0b095d7c6ed202f55d4b94fb1378a5` implementation reviewed on 2026-09-08; the intervening commit is documentation only. This review refresh is local and uncommitted.
 **Status:** Current issue register and repair priority for `swapService`
-**Architecture-plan update:** 2026-09-08 (source identity, atomic fees and recovery safety repaired locally; receipt publication is implemented but externally/operationally gated; provider-v2 remains planned).
+**Architecture-plan update:** 2026-09-09 (source identity, atomic fees and recovery safety remain locally repaired; the global payout-budget protocol, receipt-spend boundary and test isolation are the next implementation gates; provider-v2 remains planned).
 
-This document replaces the old June code-level audit as the current engineering evaluation. Historical findings and their original line references remain available in [`AUDIT_FINDINGS.md`](AUDIT_FINDINGS.md) and [`RISK_ASSESSMENT.md`](RISK_ASSESSMENT.md). The [2026-09-08 independent review](DEVELOPMENT_REVIEW_2026-09-08.md) is the current executed evidence. The [post-change report](POST_CHANGE_REVIEW_2026-09-07.md) records the earlier payout repair and its verification at that snapshot; its publication state and test counts are historical. Dated sections 10–12 below are historical snapshots, not current open-finding assertions. Current candidate verification must include the documentation and index-aware inventory; no live-chain approval is implied.
+This document replaces the old June code-level audit as the current engineering evaluation. Historical findings and their original line references remain available in [`AUDIT_FINDINGS.md`](AUDIT_FINDINGS.md) and [`RISK_ASSESSMENT.md`](RISK_ASSESSMENT.md). The [2026-09-09 independent review](DEVELOPMENT_REVIEW_2026-09-09.md) is the current executed evidence. The [2026-09-08 review](DEVELOPMENT_REVIEW_2026-09-08.md) and [post-change report](POST_CHANGE_REVIEW_2026-09-07.md) retain their snapshot results. Dated sections 10–13 below are historical snapshots, not current open-finding assertions. Current candidate verification must include the documentation and index-aware inventory; no live-chain approval is implied.
 
 ## 1. Executive verdict
 
@@ -61,10 +61,10 @@ evidence remains held. These are local code repairs, not target-chain production
 | Atomic fee and terminal source state | Implemented with rollback, replay and frozen-term fixtures |
 | Installed-SDK recovery request construction | Signature-typed transaction lookups and recovery cursor are locally verified through real SDK encoders with a mocked provider; target-chain acceptance remains required |
 | Exact mixed-decimal money math | Existing local regression coverage retained; target-chain matrix required |
-| Rolling Solana payout cap | **Open Critical:** the main Nexus→Solana helper bypasses cap read and payout-ledger write; reproduced on `917505b` |
+| Rolling Solana payout cap | **Open Critical:** the main Nexus→Solana helper bypasses cap read and payout-ledger write. The alternate helper's read-then-send-then-record sequence is itself non-atomic and swallows ledger-write failure, so routing through it alone would not meet the exit |
 | Optional public receipt assets | Atomic exact obligation/readback implemented; **keep disabled** pending NXS spend controls, registration migration and target-node create/query acceptance |
-| Complete local engineering gate | Isolated installed-dependency suite passed 271 tests and 33 subtests; test-module order isolation remains open |
-| Exact-head CI and live devnet/testnet matrix | Committed `917505b` fork CI passed; no live-chain matrix or CI exists for this documentation candidate |
+| Complete local engineering gate | Installed-dependency default order passed 271 tests and 33 subtests; standalone recovery and alternate combined orders still fail from process-global SDK/config contamination |
+| Exact-head CI and live devnet/testnet matrix | Committed `1116a4a` matches `origin/main`; no live-chain matrix or exact-candidate CI exists for this documentation refresh |
 
 ---
 
@@ -212,11 +212,18 @@ independently verified snapshot/cursor protocol, not removal of this refusal.
 **Severity:** Critical deployment blocker
 **Priority:** P0 — enforce before real-fund admission
 
-**Current status:** **open and reproduced on `917505b`.** `send_solana_token()` checks the
+**Current status:** **open; unchanged at `1116a4a`.** `send_solana_token()` checks the
 rolling cap and writes the payout ledger, but the primary Nexus→Solana path calls
 `send_solana_token_to_account_with_sig()`, which does neither. An offline probe configured a
-one-unit cap, submitted 900 synthetic units and observed zero cap-read and payout-ledger calls.
-Production admission currently proves only that a positive value was configured.
+one-unit cap, submitted 900 synthetic units and observed zero cap-read and payout-ledger calls in
+the 2026-09-08 review. The runtime/test diff from that reviewed implementation to current HEAD is
+empty, and the call graph remains unchanged. Production admission currently proves only that a
+positive value was configured.
+
+The alternate helper is not a sufficient repair target by itself: it reads aggregate spend before
+submission without reserving capacity atomically, records only after submission, and logs then
+continues when the ledger write fails. Concurrent workers can oversubscribe the same remaining
+capacity, and a successful but unrecorded send can disappear from later cap calculations.
 
 **Required exit:** claim/reserve cap capacity atomically with the frozen exact payout before RPC;
 retain it across unknown outcomes; settle it only from exact finalized evidence; and use the same
@@ -360,11 +367,11 @@ A green result was not evidence of balance correctness.
 
 ## 4. Medium and operational issues
 
-### E-005 — Enforceable full-suite test command and CI
+### E-005 — Enforceable baseline suite and CI
 
 **Priority:** P1, before large repair batches
 
-**Status: enforced and green.** The legacy scripts now run as pytest-managed subprocess cases, so
+**Status: baseline enforced; isolation gate remains partial.** The legacy scripts now run as pytest-managed subprocess cases, so
 `python -m pytest -q` is the complete local command. GitHub Actions workflow
 `.github/workflows/ci.yml` runs on pushes and pull requests and enforces dependency
 consistency, byte-compilation, local Markdown-link verification, the complete pytest suite
@@ -374,7 +381,8 @@ Copilot-instructions security-document path.
 The reconciliation implementation and its evaluated documentation evidence head passed GitHub
 Actions run [`33258188981`](https://github.com/distordialabs-brutus/swapService/actions/runs/33258188981).
 Every later production candidate still needs its own green run plus the separate live-chain matrix
-in E-006.
+in E-006. E-017 must also be closed: the current default collection order is green while standalone
+and alternate module orders expose process-global test contamination.
 
 ### E-006 — No live-chain acceptance matrix
 
@@ -477,12 +485,14 @@ pass. Do not treat the pinned documentation as proof of the configured live node
 
 **Priority:** P1 engineering gate
 
-The clean installed-dependency suite passes 271 tests and 33 subtests, but combined focused module
-orders produced three payout failures in one selection and two recovery failures in another. The
-same modules pass independently, the isolated installed-SDK test passes, and an explicit real-SDK
-payout-evidence probe passes. The divergence comes from collection-time `sys.modules` SDK stubs and
-process-global `setdefault` environment setup. Move fakes to fixture/subprocess scope and add
-installed-SDK CI shards in multiple orders; a green default order is not isolation proof.
+The clean installed-dependency suite passes 271 tests and 33 subtests, but the 2026-09-09 rerun
+reproduced three payout failures in the receipt→payout→fee→SDK order. The recovery module also
+fails two payout-scanner cases when run alone with the installed SDK, while those cases pass after
+the default suite has collected the global stubs. The receipt, payout, fee, identity, critical-safety
+and real-SDK modules pass in their separately suitable processes. This is test-harness/configuration
+contamination, not evidence that the production parser accepts bad evidence. Move fakes to
+fixture/subprocess scope, make each module establish and restore exact environment/config state, and
+add installed-SDK CI shards in multiple orders; a green default order is not isolation proof.
 
 ---
 
@@ -627,16 +637,19 @@ containment and engineering-gate work stays visible because every later batch de
 startup refusal are covered by local fixtures. Mutable multi-page recovery is refused. The target-node
 account-history, real finality and crash/restart matrix remain release gates.
 
-### Batch 1 — Engineering and exact-money gate ✅
+### Batch 1 — Engineering and exact-money gate **PARTIAL**
 
 1. Run legacy executable checks in isolated pytest subprocesses.
 2. Make `python -m pytest -q` the complete local command.
 3. Enforce dependency consistency, compilation, Markdown links, tests and whitespace in CI.
 4. Implement exact integer fees, thresholds, outputs and public terms for 6/6, 8/6, 6/8,
    9/6 and 0/0 decimal configurations.
+5. Remove collection-time dependency-module replacement and process-global environment leakage;
+   require the payout/recovery/receipt/SDK shards to pass independently and in multiple orders.
 
-**Exit met:** the current committed-head local suite and GitHub Actions run `33258188981` are green.
-The mixed-decimal contract still requires target-chain evidence in Batch 4.
+**Partial exit:** the default installed-dependency suite is green and historical GitHub Actions run
+`33258188981` passed, but the 2026-09-09 standalone/alternate-order probes still fail under E-017.
+The mixed-decimal contract also requires target-chain evidence in Batch 4.
 
 ### Batch 2 — Durable completed-state model and fail-closed reconciliation **PARTIAL**
 
@@ -681,6 +694,38 @@ semantics are unproven; local code holds whenever those properties cannot be est
 
 **Remaining exit:** run the target-node matrix at every acceptance and crash boundary. Review and
 resolve pre-upgrade ambiguity from real chain evidence; do not relabel legacy rows to bypass a hold.
+
+### Batch 3A — One global Solana payout-budget protocol **OPEN P0**
+
+1. Add an append-only reservation/settlement ledger keyed by the exact durable obligation, not by
+   a helper invocation or process-local counter.
+2. Reserve rolling-window capacity in the same SQLite transaction that freezes payout terms and
+   claims the source, before any RPC. Pending, submitted and outcome-unknown obligations continue
+   to consume capacity.
+3. Convert a reservation to confirmed spend only from exact finalized payout evidence. Release it
+   only from authoritative non-execution evidence or an attributable reviewed manual disposition.
+4. Route primary payouts and every refund/quarantine token send through this protocol. Remove the
+   read-then-send-then-best-effort-record split; ledger failure must fail closed.
+5. Cover two-worker contention, duplicate invocation, rolling-window boundaries, restart at every
+   write/RPC boundary, timeout after acceptance and database-write failure.
+
+**Exit:** aggregate reserved plus finalized outbound units cannot exceed the configured window cap
+under concurrency or restart, and every accepted send remains durably attributable even when its
+response or final local write is lost.
+
+### Batch 3B — Receipt publication cost and admission boundary **OPEN; FEATURE DEFAULT OFF**
+
+1. Classify asset and optional-name creation as NXS-spending side effects in code, schema and alerts.
+2. Define a bounded NXS budget, reserve expected cost before create, persist create txid/actual cost,
+   and hold on budget/accounting/read failures. Decide whether deterministic naming justifies its
+   additional cost.
+3. Require a receipt-capable provider registration and authoritative owner at startup when enabled;
+   document and rehearse creation of a new fixed-field record rather than mutating v1 in place.
+4. Prove create, rejection, timeout-after-acceptance, delayed indexing, exact filtered readback,
+   duplicates and restart on the target Nexus build.
+
+**Exit:** enabling receipts cannot create uncapped operator spend or make an already-proven payout
+unsettled; exact target-node readback and registration migration are demonstrated.
 
 ### Batch 4 — Live integration and external-semantics evidence
 
@@ -858,6 +903,7 @@ part of this refresh. This is not target-chain acceptance or a new production-re
 Deployment may be reconsidered only when:
 
 - E-001 through E-006 are closed with tests and authoritative read-back evidence;
+- E-015 and E-017 are closed; if receipts are enabled, E-016 is closed too;
 - the complete suite and CI are green from a clean checkout;
 - reconciliation cannot report healthy with incomplete evidence;
 - exact mixed-decimal public terms match enforcement;
@@ -935,3 +981,19 @@ mode remains default-disabled because named asset creation has NXS costs documen
 upstream Nexus API material, while no receipt-spend budget/accounting or target-node create/query
 acceptance exists. Combined focused test orders also exposed process-global SDK/config contamination,
 so test isolation remains an engineering gate. No live financial or Nexus asset mutation was run.
+
+## 14. Independent review update — 2026-09-09 CEST
+
+The current evidence review at [`DEVELOPMENT_REVIEW_2026-09-09.md`](DEVELOPMENT_REVIEW_2026-09-09.md)
+starts from committed `1116a4a`. The only commit after the implementation snapshot reviewed on
+2026-09-08 changes seven documentation files; `src/`, `tests/`, requirements and CI have no delta.
+The full installed-dependency default order again passes 271 tests and 33 subtests. Focused exact
+identity, payout, fee, receipt, critical-safety and real-SDK modules pass, preserving the previously
+closed local repairs.
+
+Production remains hard-blocked. The unchanged primary payout helper still bypasses the rolling cap,
+and the alternate helper's non-atomic read/send/best-effort-write sequence is not a durable global
+budget protocol. Receipt mode remains default-disabled without an NXS spend boundary or target-node
+acceptance. Test isolation is still open: the documented alternate order again fails three payout
+tests, and the recovery module alone fails two scanner fixtures under the installed SDK even though
+the default order is green. No live financial or Nexus asset mutation was run.

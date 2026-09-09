@@ -106,7 +106,7 @@ State machine diagrams for both directions of the service's single configured So
 
 ---
 
-## Current safety repair — 2026-09-07 working tree
+## Current safety architecture — reviewed 2026-09-09
 
 The runtime supports exactly one pair selected by `config.SWAP_PAIR`: one classic SPL Token
 Program mint and one Nexus token register. Symbols are display metadata. Multi-pair routing and
@@ -116,8 +116,8 @@ Canonical pair inputs are `SOLANA_TOKEN_MINT`, `SOLANA_VAULT_ACCOUNT`, `SOLANA_T
 `SOLANA_TOKEN_DECIMALS`, `NEXUS_TOKEN_NAME`, `NEXUS_TOKEN_REGISTER_ADDRESS`,
 `NEXUS_TREASURY_ACCOUNT`, and `NEXUS_TOKEN_DECIMALS`.
 
-The dated notes above are baseline history. The [post-change report](POST_CHANGE_REVIEW_2026-09-07.md)
-controls current implementation evidence. Both operator dispositions and payouts bind the exact
+The dated notes above are baseline history. The [2026-09-09 review](DEVELOPMENT_REVIEW_2026-09-09.md)
+controls current evidence, with the [post-change report](POST_CHANGE_REVIEW_2026-09-07.md) retaining the repair snapshot. Both operator dispositions and payouts bind the exact
 Nexus source `(txid, contract_id)`. Legacy identity remains held. Startup requires complete recovery
 before entering the exposure-producing loop; missing/zero checkpoints and incomplete scans abort.
 Mutable multi-page offset enumeration cannot establish completeness, in recovery or live polling.

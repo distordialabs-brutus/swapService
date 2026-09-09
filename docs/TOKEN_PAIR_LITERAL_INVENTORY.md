@@ -58,7 +58,7 @@ Excluded surfaces are explicit:
 | `SETUP.md` | Public pair-specific example + Migration alias | Document the implemented single-pair runtime with canonical settings and clearly separate planned provider-v2 work; retain exact supported legacy-only settings. |
 <!-- token-pair-inventory: create_heartbeat_asset.py:24,26,42,43,44,250,251,253,318,319,328,329,338,339,380,382 -->
 | `create_heartbeat_asset.py` | Runtime semantics + Public pair-specific example | Retire default pair/ticker arguments behind a config-derived address-based v2 creation workflow. |
-<!-- token-pair-inventory: docs/EVALUATION.md:277,506,554,567,581,711,712,761,797 -->
+<!-- token-pair-inventory: docs/EVALUATION.md:284,516,564,577,591,756,757,806,842 -->
 | `docs/EVALUATION.md` | Planned/schema example | Maintain as evaluated remediation evidence; change only with verified implementation evidence. |
 <!-- token-pair-inventory: docs/SECURITY.md:51,58,64,71,95,98 -->
 | `docs/SECURITY.md` | Runtime semantics + Migration alias + Frozen compatibility state | Describe controls by chain and preserve actual configuration/compatibility identifiers; defaults are not fixed token identities. |
