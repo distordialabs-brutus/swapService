@@ -132,6 +132,75 @@ def test_direct_signature_lookup_returns_exact_nexus_payout_evidence():
     )
 
 
+def queue_solana_disposition(kind: str, *, source_sig="deposit-signature"):
+    state_db.add_unprocessed_sig(
+        source_sig, 10, "incoming-memo", "sender", 1_000,
+        "to be refunded" if kind == "refund" else "to be quarantined", None,
+    )
+    payout_memo = solana_client._solana_sig_disposition_memo(kind, source_sig)
+    assert state_db.prepare_solana_sig_disposition(
+        source_sig=source_sig, kind=kind, timestamp=10, from_address="sender",
+        destination_address="receiver", amount_usdc_units=1_000,
+        memo="incoming-memo", payout_memo=payout_memo, payout_units=900, cap_units=2_000,
+    )
+    assert state_db.record_solana_sig_disposition_submission(
+        source_sig=source_sig, kind=kind, payout_signature=PAYOUT_SIGNATURE,
+    )
+    return payout_memo
+
+
+@pytest.mark.parametrize("kind", ["refund", "quarantine"])
+def test_disposition_confirms_only_exact_finalized_transfer_evidence(tmp_path, kind):
+    with isolated_state(tmp_path):
+        memo = queue_solana_disposition(kind)
+        with patch.object(solana_client, "_get_client", return_value=_MemoRpcClient()), patch.object(
+            solana_client, "_rpc_call", return_value=payout_transaction(memo=memo)
+        ):
+            check = (solana_client.check_sig_confirmations if kind == "refund"
+                     else solana_client.check_quarantine_confirmations)
+            assert check(1, 2.0) == 1
+
+        with sqlite3.connect(state_db.DB_PATH) as conn:
+            table = "refunded_sigs" if kind == "refund" else "quarantined_sigs"
+            status = conn.execute(f"SELECT status FROM {table}").fetchone()
+            pending = conn.execute("SELECT 1 FROM unprocessed_sigs").fetchone()
+            fee = conn.execute("SELECT amount_usdc_units FROM fee_entries").fetchone()
+
+    assert status == (f"{kind}_confirmed",)
+    assert pending is None
+    assert fee == (100,)
+
+
+@pytest.mark.parametrize("transaction", [
+    payout_transaction(memo="wrong"),
+    payout_transaction(destination="wrong-recipient"),
+    payout_transaction(amount=899),
+    {**payout_transaction(), "meta": {"err": {"InstructionError": [0, "Custom"]}}},
+])
+def test_disposition_never_settles_status_or_inexact_transaction(tmp_path, transaction):
+    with isolated_state(tmp_path):
+        memo = queue_solana_disposition("refund")
+        if transaction["transaction"]["message"]["instructions"][-1].get("data") == "wrong":
+            transaction = payout_transaction(memo="wrong")
+        with patch.object(solana_client, "_get_client", return_value=_MemoRpcClient()), patch.object(
+            solana_client, "_rpc_call", return_value=transaction
+        ), patch.object(
+            solana_client, "get_signatures_confirmation",
+            side_effect=AssertionError("status alone must not settle a disposition"),
+        ):
+            assert solana_client.check_sig_confirmations(1, 2.0) == 0
+
+        with sqlite3.connect(state_db.DB_PATH) as conn:
+            status = conn.execute("SELECT status FROM refunded_sigs").fetchone()
+            pending = conn.execute("SELECT status FROM unprocessed_sigs").fetchone()
+            fee = conn.execute("SELECT 1 FROM fee_entries").fetchone()
+
+    assert memo == "swapService:v1:refund:deposit-signature"
+    assert status == ("awaiting confirmation",)
+    assert pending == ("refund sent, awaiting confirmation",)
+    assert fee is None
+
+
 def queue_frozen_payout(*, contract_id=7, signature: str | None = PAYOUT_SIGNATURE):
     state_db.add_unprocessed_txid(
         txid=NEXUS_TXID,

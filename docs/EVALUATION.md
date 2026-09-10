@@ -212,25 +212,22 @@ independently verified snapshot/cursor protocol, not removal of this refusal.
 **Severity:** Critical deployment blocker
 **Priority:** P0 — enforce before real-fund admission
 
-**Current status:** **partially repaired; two Critical acceptance failures remain.** The primary
-Nexus→Solana path and new Solana refund/quarantine paths atomically reserve frozen output before
-RPC. Pending and unknown obligations consume capacity, submission identity is append-only, and
+**Current status:** **partially repaired; Critical cap-reconstruction and alerting failures remain.**
+The primary Nexus→Solana path and new Solana refund/quarantine paths atomically reserve frozen output
+before RPC. Pending and unknown obligations consume capacity, submission identity is append-only, and
 the old read/send/best-effort-record helper is disabled for runtime callers. Concurrency and
 post-send database-failure fixtures pass.
 
-The refund/quarantine confirmation path does not meet the stated settlement boundary.
-`get_signatures_confirmation()` accepts a status without inspecting its `err` field and, even when
-deposit commitment is `finalized`, also accepts a merely `confirmed` status when its numeric
-confirmation count meets the threshold. `check_sig_confirmations()` and
-`check_quarantine_confirmations()` then call `confirm_solana_sig_disposition()`, which compares the
-signature and local frozen amounts but never reads the transaction. A failed transaction—or an
-unrelated finalized signature written into local state—can therefore archive the disposition,
-book the fee and delete the user liability without proving the vault transfer, mint, destination,
-amount or memo. The 2026-09-10 offline probe reproduced terminalization from a finalized status
-whose `err` contained an instruction failure, and separately reproduced confirmed-not-finalized
-acceptance.
+Refund/quarantine settlement now reads the submitted signature with `getTransaction` at `finalized`
+commitment and requires a successful (`meta.err is null`) transaction whose direct signature, vault
+signer/source, configured mint, frozen token-account recipient, integer output and versioned
+`swapService:v1` disposition memo all match the durable obligation. Status-only evidence is not a
+settlement input; failed or merely confirmed statuses are rejected. Pre-migration rows without the
+frozen destination/memo remain held rather than using the historical status-only compatibility path.
+Focused fixtures cover successful refund/quarantine settlement and failed, wrong-recipient,
+wrong-amount and wrong-memo evidence.
 
-The rolling cap is also not reconstruction-safe. Startup wipeout recovery can identify and archive
+The rolling cap is still not reconstruction-safe. Startup wipeout recovery can identify and archive
 an exact historical primary payout, but calls `prepare_nexus_payout()` without the cap argument.
 `finalize_nexus_credit()` deliberately skips budget settlement when no reservation exists. The
 executed wipeout probe returned `recovery_complete=True`, reconstructed the paid payout, reported
@@ -241,13 +238,10 @@ Cap exhaustion now produces structured logs only. The primary credit remains `re
 which is not in the dashboard issue-status set, and no `payout_cap_exceeded` alert exists despite the
 state-machine guide listing one. This does not itself spend funds, but it hides a production hold.
 
-**Required exit:** require successful finalized transaction evidence for every payout/refund/
-quarantine settlement, matching signature, vault authority/source, configured mint, exact recipient,
-integer output and versioned memo. Reject non-null transaction errors and confirmed-only status.
-Rebuild conservative cap events from complete exact chain evidence before recovery can return green;
-if the rolling window cannot be proven complete, retain an exposure pause/manual budget hold. Add
-failed-transaction, wrong-transfer, wrong-mint/destination/amount/memo, confirmed-only, wipeout,
-upgrade, rolling-window and alert-delivery regressions.
+**Required exit:** rebuild conservative cap events from complete exact chain evidence before recovery can
+return green; if the rolling window cannot be proven complete, retain an exposure pause/manual budget
+hold. Add wipeout, upgrade, rolling-window and alert-delivery regressions, then verify the complete
+settlement and recovery matrix against the target chain.
 
 ---
 
@@ -732,14 +726,15 @@ resolve pre-upgrade ambiguity from real chain evidence; do not relabel legacy ro
 2. ✅ Reserve rolling-window capacity in the same SQLite transaction that freezes payout terms and
    claims the source, before any RPC. Pending, submitted and outcome-unknown obligations continue
    to consume capacity.
-3. **Partial:** primary payouts use exact finalized transaction evidence. Refund/quarantine paths
-   currently trust status-only evidence that can include a failed or merely confirmed transaction.
-   Release capacity only from authoritative non-execution or reviewed disposition.
+3. ✅ Primary payouts and refund/quarantine paths require exact successful finalized transaction evidence:
+   signature, vault authority/source, mint, frozen recipient, integer output and versioned memo must
+   match; failed, confirmed-only and legacy unbound rows remain held. Release capacity only from
+   authoritative non-execution or reviewed disposition.
 4. ✅ Route primary payouts and every refund/quarantine token send through this protocol. The former
    read-then-send-then-best-effort-record helper is disabled; ledger failure holds the obligation.
-5. **Partial:** cover two-worker contention and database-write failure locally. Add exact
-   refund/quarantine transfer proof and reconstruct recent confirmed spend after database loss;
-   then run target-chain timeout-after-acceptance, crash/restart and finality tests.
+5. **Partial:** two-worker contention, database-write failure and exact refund/quarantine proof are
+   covered locally. Reconstruct recent confirmed spend after database loss, then run target-chain
+   timeout-after-acceptance, crash/restart and finality tests.
 
 **Remaining exit:** a failed or wrong Solana transaction cannot terminalize any disposition; successful
 recovery either reconstructs all recent confirmed cap spend or stays paused. Then execute the

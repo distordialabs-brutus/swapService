@@ -120,14 +120,16 @@ def test_refund_disposition_reserves_before_rpc_and_settles_on_confirmation(tmp_
         )
         assert state_db.prepare_solana_sig_disposition(
             source_sig="deposit-a", kind="refund", timestamp=10,
-            from_address="recipient", amount_usdc_units=100, memo="original-memo",
-            payout_units=90, cap_units=100,
+            from_address="recipient", destination_address="recipient-token",
+            amount_usdc_units=100, memo="original-memo",
+            payout_memo="swapService:v1:refund:deposit-a", payout_units=90, cap_units=100,
         )
         assert state_db.payout_budget_used(86400) == 90
         assert not state_db.prepare_solana_sig_disposition(
             source_sig="deposit-a", kind="refund", timestamp=10,
-            from_address="recipient", amount_usdc_units=100, memo="original-memo",
-            payout_units=90, cap_units=100,
+            from_address="recipient", destination_address="recipient-token",
+            amount_usdc_units=100, memo="original-memo",
+            payout_memo="swapService:v1:refund:deposit-a", payout_units=90, cap_units=100,
         )
 
         assert state_db.record_solana_sig_disposition_submission(
@@ -177,7 +179,9 @@ def test_quarantine_disposition_cap_refusal_leaves_source_retryable(tmp_path):
         )
         assert not state_db.prepare_solana_sig_disposition(
             source_sig="deposit-b", kind="quarantine", timestamp=11,
-            from_address="sender", amount_usdc_units=100, memo="original-memo",
+            from_address="sender", destination_address="quarantine-token",
+            amount_usdc_units=100, memo="original-memo",
+            payout_memo="swapService:v1:quarantine:deposit-b",
             payout_units=50, cap_units=100,
         )
         with sqlite3.connect(state_db.DB_PATH) as conn:
@@ -201,7 +205,9 @@ def test_refund_submission_ledger_failure_keeps_reserved_capacity_held(tmp_path)
         )
         assert state_db.prepare_solana_sig_disposition(
             source_sig="deposit-ledger", kind="refund", timestamp=12,
-            from_address="recipient", amount_usdc_units=100, memo="original-memo",
+            from_address="recipient", destination_address="recipient-token",
+            amount_usdc_units=100, memo="original-memo",
+            payout_memo="swapService:v1:refund:deposit-ledger",
             payout_units=90, cap_units=100,
         )
         with sqlite3.connect(state_db.DB_PATH) as conn:

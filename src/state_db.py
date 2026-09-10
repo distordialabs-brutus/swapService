@@ -119,8 +119,10 @@ def init_db():
             sig TEXT PRIMARY KEY,
             timestamp INTEGER,
             from_address TEXT,
+            destination_address TEXT,
             amount_usdc_units INTEGER,
             memo TEXT,
+            payout_memo TEXT,
             quarantine_sig TEXT,
             quarantined_units INTEGER,
             status TEXT
@@ -131,8 +133,10 @@ def init_db():
             sig TEXT PRIMARY KEY,
             timestamp INTEGER,
             from_address TEXT,
+            destination_address TEXT,
             amount_usdc_units INTEGER,
             memo TEXT,
+            payout_memo TEXT,
             refund_sig TEXT,
             refunded_units INTEGER,
             status TEXT
@@ -455,6 +459,17 @@ def init_db():
         cursor.execute("ALTER TABLE unprocessed_sigs ADD COLUMN reference INTEGER")
     if "amount_usdd_units" not in _usig_cols:
         cursor.execute("ALTER TABLE unprocessed_sigs ADD COLUMN amount_usdd_units INTEGER")
+
+    # A refund/quarantine proof must match the exact token-account recipient used for
+    # the send.  ``from_address`` can be a wallet owner, whose ATA is resolved before
+    # submission, so it is not itself sufficient transaction evidence.  Existing
+    # rows deliberately remain NULL and cannot be auto-terminalized.
+    for _table in ("refunded_sigs", "quarantined_sigs"):
+        _columns = {row[1] for row in cursor.execute(f"PRAGMA table_info({_table})")}
+        if "destination_address" not in _columns:
+            cursor.execute(f"ALTER TABLE {_table} ADD COLUMN destination_address TEXT")
+        if "payout_memo" not in _columns:
+            cursor.execute(f"ALTER TABLE {_table} ADD COLUMN payout_memo TEXT")
 
     # Transfer intents written before contract-level source admission only identify a
     # transaction. Preserve every immutable id/reference/remote result and mark the
@@ -2476,9 +2491,40 @@ def _solana_sig_disposition_obligation_id(kind: str, source_sig: str) -> str:
     return f"{kind}:{source_sig}"
 
 
+def get_solana_sig_disposition_evidence(
+    *, source_sig: str, kind: str, payout_signature: str,
+) -> tuple[str, int, str] | None:
+    """Return frozen recipient, output and memo for one pending durable disposition.
+
+    Rows written before recipient freezing intentionally return ``None``: their old
+    status/signature record cannot prove which token account was paid.
+    """
+    source_sig, details = _solana_sig_disposition(source_sig, kind)
+    payout_signature = _require_solana_payout_budget_text(payout_signature, "signature")
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        signature_column = details["signature_column"]
+        units_column = details["units_column"]
+        row = conn.execute(
+            f"""SELECT {signature_column}, destination_address, {units_column}, payout_memo, status
+               FROM {details['table']} WHERE sig = ?""", (source_sig,),
+        ).fetchone()
+        if row is None:
+            return None
+        recorded_signature, destination, payout_units, memo, status = row
+        if (recorded_signature != payout_signature or not isinstance(destination, str)
+                or not destination or type(payout_units) is not int or payout_units <= 0
+                or not isinstance(memo, str) or status != "awaiting confirmation"):
+            return None
+        return destination, payout_units, memo
+    finally:
+        conn.close()
+
+
 def prepare_solana_sig_disposition(
     *, source_sig: str, kind: str, timestamp: int, from_address: str,
-    amount_usdc_units: int, memo: str | None, payout_units: int, cap_units: int,
+    destination_address: str, amount_usdc_units: int, memo: str | None, payout_memo: str,
+    payout_units: int, cap_units: int,
 ) -> bool:
     """Atomically freeze and cap-reserve one refund/quarantine before Solana RPC.
 
@@ -2489,6 +2535,10 @@ def prepare_solana_sig_disposition(
     source_sig, details = _solana_sig_disposition(source_sig, kind)
     timestamp = _require_solana_payout_budget_units(timestamp, "source timestamp")
     from_address = _require_solana_payout_budget_text(from_address, "source address")
+    destination_address = _require_solana_payout_budget_text(
+        destination_address, "destination address"
+    )
+    payout_memo = _require_solana_payout_budget_text(payout_memo, "payout memo", 1024)
     amount_usdc_units = _require_solana_payout_budget_units(amount_usdc_units, "source amount")
     payout_units = _require_solana_payout_budget_units(payout_units, "amount")
     cap_units = _require_solana_payout_budget_units(cap_units, "cap", positive=False)
@@ -2525,9 +2575,11 @@ def prepare_solana_sig_disposition(
         units_column = details["units_column"]
         conn.execute(
             f"""INSERT INTO {details['table']}
-               (sig, timestamp, from_address, amount_usdc_units, memo, {signature_column}, {units_column}, status)
-               VALUES (?, ?, ?, ?, ?, NULL, ?, 'submitting')""",
-            (source_sig, timestamp, from_address, amount_usdc_units, memo, payout_units),
+               (sig, timestamp, from_address, destination_address, amount_usdc_units, memo,
+                payout_memo, {signature_column}, {units_column}, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, 'submitting')""",
+            (source_sig, timestamp, from_address, destination_address, amount_usdc_units,
+             memo, payout_memo, payout_units),
         )
         updated = conn.execute(
             """UPDATE unprocessed_sigs SET status = ?

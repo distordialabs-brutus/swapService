@@ -662,19 +662,21 @@ class CriticalSafetyTests(unittest.TestCase):
         ), patch.object(solana_client.state_db, "prepare_solana_sig_disposition", return_value=True
         ), patch.object(solana_client.state_db, "record_solana_sig_disposition_submission", return_value=True
         ), patch.object(solana_client.state_db, "record_attempt"), patch.object(
-            solana_client, "_is_token_account_for_mint", return_value=True
+            solana_client, "_resolve_solana_token_destination", return_value="sender-token"
         ), patch.object(solana_client.state_db, "add_fee_entry"
         ), patch.object(solana_client.state_db, "mark_processed_sig"), patch.object(
             solana_client.state_db, "remove_unprocessed_sig"
         ), patch.object(solana_client.state_db, "update_unprocessed_sig_status"), patch.object(
             solana_client.state_db, "mark_refunded_sig"
         ), patch.object(
-            solana_client, "send_solana_token_owner_or_account_with_sig", return_value=(True, "refund-tx")
+            solana_client, "send_solana_token_to_account_with_sig", return_value=(True, "refund-tx")
         ) as send:
             processed = solana_client.process_solana_deposits_refunding(limit=1)
 
         self.assertEqual(processed, 1)
-        send.assert_called_once_with("sender", 93, memo="refundSig:deposit-sig")
+        send.assert_called_once_with(
+            "sender-token", 93, memo="swapService:v1:refund:deposit-sig"
+        )
 
     def test_solana_quarantine_uses_canonical_pair_refund_fee(self):
         """Quarantine output must use the same immutable pair refund fee."""
@@ -696,9 +698,8 @@ class CriticalSafetyTests(unittest.TestCase):
             solana_client.state_db, "prepare_solana_sig_disposition", return_value=True
         ), patch.object(
             solana_client.state_db, "record_solana_sig_disposition_submission", return_value=True
-        ), patch.object(
-            solana_client.state_db, "record_attempt"), patch.object(
-            solana_client, "_is_token_account_for_mint", return_value=True
+        ), patch.object(solana_client.state_db, "record_attempt"), patch.object(
+            solana_client, "_resolve_solana_token_destination", return_value="quarantine-token"
         ), patch.object(
             solana_client.state_db, "is_processed_sig", return_value=False
         ), patch.object(solana_client.state_db, "is_refunded_sig", return_value=False), patch.object(
@@ -708,13 +709,13 @@ class CriticalSafetyTests(unittest.TestCase):
         ), patch.object(solana_client.state_db, "update_unprocessed_sig_status"), patch.object(
             solana_client.state_db, "mark_quarantined_sig"
         ), patch.object(
-            solana_client, "send_solana_token_owner_or_account_with_sig", return_value=(True, "quarantine-tx")
+            solana_client, "send_solana_token_to_account_with_sig", return_value=(True, "quarantine-tx")
         ) as send:
             processed = solana_client.process_solana_deposits_quarantine(limit=1)
 
         self.assertEqual(processed, 1)
         send.assert_called_once_with(
-            config.USDC_QUARANTINE_ACCOUNT, 93, memo="quarantinedSig:deposit-sig"
+            "quarantine-token", 93, memo="swapService:v1:quarantine:deposit-sig"
         )
 
     def test_solana_poll_money_path_summaries_are_structured_events(self):

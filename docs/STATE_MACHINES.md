@@ -224,10 +224,10 @@ flowchart TD
 | **ProcessedAsFees** | Amount after fees ≤ 0 | `processed_sigs` | `"processed, amount after fees <= 0"` |
 | **ToBeRefunded** | Validation failed or amount exceeds the configured cap; ambiguity alone never refunds | `unprocessed_sigs` | `"to be refunded"` |
 | **RefundSent** | Exact refund source/output and cap reservation persisted; returned signature recorded after broadcast | `unprocessed_sigs` + `refunded_sigs` + `solana_payout_budget_events` | `"refund sent, awaiting confirmation"` |
-| **RefundConfirmed** | Current code accepts status-only evidence and can terminalize a failed or merely confirmed transaction without matching transfer terms; **Critical blocker** | `refunded_sigs` | `"awaiting confirmation"` → `"refund_confirmed"` |
+| **RefundConfirmed** | Submitted signature is read at finalized commitment and must prove successful vault transfer, configured mint, frozen token-account recipient, exact output and `swapService:v1:refund:<sig>` memo; legacy rows lacking frozen terms remain held | `refunded_sigs` | `"awaiting confirmation"` → `"refund_confirmed"` |
 | **ToBeQuarantined** | Solana-side refund impossible or attempts spent | `unprocessed_sigs` | `"to be quarantined"` |
 | **QuarantineSent** | Exact quarantine source/output and cap reservation persisted; returned signature recorded after broadcast to `SOLANA_QUARANTINE_ACCOUNT` (`USDC_QUARANTINE_ACCOUNT` is the legacy alias) | `unprocessed_sigs` + `quarantined_sigs` + `solana_payout_budget_events` | `"quarantine sent, awaiting confirmation"` |
-| **QuarantineConfirmed** | Current code accepts status-only evidence and can terminalize a failed or merely confirmed transaction without matching transfer terms; **Critical blocker** | `quarantined_sigs` | `"awaiting confirmation"` → `"quarantine_confirmed"` |
+| **QuarantineConfirmed** | Submitted signature is read at finalized commitment and must prove successful vault transfer, configured mint, frozen token-account recipient, exact output and `swapService:v1:quarantine:<sig>` memo; legacy rows lacking frozen terms remain held | `quarantined_sigs` | `"awaiting confirmation"` → `"quarantine_confirmed"` |
 | **QuarantineFailed** | Quarantine send failed | `unprocessed_sigs` | `"quarantine failed"` |
 
 > **Ambiguity is never treated as failure.** `debit_nexus_token_with_txid()` returns `(False, None)`
@@ -397,7 +397,10 @@ For a current Nexus payout the argument passed to `payout_attempt_key()` is comp
 - Solana signature is the primary key; `processed`/`refunded`/`quarantined` sets are checked before acting.
 - A unique `reference` is persisted **before** each debit and is the on-chain lookup key for ambiguity resolution.
 - `reserve_action("usdc_to_usdd_debit", sig)` prevents two workers acting on one deposit.
-- Refund/quarantine sends carry `refundSig:<sig>` / `quarantinedSig:<sig>` memos, checked on-chain before a retry re-sends.
+- New refund/quarantine sends carry deterministic `swapService:v1:refund:<sig>` /
+  `swapService:v1:quarantine:<sig>` memos. Before terminalization their submitted signature must
+  return one exact successful finalized vault transfer matching the frozen recipient, mint and output;
+  legacy rows without those frozen terms remain operator holds.
 
 **Nexus token → Solana token**
 - Live admission, wipeout Nexus admission and all four lifecycle tables use
@@ -408,8 +411,9 @@ For a current Nexus payout the argument passed to `payout_attempt_key()` is comp
 - Strict memo parsing and positive source/output reconstruction preserve the exact paid source;
   sparse, legacy or ambiguous evidence cannot create a terminal marker or release a liability.
 - Forward primary payouts, refunds and quarantine sends reserve one durable rolling-cap obligation
-  before RPC. Unknown outcomes retain capacity. Refund/quarantine terminalization still lacks exact
-  successful transaction proof, and wipeout recovery does not reconstruct primary cap events.
+  before RPC. Unknown outcomes retain capacity. Each new refund/quarantine terminalization requires
+  exact successful finalized transaction proof; wipeout recovery still does not reconstruct primary
+  cap events.
 - Transfer intents, operator selection and finalization bind the exact source contract. Finalization
   archives and removes only that source, preserving siblings and rejecting conflicting evidence.
 - Mutable multi-page Nexus offsets hold live checkpoints and cannot establish recovery completeness.

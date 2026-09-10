@@ -116,12 +116,16 @@ EXPECTED_SCHEMA = {
     "processed_txids": ["txid", "contract_id", "timestamp", "amount_usdd", "amount_usdd_units", "from_address", "to_address",
                         "owner", "sig", "status", "payout_solana_units", "payout_fee_nexus_units",
                         "payout_receival_account"],
-    "quarantined_sigs": ["sig", "timestamp", "from_address", "amount_usdc_units", "memo",
-                         "quarantine_sig", "quarantined_units", "status"],
+    # E-015 settlement-proof fields freeze the actual token-account recipient and
+    # versioned output memo before RPC; old rows retain NULL and remain manual holds.
+    "quarantined_sigs": ["sig", "timestamp", "from_address", "destination_address",
+                         "amount_usdc_units", "memo", "payout_memo", "quarantine_sig",
+                         "quarantined_units", "status"],
     "quarantined_txids": ["txid", "contract_id", "timestamp", "amount_usdd", "from_address", "to_address",
                           "owner", "sig", "status"],
-    "refunded_sigs": ["sig", "timestamp", "from_address", "amount_usdc_units", "memo",
-                      "refund_sig", "refunded_units", "status"],
+    "refunded_sigs": ["sig", "timestamp", "from_address", "destination_address",
+                      "amount_usdc_units", "memo", "payout_memo", "refund_sig",
+                      "refunded_units", "status"],
     "refunded_txids": ["txid", "contract_id", "timestamp", "amount_usdd", "from_address", "to_address",
                        "owner_from_address", "confirmations_credit", "status", "sig"],
     # Additive durable publication journal. It never authorizes or retries a payout.
