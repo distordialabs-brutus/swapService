@@ -436,6 +436,26 @@ NEXUS_SWAP_RECEIPT_TIMEOUT_SEC = _positive_int_env(
     "NEXUS_SWAP_RECEIPT_TIMEOUT_SEC", "20"
 )
 
+
+def _nonnegative_base_units_env(name: str, default: str = "0") -> int:
+    """Read a raw base-unit allowance without decimal rounding or float coercion."""
+    raw = os.getenv(name, default).strip()
+    if not raw.isascii() or not raw.isdecimal():
+        raise ValueError(f"{name} must be a non-negative base-unit integer")
+    return int(raw)
+
+
+# NXS is distinct from the bridged Nexus token, so these are deliberately raw NXS base
+# units rather than values scaled by NEXUS_TOKEN_DECIMALS. Receipt creation refuses to
+# run when either is zero; production remains separately disabled pending target-node
+# create/query acceptance and provider-record migration.
+NEXUS_SWAP_RECEIPT_EXPECTED_COST_NXS_UNITS = _nonnegative_base_units_env(
+    "NEXUS_SWAP_RECEIPT_EXPECTED_COST_NXS_UNITS"
+)
+NEXUS_SWAP_RECEIPT_BUDGET_NXS_UNITS = _nonnegative_base_units_env(
+    "NEXUS_SWAP_RECEIPT_BUDGET_NXS_UNITS"
+)
+
 # --- Exposure caps (defence in depth against a bug or a compromised key) ---
 # Largest single swap accepted. Oversized items are refunded rather than paid out.
 # 0 disables the cap.

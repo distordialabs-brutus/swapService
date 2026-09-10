@@ -22,6 +22,8 @@ def db(tmp_path, monkeypatch):
     path = tmp_path / "receipts.db"
     monkeypatch.setattr(state_db, "DB_PATH", str(path))
     monkeypatch.setattr(config, "NEXUS_SWAP_RECEIPTS_ENABLED", True, raising=False)
+    monkeypatch.setattr(config, "NEXUS_SWAP_RECEIPT_EXPECTED_COST_NXS_UNITS", 20, raising=False)
+    monkeypatch.setattr(config, "NEXUS_SWAP_RECEIPT_BUDGET_NXS_UNITS", 1_000, raising=False)
     state_db.init_db()
     return path
 
@@ -164,7 +166,7 @@ def test_receipt_builder_rejects_absent_or_malformed_exact_evidence(change):
         swap_receipts.build_receipt(**args)
 
 
-def test_create_uses_an_all_immutable_json_schema_and_profile_owner(monkeypatch):
+def test_create_uses_an_all_immutable_json_schema_and_profile_owner(db, monkeypatch):
     payload = receipt_fields()
     calls = []
     monkeypatch.setattr(
@@ -191,6 +193,64 @@ def test_create_uses_an_all_immutable_json_schema_and_profile_owner(monkeypatch)
         for field in swap_receipts.REQUIRED_FIELDS
         for arg in command
     )
+
+
+def test_receipt_nxs_budget_reserves_before_create_and_holds_after_timeout(db, monkeypatch):
+    """An uncertain create consumes the sole configured NXS allowance indefinitely."""
+    first = receipt_fields("receipt-budget-first")
+    second = receipt_fields("receipt-budget-second")
+    for payload in (first, second):
+        state_db.enqueue_swap_receipt(
+            payload, "provider-genesis", swap_receipts.receipt_name(payload["source_signature"])
+        )
+    monkeypatch.setattr(config, "NEXUS_SWAP_RECEIPT_EXPECTED_COST_NXS_UNITS", 20)
+    monkeypatch.setattr(config, "NEXUS_SWAP_RECEIPT_BUDGET_NXS_UNITS", 20)
+    monkeypatch.setattr(nexus_client, "read_service_record", lambda: {"owner": "provider-genesis"})
+    creates = []
+
+    def run(command, timeout=None):
+        if command[1] == "assets/create/asset":
+            creates.append(command)
+            with sqlite3.connect(db) as conn:
+                assert conn.execute(
+                    "SELECT expected_cost_nxs_units FROM receipt_nxs_budget_events "
+                    "WHERE source_signature=? AND event='reserved'",
+                    (first["source_signature"],),
+                ).fetchone() == (20,)
+            raise TimeoutError("accepted but response lost")
+        return (0, "[]", "")
+
+    monkeypatch.setattr(nexus_client, "_run", run)
+    assert swap_receipts.publish_pending_receipts() == 0
+    assert swap_receipts.publish_pending_receipts() == 0
+    assert len(creates) == 1
+    assert state_db.get_swap_receipt(first["source_signature"])["status"] == "creating"
+    assert state_db.get_swap_receipt(second["source_signature"])["status"] == "pending"
+
+
+def test_parseable_receipt_create_response_persists_remote_identity_in_nxs_ledger(db, monkeypatch):
+    payload = receipt_fields()
+    source = payload["source_signature"]
+    state_db.enqueue_swap_receipt(payload, "provider-genesis", swap_receipts.receipt_name(source))
+    assert state_db.claim_swap_receipt_with_nxs_budget(
+        source, expected_cost_nxs_units=20, budget_nxs_units=20
+    )
+    monkeypatch.setattr(
+        nexus_client, "_run",
+        lambda command, timeout=None: (0, '{"txid":"create-txid","address":"asset-address"}', ""),
+    )
+
+    swap_receipts._create({"receipt_name": swap_receipts.receipt_name(source)}, payload)
+
+    with sqlite3.connect(db) as conn:
+        assert conn.execute(
+            """SELECT event, expected_cost_nxs_units, create_txid, asset_address
+               FROM receipt_nxs_budget_events WHERE source_signature=? ORDER BY id""",
+            (source,),
+        ).fetchall() == [
+            ("reserved", 20, None, None),
+            ("create_reported", 20, "create-txid", "asset-address"),
+        ]
 
 
 def test_timeout_after_create_acceptance_never_blindly_creates_again(db, monkeypatch):

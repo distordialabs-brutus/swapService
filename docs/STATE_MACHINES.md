@@ -153,11 +153,12 @@ flowchart LR
 `creating` is an accepted-until-proven-otherwise boundary: restart performs readback and never
 submits a second create. This prevents duplicate receipt assets from an ambiguous result. It does
 not make the operation non-financial: current upstream Nexus API documentation assigns NXS fees to
-asset and optional-name creation. No receipt NXS budget or fee ledger exists, and the target node
-has not established filtered-list completeness or indexing visibility. An existing fixed-field v1
-registration also cannot add `receipt_schema` through a heartbeat update. Receipt mode therefore
-remains a separately gated, default-disabled extension; production admission rejects an explicit
-enablement until receipt-specific NXS-spend controls and registration migration are implemented.
+asset and optional-name creation. Before the create boundary, the runtime reserves a configured
+maximum raw-NXS cost from an append-only lifetime ledger; uncertain outcomes retain that capacity.
+The target node has not established actual-cost, filtered-list completeness or indexing semantics.
+An existing fixed-field v1 registration also cannot add `receipt_schema` through a heartbeat update.
+Receipt mode therefore remains a separately gated, default-disabled extension; production admission
+rejects an explicit enablement until target-node and registration-migration acceptance pass.
 
 ## Solana token → Nexus token state machine
 

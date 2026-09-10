@@ -126,10 +126,10 @@ def validate_production_controls() -> bool:
             and not str(getattr(config, "NEXUS_SESSION", "") or "").strip()):
         missing.append("NEXUS_SESSION (required when NEXUS_MULTIUSER=true)")
     # A named Nexus receipt asset consumes operator NXS.  Receipt publication has a
-    # durable no-blind-recreate boundary, but it does not yet have the separate NXS
-    # budget/accounting, registration migration, and target-node acceptance required
-    # to authorise that spend in a live deployment.  Reject an explicit opt-in instead
-    # of relying on its default-false value as a production safeguard.
+    # durable no-blind-recreate boundary and a local NXS budget ledger, but the
+    # registration migration and target-node fee/create semantics required for live
+    # authorisation remain unproven. Reject an explicit opt-in rather than relying on
+    # its default-false value as a production safeguard.
     if getattr(config, "NEXUS_SWAP_RECEIPTS_ENABLED", False):
         missing.append(
             "NEXUS_SWAP_RECEIPTS_ENABLED (receipt NXS-spend controls are not production-ready)"
@@ -578,8 +578,8 @@ def run():
             _run_with_watchdog(lambda: process_unprocessed_txids(paused=bool(should_pause)), "nexus_process", NEXUS_PROCESS_BUDGET)
 
             # Receipt creation is a separately durable NXS-spending side effect. It
-            # never feeds payout retry/refund decisions and production admission
-            # rejects it until its independent spend controls are implemented.
+            # never feeds payout retry/refund decisions. Production admission rejects
+            # it pending target-node and receipt-registration acceptance.
             if getattr(config, "NEXUS_SWAP_RECEIPTS_ENABLED", False):
                 from . import swap_receipts
                 _run_with_watchdog(

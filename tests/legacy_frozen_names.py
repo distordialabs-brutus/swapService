@@ -127,6 +127,11 @@ EXPECTED_SCHEMA = {
     # Additive durable publication journal. It never authorizes or retries a payout.
     "swap_receipts": ["source_signature", "receipt_name", "expected_owner", "payload_json",
                       "status", "asset_address", "created_timestamp", "updated_timestamp"],
+    # E-016 additive receipt NXS-spend journal. Unknown create outcomes retain their
+    # reservation, so a restart cannot regain budget by treating timeout as failure.
+    "receipt_nxs_budget_events": ["id", "source_signature", "receipt_name", "event",
+                                  "expected_cost_nxs_units", "create_txid", "asset_address",
+                                  "timestamp"],
     "reservations": ["kind", "key", "timestamp"],
     "unprocessed_sigs": ["sig", "timestamp", "memo", "from_address", "amount_usdc_units",
                          "amount_usdd_units", "status", "txid", "reference"],

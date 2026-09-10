@@ -470,13 +470,17 @@ evidence only; the target Nexus node and Solana devnet/testnet matrix remains a 
 **Priority:** P1 before enabling receipts in production — **production admission containment is active**
 
 The receipt payload, exact payout/fee/queue transaction, durable create claim and exact owner/payload
-readback are useful local controls. Production startup now rejects an explicit
+readback are useful local controls. Receipt creation now atomically reserves a configured maximum
+NXS cost from an append-only local lifetime budget before the create boundary; timeout/crash/unknown
+outcomes retain that capacity, and parseable create txid/address fields are retained as evidence.
+Production startup still rejects an explicit
 `NEXUS_SWAP_RECEIPTS_ENABLED=true`, so the default-off extension cannot become an uncapped NXS
 spend path merely through configuration. The current upstream `ASSETS.MD` pinned at Nexus core commit
 [`1185145534a20ed4d2288e4513c505f271be536d`](https://github.com/Nexusoft/LLL-TAO/blob/1185145534a20ed4d2288e4513c505f271be536d/docs/API/COMMANDS/ASSETS.MD)
 states a 1 NXS asset fee plus 1 NXS for the optional name. The publisher therefore spends NXS even
-though it does not move bridged tokens. There is no receipt NXS budget, accounting ledger or
-production admission rule.
+though it does not move bridged tokens. The configured local budget is not proof of the target
+node's actual cost, and no target-node acceptance has established an authoritative fee/transaction
+readback protocol.
 
 The fixed-field v1 registration cannot gain `receipt_schema` through normal heartbeat updates, and
 startup does not require that field when receipt mode is enabled. JSON creation, global filtered
@@ -724,9 +728,10 @@ durably attributable when its response or final local write is lost.
 ### Batch 3B — Receipt publication cost and admission boundary **OPEN; FEATURE DEFAULT OFF**
 
 1. Classify asset and optional-name creation as NXS-spending side effects in code, schema and alerts.
-2. Define a bounded NXS budget, reserve expected cost before create, persist create txid/actual cost,
-   and hold on budget/accounting/read failures. Decide whether deterministic naming justifies its
-   additional cost.
+2. **Partly implemented locally:** bounded NXS budget, pre-create expected-cost reservation and
+   parseable create identity ledger retain capacity across unknown outcomes. Establish authoritative
+   target-node actual-cost readback and decide whether deterministic naming justifies its additional
+   cost.
 3. Require a receipt-capable provider registration and authoritative owner at startup when enabled;
    document and rehearse creation of a new fixed-field record rather than mutating v1 in place.
 4. Prove create, rejection, timeout-after-acceptance, delayed indexing, exact filtered readback,

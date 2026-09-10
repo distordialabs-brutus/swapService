@@ -349,8 +349,8 @@ def init_db():
         "ON solana_payout_budget_events(event, timestamp)"
     )
 
-    # Public receipt publication is a separate, non-monetary side effect. Its frozen
-    # payload is committed with payout finalization so a crash cannot lose the obligation.
+    # Receipt publication spends operator NXS. Its frozen payload is committed with
+    # payout finalization so a crash cannot lose the obligation.
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS swap_receipts (
             source_signature TEXT PRIMARY KEY,
@@ -364,6 +364,27 @@ def init_db():
         )
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_swap_receipts_status ON swap_receipts(status, created_timestamp)")
+
+    # An ambiguous create can still have spent NXS. Every reservation therefore stays
+    # charged against the configured lifetime budget until separately reviewed accounting
+    # can prove a different actual spend.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS receipt_nxs_budget_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_signature TEXT NOT NULL,
+            receipt_name TEXT NOT NULL,
+            event TEXT NOT NULL CHECK (event IN ('reserved', 'create_reported', 'published')),
+            expected_cost_nxs_units INTEGER NOT NULL,
+            create_txid TEXT,
+            asset_address TEXT,
+            timestamp INTEGER NOT NULL,
+            UNIQUE(source_signature, event)
+        )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_receipt_nxs_budget_events_source "
+        "ON receipt_nxs_budget_events(source_signature, event)"
+    )
 
     # Hot-path indexes. Every poll filters these tables by status and orders by
     # timestamp; without an index each is a full scan + sort. Measured at 20k rows:
@@ -1628,7 +1649,7 @@ def list_swap_receipts_for_publication(limit: int = 100) -> list[dict]:
 
 
 def claim_swap_receipt(source_signature: str) -> bool:
-    """Cross the no-blind-recreate boundary before invoking assets/create."""
+    """Cross the legacy no-blind-recreate boundary before invoking assets/create."""
     with sqlite3.connect(DB_PATH) as conn:
         changed = conn.execute(
             """UPDATE swap_receipts SET status='creating', updated_timestamp=?
@@ -1636,6 +1657,126 @@ def claim_swap_receipt(source_signature: str) -> bool:
             (int(time.time()), source_signature),
         ).rowcount
         return changed == 1
+
+
+def _require_receipt_budget_text(value: str, field: str, max_length: int = 500) -> str:
+    text = str(value or "").strip()
+    if not text or len(text) > max_length:
+        raise ValueError(f"receipt NXS budget {field} is required and must be at most {max_length} characters")
+    return text
+
+
+def _require_receipt_budget_units(value: int, field: str) -> int:
+    if type(value) is not int or value <= 0:
+        raise ValueError(f"receipt NXS budget {field} must be an exact positive integer")
+    return value
+
+
+def claim_swap_receipt_with_nxs_budget(
+    source_signature: str, *, expected_cost_nxs_units: int, budget_nxs_units: int,
+) -> bool:
+    """Atomically reserve bounded NXS spend and cross one receipt create boundary.
+
+    A reservation is never released automatically: a failed, timed-out, or crashed
+    create can still have spent NXS, and reusing that capacity would make the operator
+    budget depend on an unprovable negative result.
+    """
+    source_signature = _require_receipt_budget_text(source_signature, "source signature")
+    expected_cost_nxs_units = _require_receipt_budget_units(
+        expected_cost_nxs_units, "expected cost"
+    )
+    budget_nxs_units = _require_receipt_budget_units(budget_nxs_units, "budget")
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("BEGIN IMMEDIATE")
+        receipt = conn.execute(
+            "SELECT receipt_name, status FROM swap_receipts WHERE source_signature=?",
+            (source_signature,),
+        ).fetchone()
+        if receipt is None or receipt[1] != "pending":
+            conn.commit()
+            return False
+        if conn.execute(
+            "SELECT 1 FROM receipt_nxs_budget_events "
+            "WHERE source_signature=? AND event='reserved'", (source_signature,),
+        ).fetchone() is not None:
+            conn.commit()
+            return False
+        used = conn.execute(
+            "SELECT COALESCE(SUM(expected_cost_nxs_units), 0) "
+            "FROM receipt_nxs_budget_events WHERE event='reserved'"
+        ).fetchone()[0]
+        if int(used or 0) + expected_cost_nxs_units > budget_nxs_units:
+            conn.commit()
+            return False
+        now = int(time.time())
+        conn.execute(
+            """INSERT INTO receipt_nxs_budget_events
+               (source_signature, receipt_name, event, expected_cost_nxs_units, create_txid,
+                asset_address, timestamp)
+               VALUES (?, ?, 'reserved', ?, NULL, NULL, ?)""",
+            (source_signature, receipt[0], expected_cost_nxs_units, now),
+        )
+        changed = conn.execute(
+            """UPDATE swap_receipts SET status='creating', updated_timestamp=?
+               WHERE source_signature=? AND status='pending'""",
+            (now, source_signature),
+        ).rowcount
+        if changed != 1:
+            raise RuntimeError("receipt changed while reserving its NXS create budget")
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def record_swap_receipt_create_report(
+    source_signature: str, *, create_txid: str | None = None, asset_address: str | None = None,
+) -> bool:
+    """Append parseable create response identity without authorizing another create."""
+    source_signature = _require_receipt_budget_text(source_signature, "source signature")
+    txid = str(create_txid or "").strip() or None
+    address = str(asset_address or "").strip() or None
+    if txid is None and address is None:
+        return False
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("BEGIN IMMEDIATE")
+        reserved = conn.execute(
+            """SELECT receipt_name, expected_cost_nxs_units FROM receipt_nxs_budget_events
+               WHERE source_signature=? AND event='reserved'""",
+            (source_signature,),
+        ).fetchone()
+        if reserved is None:
+            conn.commit()
+            return False
+        prior = conn.execute(
+            """SELECT create_txid, asset_address FROM receipt_nxs_budget_events
+               WHERE source_signature=? AND event='create_reported'""",
+            (source_signature,),
+        ).fetchone()
+        if prior is not None:
+            conn.commit()
+            return prior == (txid, address)
+        conn.execute(
+            """INSERT INTO receipt_nxs_budget_events
+               (source_signature, receipt_name, event, expected_cost_nxs_units, create_txid,
+                asset_address, timestamp)
+               VALUES (?, ?, 'create_reported', ?, ?, ?, ?)""",
+            (source_signature, reserved[0], reserved[1], txid, address, int(time.time())),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def update_swap_receipt_publication(source_signature: str, status: str,
@@ -1652,6 +1793,20 @@ def update_swap_receipt_publication(source_signature: str, status: str,
                WHERE source_signature=? AND status IN ('creating','verifying')""",
             (status, address, int(time.time()), source_signature),
         ).rowcount
+        if changed == 1 and status == "published":
+            reserved = conn.execute(
+                """SELECT receipt_name, expected_cost_nxs_units FROM receipt_nxs_budget_events
+                   WHERE source_signature=? AND event='reserved'""",
+                (source_signature,),
+            ).fetchone()
+            if reserved is not None:
+                conn.execute(
+                    """INSERT OR IGNORE INTO receipt_nxs_budget_events
+                       (source_signature, receipt_name, event, expected_cost_nxs_units,
+                        create_txid, asset_address, timestamp)
+                       VALUES (?, ?, 'published', ?, NULL, ?, ?)""",
+                    (source_signature, reserved[0], reserved[1], address, int(time.time())),
+                )
         return changed == 1
 
 

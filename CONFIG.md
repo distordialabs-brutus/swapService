@@ -135,13 +135,18 @@ The operator-intent CLI in [`nexus_transfer_operator.py`](nexus_transfer_operato
 |---|---:|---|
 | `NEXUS_SWAP_RECEIPTS_ENABLED` | `false` | Strict boolean. When enabled, a confirmed Solana→Nexus payout atomically enqueues an immutable public `nexus-swap-receipt-v1` asset obligation. |
 | `NEXUS_SWAP_RECEIPT_TIMEOUT_SEC` | `20` | Positive integer timeout used by each receipt create/readback Nexus call and by the loop watchdog. It is not an NXS-spend cap. |
+| `NEXUS_SWAP_RECEIPT_EXPECTED_COST_NXS_UNITS` | `0` | Exact raw NXS base units reserved before one named-asset create. It must bound all expected creation/name costs; it is not scaled by `NEXUS_TOKEN_DECIMALS`. |
+| `NEXUS_SWAP_RECEIPT_BUDGET_NXS_UNITS` | `0` | Exact raw NXS base-unit lifetime allowance. Receipt creation requires this and the expected cost to be positive. An ambiguous create reservation remains charged. |
 
 Keep receipt publication disabled for production until the receipt-specific gates in
 [the 2026-09-08 review](docs/DEVELOPMENT_REVIEW_2026-09-08.md) pass. Creating a named Nexus
-asset costs NXS; the current code has no separate receipt-spend budget or fee ledger. Production
-admission now rejects an explicit `NEXUS_SWAP_RECEIPTS_ENABLED=true` rather than relying only on
-the default-false setting. The create/query/readback contract has local mocked coverage but has
-not been exercised against the target Nexus build.
+asset costs NXS. The local append-only receipt ledger reserves an operator-configured maximum
+cost before a create, retains that reservation across timeout/crash/unknown outcomes, and records
+parseable create transaction/address identity. It cannot establish the target node's actual fee
+or create semantics, so production admission still rejects an explicit
+`NEXUS_SWAP_RECEIPTS_ENABLED=true` rather than relying only on the default-false setting. The
+create/query/readback contract has local mocked coverage but has not been exercised against the
+target Nexus build.
 
 `receipt_schema` is an immutable optional field in the v1 provider record. Because a Nexus
 `format=basic` asset cannot add fields, enabling receipts does not add this advertisement to an

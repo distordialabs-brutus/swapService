@@ -144,9 +144,15 @@ def _create(row: dict, payload: dict[str, str]) -> None:
         return
     decoded = nexus_client._parse_json_lenient(output)
     if isinstance(decoded, dict) and not decoded.get("error"):
+        asset_address = str(decoded.get("address") or "").strip() or None
+        create_txid = str(decoded.get("txid") or "").strip() or None
+        # Response identity is evidence only; it can never permit a second create.
+        state_db.record_swap_receipt_create_report(
+            payload["source_signature"], create_txid=create_txid, asset_address=asset_address,
+        )
         state_db.update_swap_receipt_publication(
             payload["source_signature"], "verifying",
-            str(decoded.get("address") or "").strip() or None,
+            asset_address,
         )
 
 
@@ -178,7 +184,13 @@ def publish_pending_receipts(limit: int = 100) -> int:
             # Re-read authoritative profile-derived owner before crossing create boundary.
             if expected_provider_owner() != row["expected_owner"]:
                 continue
-            if not state_db.claim_swap_receipt(row["source_signature"]):
+            if not state_db.claim_swap_receipt_with_nxs_budget(
+                row["source_signature"],
+                expected_cost_nxs_units=getattr(
+                    config, "NEXUS_SWAP_RECEIPT_EXPECTED_COST_NXS_UNITS", 0
+                ),
+                budget_nxs_units=getattr(config, "NEXUS_SWAP_RECEIPT_BUDGET_NXS_UNITS", 0),
+            ):
                 continue
             row = state_db.get_swap_receipt(row["source_signature"])
             if row is None:
