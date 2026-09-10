@@ -2129,6 +2129,7 @@ def scan_memos_since_timestamp(since_timestamp: int, max_signatures: int = 10000
     """Enumerate finalized vault transactions without turning gaps into absence proof."""
     out = {
         "nexus_payouts": {},
+        "nexus_payout_timestamps": {},
         "legacy_nexus_txids": {},
         "malformed_nexus_memos": [],
         "refund_sigs": {},
@@ -2140,6 +2141,7 @@ def scan_memos_since_timestamp(since_timestamp: int, max_signatures: int = 10000
 
     def incomplete(reason: str) -> dict:
         out["nexus_payouts"].clear()
+        out["nexus_payout_timestamps"].clear()
         out["legacy_nexus_txids"].clear()
         out["refund_sigs"].clear()
         out["quarantined_sigs"].clear()
@@ -2270,10 +2272,14 @@ def scan_memos_since_timestamp(since_timestamp: int, max_signatures: int = 10000
                             return incomplete("missing_nexus_payout_transfer_evidence")
                         identity = (parsed.txid, parsed.contract_id)
                         existing = out["nexus_payouts"].get(identity)
+                        existing_timestamp = out["nexus_payout_timestamps"].get(identity)
                         if (existing is not None
                                 and existing.solana_signature != evidence.solana_signature):
                             return incomplete("duplicate_nexus_payout_identity")
+                        if existing_timestamp is not None and existing_timestamp != block_time:
+                            return incomplete("conflicting_nexus_payout_timestamp")
                         out["nexus_payouts"][identity] = evidence
+                        out["nexus_payout_timestamps"][identity] = block_time
                 elif memo.startswith("refundSig:"):
                     deposit_sig = memo[len("refundSig:"):]
                     if not deposit_sig or deposit_sig.strip() != deposit_sig or any(

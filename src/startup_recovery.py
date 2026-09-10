@@ -368,9 +368,11 @@ def _rebuild_solana_from_waterline(waterline_timestamp: int) -> dict:
 
     malformed = memo_map.get("malformed_nexus_memos")
     payouts = memo_map.get("nexus_payouts")
+    payout_timestamps = memo_map.get("nexus_payout_timestamps")
     refunds = memo_map.get("refund_sigs")
     quarantines = memo_map.get("quarantined_sigs")
-    if not isinstance(malformed, list) or not isinstance(payouts, dict):
+    if (not isinstance(malformed, list) or not isinstance(payouts, dict)
+            or not isinstance(payout_timestamps, dict)):
         return {
             "recovery_complete": False,
             "error": "solana_memo_scan_incomplete:invalid_payout_evidence",
@@ -397,7 +399,14 @@ def _rebuild_solana_from_waterline(waterline_timestamp: int) -> dict:
         }
 
     validated_payouts: dict[tuple[str, int], nexus_memo.NexusPayoutEvidence] = {}
+    validated_payout_timestamps: dict[tuple[str, int], int] = {}
+    if set(payout_timestamps) != set(payouts):
+        return {
+            "recovery_complete": False,
+            "error": "solana_memo_scan_incomplete:missing_payout_timestamp",
+        }
     for identity, evidence in payouts.items():
+        chain_timestamp = payout_timestamps.get(identity)
         if (not isinstance(identity, tuple) or len(identity) != 2
                 or not nexus_memo.is_canonical_nexus_txid(identity[0])
                 or type(identity[1]) is not int or identity[1] < 0
@@ -409,12 +418,14 @@ def _rebuild_solana_from_waterline(waterline_timestamp: int) -> dict:
                 or not isinstance(evidence.to_token_account, str)
                 or not evidence.to_token_account.strip()
                 or type(evidence.amount_solana_units) is not int
-                or evidence.amount_solana_units <= 0):
+                or evidence.amount_solana_units <= 0
+                or type(chain_timestamp) is not int or chain_timestamp <= 0):
             return {
                 "recovery_complete": False,
                 "error": "solana_memo_scan_incomplete:invalid_payout_evidence",
             }
         validated_payouts[(identity[0], identity[1])] = evidence
+        validated_payout_timestamps[(identity[0], identity[1])] = chain_timestamp
 
     return {
         "recovery_complete": True,
@@ -423,7 +434,38 @@ def _rebuild_solana_from_waterline(waterline_timestamp: int) -> dict:
         "solana_found_refund_memos": 0,
         "solana_found_quarantined_memos": 0,
         "_nexus_payouts": validated_payouts,
+        "_nexus_payout_timestamps": validated_payout_timestamps,
     }
+
+
+def _rebuild_recent_payout_budget(
+    payouts: dict[tuple[str, int], nexus_memo.NexusPayoutEvidence],
+    timestamps: dict[tuple[str, int], int],
+) -> dict:
+    """Restore finalized rolling-cap events only from complete exact Solana evidence."""
+    if not isinstance(payouts, dict) or not isinstance(timestamps, dict) or set(payouts) != set(timestamps):
+        return {"recovery_complete": False, "error": "solana_payout_budget_evidence_incomplete"}
+    reconstructed = 0
+    for identity, evidence in payouts.items():
+        chain_timestamp = timestamps.get(identity)
+        if (not isinstance(identity, tuple) or len(identity) != 2
+                or not isinstance(evidence, nexus_memo.NexusPayoutEvidence)
+                or evidence.txid != identity[0] or evidence.contract_id != identity[1]
+                or type(chain_timestamp) is not int or chain_timestamp <= 0):
+            return {"recovery_complete": False, "error": "solana_payout_budget_evidence_invalid"}
+        try:
+            restored = state_db.reconstruct_confirmed_solana_payout_budget(
+                obligation_id=f"nexus:{evidence.txid}:{evidence.contract_id}",
+                signature=evidence.solana_signature,
+                amount_usdc_units=evidence.amount_solana_units,
+                chain_timestamp=chain_timestamp,
+            )
+        except Exception as exc:
+            return {"recovery_complete": False, "error": f"solana_payout_budget_restore_failed:{exc}"}
+        if not restored:
+            return {"recovery_complete": False, "error": "solana_payout_budget_evidence_conflict"}
+        reconstructed += 1
+    return {"recovery_complete": True, "solana_payout_budget_events_reconstructed": reconstructed}
 
 
 def _fallback_recent_scan() -> dict:
@@ -508,6 +550,36 @@ def perform_startup_recovery() -> dict:
         }
 
     payouts = solana_stats.pop("_nexus_payouts", {})
+    payout_timestamps = solana_stats.pop("_nexus_payout_timestamps", {})
+    # A heartbeat may be newer than the rolling cap boundary.  Recovery must still
+    # enumerate the whole current window; an empty local database cannot prove that
+    # no prior-window payout was made after the latest heartbeat update.
+    payout_budget_waterline = max(1, int(time.time()) - 86400)
+    if solana_waterline <= payout_budget_waterline:
+        payout_budget_stats = None
+        payout_budget_payouts = payouts
+        payout_budget_timestamps = payout_timestamps
+    else:
+        try:
+            payout_budget_stats = _rebuild_solana_from_waterline(payout_budget_waterline)
+        except Exception as exc:
+            payout_budget_stats = {
+                "recovery_complete": False,
+                "error": f"solana_payout_budget_scan_exception:{exc}",
+            }
+        if payout_budget_stats.get("recovery_complete") is not True:
+            return {
+                "recovery_complete": False,
+                "recovery_incomplete": True,
+                "waterline_mode": True,
+                "nexus_waterline": nexus_waterline,
+                "solana_waterline": solana_waterline,
+                "interrupted_nexus_transfers_held": interrupted_nexus_transfers_held,
+                **solana_stats,
+                **payout_budget_stats,
+            }
+        payout_budget_payouts = payout_budget_stats.pop("_nexus_payouts", {})
+        payout_budget_timestamps = payout_budget_stats.pop("_nexus_payout_timestamps", {})
     try:
         nexus_stats = _rebuild_nexus_from_waterline(
             nexus_waterline, paid_nexus_payouts=payouts
@@ -524,6 +596,22 @@ def perform_startup_recovery() -> dict:
             "interrupted_nexus_transfers_held": interrupted_nexus_transfers_held,
             **solana_stats,
             **nexus_stats,
+        }
+
+    payout_budget_restore = _rebuild_recent_payout_budget(
+        payout_budget_payouts, payout_budget_timestamps
+    )
+    if payout_budget_restore.get("recovery_complete") is not True:
+        return {
+            "recovery_complete": False,
+            "recovery_incomplete": True,
+            "waterline_mode": True,
+            "nexus_waterline": nexus_waterline,
+            "solana_waterline": solana_waterline,
+            "interrupted_nexus_transfers_held": interrupted_nexus_transfers_held,
+            **solana_stats,
+            **nexus_stats,
+            **payout_budget_restore,
         }
 
     try:
@@ -551,5 +639,6 @@ def perform_startup_recovery() -> dict:
         "interrupted_nexus_transfers_held": interrupted_nexus_transfers_held,
         **solana_stats,
         **nexus_stats,
+        **payout_budget_restore,
     }
 

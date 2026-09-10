@@ -111,6 +111,36 @@ def test_submitted_and_confirmed_events_preserve_exact_obligation_identity(tmp_p
     ]
 
 
+def test_recovery_completes_a_matching_preexisting_reservation(tmp_path):
+    """A crash after an accepted send retains its cap claim and recovers exact finality."""
+    with isolated_state(tmp_path), patch.object(state_db.time, "time", return_value=1_001):
+        obligation_id = "nexus:credit-recovered:2"
+        assert state_db.reserve_solana_payout_budget(
+            obligation_id=obligation_id, kind="nexus_payout", amount_usdc_units=60,
+            cap_units=100,
+        )
+        assert state_db.reconstruct_confirmed_solana_payout_budget(
+            obligation_id=obligation_id,
+            signature="recovered-signature",
+            amount_usdc_units=60,
+            chain_timestamp=1_000,
+        )
+        assert state_db.payout_budget_used(86400) == 60
+        with sqlite3.connect(state_db.DB_PATH) as conn:
+            events = conn.execute(
+                """SELECT event, signature, amount_usdc_units
+                   FROM solana_payout_budget_events
+                   WHERE obligation_id = ? ORDER BY id""",
+                (obligation_id,),
+            ).fetchall()
+
+    assert events == [
+        ("reserved", None, 60),
+        ("submitted", "recovered-signature", 60),
+        ("confirmed", "recovered-signature", 60),
+    ]
+
+
 def test_refund_disposition_reserves_before_rpc_and_settles_on_confirmation(tmp_path):
     """Refunds use the durable cap ledger rather than the legacy read/send/write helper."""
     with isolated_state(tmp_path):

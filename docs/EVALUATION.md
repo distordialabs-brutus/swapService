@@ -212,7 +212,7 @@ independently verified snapshot/cursor protocol, not removal of this refusal.
 **Severity:** Critical deployment blocker
 **Priority:** P0 — enforce before real-fund admission
 
-**Current status:** **partially repaired; Critical cap-reconstruction and alerting failures remain.**
+**Current status:** **partially repaired; local cap reconstruction is enforced, but alerting and external acceptance remain Critical gates.**
 The primary Nexus→Solana path and new Solana refund/quarantine paths atomically reserve frozen output
 before RPC. Pending and unknown obligations consume capacity, submission identity is append-only, and
 the old read/send/best-effort-record helper is disabled for runtime callers. Concurrency and
@@ -227,21 +227,22 @@ frozen destination/memo remain held rather than using the historical status-only
 Focused fixtures cover successful refund/quarantine settlement and failed, wrong-recipient,
 wrong-amount and wrong-memo evidence.
 
-The rolling cap is still not reconstruction-safe. Startup wipeout recovery can identify and archive
-an exact historical primary payout, but calls `prepare_nexus_payout()` without the cap argument.
-`finalize_nexus_credit()` deliberately skips budget settlement when no reservation exists. The
-executed wipeout probe returned `recovery_complete=True`, reconstructed the paid payout, reported
-zero budget usage, and admitted another payout equal to the full cap. In-place upgrades count the
-legacy `payouts` table; database-loss reconstruction does not recreate either ledger.
+Startup recovery now re-enumerates the complete rolling window when the Solana heartbeat
+waterline is newer than its boundary. For each exact successful finalized primary payout, it restores
+append-only `reserved`/`submitted`/`confirmed` budget evidence using the authoritative Solana
+signature-page `blockTime`, immutable obligation identity, signature and integer output. Missing,
+malformed, conflicting or incomplete evidence fails recovery closed; an older local budget event must
+already describe the same obligation. The wipeout regression proves recovered spend consumes the full
+cap and prevents admission of a second equal-cap obligation. In-place upgrades continue to count the
+legacy `payouts` table without double-counting the durable confirmed event.
 
 Cap exhaustion now produces structured logs only. The primary credit remains `ready for processing`,
 which is not in the dashboard issue-status set, and no `payout_cap_exceeded` alert exists despite the
 state-machine guide listing one. This does not itself spend funds, but it hides a production hold.
 
-**Required exit:** rebuild conservative cap events from complete exact chain evidence before recovery can
-return green; if the rolling window cannot be proven complete, retain an exposure pause/manual budget
-hold. Add wipeout, upgrade, rolling-window and alert-delivery regressions, then verify the complete
-settlement and recovery matrix against the target chain.
+**Remaining exit:** verify the recovery scan, restore and rolling-window boundary matrix against the
+target chain, including timeout-after-acceptance, crash/restart and exact finality. Add an actionable
+cap-held alert and visible dashboard/API hold before production admission.
 
 ---
 
@@ -732,9 +733,11 @@ resolve pre-upgrade ambiguity from real chain evidence; do not relabel legacy ro
    authoritative non-execution or reviewed disposition.
 4. ✅ Route primary payouts and every refund/quarantine token send through this protocol. The former
    read-then-send-then-best-effort-record helper is disabled; ledger failure holds the obligation.
-5. **Partial:** two-worker contention, database-write failure and exact refund/quarantine proof are
-   covered locally. Reconstruct recent confirmed spend after database loss, then run target-chain
-   timeout-after-acceptance, crash/restart and finality tests.
+5. **Partial:** two-worker contention, database-write failure, exact refund/quarantine proof and
+   wipeout rolling-cap reconstruction are covered locally. Recovery re-enumerates the full current
+   cap window when needed and recreates only exact finalized primary-payout events with their chain
+   timestamps; incomplete/conflicting evidence blocks green startup. Run target-chain
+   timeout-after-acceptance, crash/restart and finality tests, then add the cap-held alert/dashboard state.
 
 **Remaining exit:** a failed or wrong Solana transaction cannot terminalize any disposition; successful
 recovery either reconstructs all recent confirmed cap spend or stays paused. Then execute the

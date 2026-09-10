@@ -3463,7 +3463,10 @@ class CriticalSafetyTests(unittest.TestCase):
         self.assertEqual(stats["nexus_waterline"], 1_999_999_000)
         self.assertEqual(stats["solana_waterline"], 1_999_999_500)
         rebuild_nexus.assert_called_once_with(1_999_999_000, paid_nexus_payouts={})
-        rebuild_solana.assert_called_once_with(1_999_999_500)
+        # A fresh heartbeat can be newer than the rolling payout-cap boundary, so
+        # recovery scans that complete 24-hour window separately before going green.
+        self.assertEqual(rebuild_solana.call_args_list[0], call(1_999_999_500))
+        self.assertEqual(rebuild_solana.call_count, 2)
         fallback.assert_not_called()
 
     def test_refunded_nexus_credit_identity_does_not_suppress_a_sibling(self):

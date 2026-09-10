@@ -2453,6 +2453,78 @@ def payout_budget_used(seconds: int = 86400) -> int:
     finally:
         conn.close()
 
+
+def reconstruct_confirmed_solana_payout_budget(
+    *, obligation_id: str, signature: str, amount_usdc_units: int, chain_timestamp: int,
+) -> bool:
+    """Restore one exact finalized payout's rolling-cap evidence after database loss.
+
+    The timestamp comes from the finalized Solana signature page, never the recovery
+    clock.  Existing durable events must already describe this exact payout; a conflict
+    is an incomplete recovery, not permission to rewrite financial history.
+    """
+    obligation_id = _require_solana_payout_budget_text(obligation_id, "obligation id")
+    signature = _require_solana_payout_budget_text(signature, "signature")
+    amount_usdc_units = _require_solana_payout_budget_units(amount_usdc_units, "amount")
+    if type(chain_timestamp) is not int or chain_timestamp <= 0 or chain_timestamp > int(time.time()):
+        raise ValueError("reconstructed Solana payout timestamp must be a non-future exact integer")
+
+    expected = {
+        "reserved": ("nexus_payout", amount_usdc_units, None),
+        "submitted": ("nexus_payout", amount_usdc_units, signature),
+        "confirmed": ("nexus_payout", amount_usdc_units, signature),
+    }
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            """SELECT event, kind, amount_usdc_units, signature
+               FROM solana_payout_budget_events
+               WHERE obligation_id = ? ORDER BY id""",
+            (obligation_id,),
+        ).fetchall()
+        if not rows:
+            for event in ("reserved", "submitted", "confirmed"):
+                kind, amount, event_signature = expected[event]
+                conn.execute(
+                    """INSERT INTO solana_payout_budget_events
+                       (obligation_id, kind, event, amount_usdc_units, signature, evidence, timestamp)
+                       VALUES (?, ?, ?, ?, ?, 'recovered_finalized_solana_payout', ?)""",
+                    (obligation_id, kind, event, amount, event_signature, chain_timestamp),
+                )
+            conn.commit()
+            return True
+
+        observed: dict[str, tuple[str, int, str | None]] = {}
+        for event, kind, amount, event_signature in rows:
+            if event not in expected or event in observed:
+                conn.commit()
+                return False
+            observed[event] = (kind, amount, event_signature)
+        if "reserved" not in observed or any(
+            observed[event] != expected[event] for event in observed
+        ):
+            conn.commit()
+            return False
+        for event in ("submitted", "confirmed"):
+            if event not in observed:
+                kind, amount, event_signature = expected[event]
+                conn.execute(
+                    """INSERT INTO solana_payout_budget_events
+                       (obligation_id, kind, event, amount_usdc_units, signature, evidence, timestamp)
+                       VALUES (?, ?, ?, ?, ?, 'recovered_finalized_solana_payout', ?)""",
+                    (obligation_id, kind, event, amount, event_signature, chain_timestamp),
+                )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 _SOLANA_SIG_DISPOSITION = {
     "refund": {
         "table": "refunded_sigs",

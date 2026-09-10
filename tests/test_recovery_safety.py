@@ -249,6 +249,7 @@ class StartupReconstructionTests(unittest.TestCase):
                 {"id": 1, "OP": "CREDIT", "from": "sender-b", "to": "TREASURY", "amount": "4"},
             ],
         }
+        payout_units = nexus_client.get_solana_send_amount_units(4_000_000)
         memo_scan = {
             "complete": True,
             "reason": None,
@@ -257,8 +258,11 @@ class StartupReconstructionTests(unittest.TestCase):
                 contract_id=1,
                 solana_signature=SOLANA_PAYOUT_SIGNATURE,
                 to_token_account="recipient-token-account",
-                amount_solana_units=nexus_client.get_solana_send_amount_units(4_000_000),
+                amount_solana_units=payout_units,
             )},
+            # The finalized signature page's blockTime is the authoritative chain
+            # timestamp for the cap event reconstructed after a database wipeout.
+            "nexus_payout_timestamps": {(NEXUS_TXID, 1): 1_000},
             "legacy_nexus_txids": {},
             "malformed_nexus_memos": [],
             "refund_sigs": {},
@@ -285,10 +289,18 @@ class StartupReconstructionTests(unittest.TestCase):
                 patch.object(nexus_client, "fetch_deposits_since", return_value=nexus_client.DepositScan([tx], True)),
                 patch.object(nexus_client, "get_account_info", return_value={"owner": "owner"}),
                 patch.object(nexus_client, "get_last_reference", return_value=99),
+                patch.object(state_db.time, "time", return_value=1_001),
             ):
                 state_db.init_db()
                 result = startup_recovery.perform_startup_recovery()
                 second_result = startup_recovery.perform_startup_recovery()
+                reconstructed_cap_used = state_db.payout_budget_used(86400)
+                second_full_cap_reserved = state_db.reserve_solana_payout_budget(
+                    obligation_id="nexus:next-credit:0",
+                    kind="nexus_payout",
+                    amount_usdc_units=payout_units,
+                    cap_units=payout_units,
+                )
                 conn = sqlite3.connect(db_path)
                 processed = conn.execute(
                     "SELECT txid, contract_id, amount_usdd_units, from_address, sig FROM processed_txids"
@@ -300,6 +312,8 @@ class StartupReconstructionTests(unittest.TestCase):
 
         self.assertTrue(result["recovery_complete"], result)
         self.assertTrue(second_result["recovery_complete"], second_result)
+        self.assertEqual(reconstructed_cap_used, payout_units)
+        self.assertFalse(second_full_cap_reserved)
         self.assertEqual(
             processed,
             [(NEXUS_TXID, 1, 4_000_000, "sender-b", SOLANA_PAYOUT_SIGNATURE)],
