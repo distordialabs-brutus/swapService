@@ -103,10 +103,18 @@ State machine diagrams for both directions of the service's single configured So
 > API documentation and has no NXS budget/accounting control or target-node acceptance,
 > so it remains production-disabled. The main Nexus→Solana helper still bypasses the
 > configured rolling payout cap. See `DEVELOPMENT_REVIEW_2026-09-08.md`.
+>
+> **Development review (2026-09-10, `3bd8f23`):** forward Solana payout, refund and
+> quarantine paths now reserve rolling-cap capacity before RPC, receipt creation has a
+> default-off lifetime NXS reservation ledger, and the configured test-isolation shards pass.
+> Two Critical boundaries remain open: refund/quarantine terminalization trusts signature
+> status without rejecting transaction errors or matching the exact transfer, and successful
+> wipeout recovery archives primary payouts without reconstructing their cap consumption.
+> Production remains hard-blocked; see `DEVELOPMENT_REVIEW_2026-09-10.md`.
 
 ---
 
-## Current safety architecture — reviewed 2026-09-09
+## Current safety architecture — reviewed 2026-09-10
 
 The runtime supports exactly one pair selected by `config.SWAP_PAIR`: one classic SPL Token
 Program mint and one Nexus token register. Symbols are display metadata. Multi-pair routing and
@@ -116,14 +124,16 @@ Canonical pair inputs are `SOLANA_TOKEN_MINT`, `SOLANA_VAULT_ACCOUNT`, `SOLANA_T
 `SOLANA_TOKEN_DECIMALS`, `NEXUS_TOKEN_NAME`, `NEXUS_TOKEN_REGISTER_ADDRESS`,
 `NEXUS_TREASURY_ACCOUNT`, and `NEXUS_TOKEN_DECIMALS`.
 
-The dated notes above are baseline history. The [2026-09-09 review](DEVELOPMENT_REVIEW_2026-09-09.md)
-controls current evidence, with the [post-change report](POST_CHANGE_REVIEW_2026-09-07.md) retaining the repair snapshot. Both operator dispositions and payouts bind the exact
+The dated notes above are baseline history. The [2026-09-10 review](DEVELOPMENT_REVIEW_2026-09-10.md)
+controls current evidence, with the [2026-09-09 review](DEVELOPMENT_REVIEW_2026-09-09.md) and
+[post-change report](POST_CHANGE_REVIEW_2026-09-07.md) retaining their snapshots. Both operator dispositions and primary payouts bind the exact
 Nexus source `(txid, contract_id)`. Legacy identity remains held. Startup requires complete recovery
 before entering the exposure-producing loop; missing/zero checkpoints and incomplete scans abort.
 Mutable multi-page offset enumeration cannot establish completeness, in recovery or live polling.
 Positive credits may be retained, but requesting any page beyond offset zero holds the checkpoint.
 
-Payout preparation atomically freezes output/fee units and claims the source before RPC. The send
+Primary payout preparation atomically freezes output/fee units, reserves rolling-cap capacity and
+claims the source before RPC. The send
 helper submits only: it cannot fabricate a terminal source row or a pseudo-txid idempotency marker.
 Finalization requires successful finalized transaction evidence binding the exact source memo,
 signature, vault signer/source, mint, recipient and integer output to the frozen intent. A confirmation
@@ -131,6 +141,14 @@ status or memo alone is not settlement. Only then does one transaction archive t
 book its unique fee and remove that source. Missing/mismatched evidence, missing frozen terms,
 failed liquidity reads and ambiguous signatures hold rather than resubmit or refund.
 Only pending admission resolves a destination; it cannot reopen an operator hold.
+
+Refund and quarantine preparation also freezes the source and reserves cap capacity before RPC, but
+their current finalizer is weaker. It consumes `getSignatureStatuses` output, does not reject a
+non-null transaction `err`, may accept a merely `confirmed` status through the numeric confirmation
+fallback, and never matches the on-chain vault source, mint, recipient, integer amount or memo.
+The resulting terminal rows are therefore not authoritative settlement evidence. Database-loss
+recovery also reconstructs a paid primary source without reconstructing its recent budget event;
+successful recovery can report zero used capacity. Both paths remain Critical release blockers.
 
 ## Optional receipt publication state machine
 
@@ -184,11 +202,11 @@ flowchart TD
     ToBeRefunded -->|"no/invalid sender address"| ToBeQuarantined
     ToBeRefunded -->|Solana-token refund sent| RefundSent["refund sent, awaiting confirmation"]
     ToBeRefunded -->|send failed| ToBeQuarantined
-    RefundSent -->|finalized| RefundConfirmed["refund_confirmed ✓"]
+    RefundSent -->|"status helper accepts signature; exact transfer proof missing ⚠"| RefundConfirmed["refund_confirmed (not authoritative)"]
 
     ToBeQuarantined -->|Solana token moved to quarantine| QuarantineSent["quarantine sent, awaiting confirmation"]
     ToBeQuarantined -->|send failed| QuarantineFailed["quarantine failed ✗"]
-    QuarantineSent -->|finalized| QuarantineConfirmed["quarantine_confirmed ✓"]
+    QuarantineSent -->|"status helper accepts signature; exact transfer proof missing ⚠"| QuarantineConfirmed["quarantine_confirmed (not authoritative)"]
 
     Stale["age > STALE_DEPOSIT_QUARANTINE_SEC<br/>(while 'ready for processing')"] --> ToBeQuarantined
 ```
@@ -205,11 +223,11 @@ flowchart TD
 | **Processed** | One exact DEBIT contract passed the local confirmation/read-back checks; terminal evidence includes `txid` and `contract_id` | `processed_sigs` | `"debit_confirmed"` |
 | **ProcessedAsFees** | Amount after fees ≤ 0 | `processed_sigs` | `"processed, amount after fees <= 0"` |
 | **ToBeRefunded** | Validation failed or amount exceeds the configured cap; ambiguity alone never refunds | `unprocessed_sigs` | `"to be refunded"` |
-| **RefundSent** | Solana-token refund broadcast | `unprocessed_sigs` | `"refund sent, awaiting confirmation"` |
-| **RefundConfirmed** | Refund finalized | `refunded_sigs` | `"awaiting confirmation"` → `"refund_confirmed"` |
+| **RefundSent** | Exact refund source/output and cap reservation persisted; returned signature recorded after broadcast | `unprocessed_sigs` + `refunded_sigs` + `solana_payout_budget_events` | `"refund sent, awaiting confirmation"` |
+| **RefundConfirmed** | Current code accepts status-only evidence and can terminalize a failed or merely confirmed transaction without matching transfer terms; **Critical blocker** | `refunded_sigs` | `"awaiting confirmation"` → `"refund_confirmed"` |
 | **ToBeQuarantined** | Solana-side refund impossible or attempts spent | `unprocessed_sigs` | `"to be quarantined"` |
-| **QuarantineSent** | Solana token moved to `SOLANA_QUARANTINE_ACCOUNT` (`USDC_QUARANTINE_ACCOUNT` is the legacy alias) | `unprocessed_sigs` | `"quarantine sent, awaiting confirmation"` |
-| **QuarantineConfirmed** | Quarantine finalized | `quarantined_sigs` | `"awaiting confirmation"` → `"quarantine_confirmed"` |
+| **QuarantineSent** | Exact quarantine source/output and cap reservation persisted; returned signature recorded after broadcast to `SOLANA_QUARANTINE_ACCOUNT` (`USDC_QUARANTINE_ACCOUNT` is the legacy alias) | `unprocessed_sigs` + `quarantined_sigs` + `solana_payout_budget_events` | `"quarantine sent, awaiting confirmation"` |
+| **QuarantineConfirmed** | Current code accepts status-only evidence and can terminalize a failed or merely confirmed transaction without matching transfer terms; **Critical blocker** | `quarantined_sigs` | `"awaiting confirmation"` → `"quarantine_confirmed"` |
 | **QuarantineFailed** | Quarantine send failed | `unprocessed_sigs` | `"quarantine failed"` |
 
 > **Ambiguity is never treated as failure.** `debit_nexus_token_with_txid()` returns `(False, None)`
@@ -348,7 +366,9 @@ audited durable-intent workflow.
 | `nexus_transfer_intents` / `nexus_transfer_audit_events` | Immutable outbound Nexus debit inputs, exact `(source_txid, source_contract_id)` identity and operator evidence; legacy source identities remain held |
 | `reservations` | Cross-worker mutual exclusion on money actions |
 | `counters` | Atomic Nexus debit `reference` sequence |
-| `payouts` | Outbound Solana-token ledger for the rolling 24h cap |
+| `solana_payout_budget_events` | Append-only per-obligation `reserved` / `submitted` / `confirmed` / `released` events used by the rolling cap; recovery backfill is incomplete |
+| `payouts` | Legacy outbound Solana-token ledger included in rolling usage during in-place migration |
+| `swap_receipts` / `receipt_nxs_budget_events` | Immutable receipt obligations and lifetime expected-cost reservations; production receipt mode remains rejected |
 | `fee_entries` / `fee_summary` | Authoritative fee ledger |
 | `waterline_proposals` / `heartbeat` | Waterline plumbing and last known-good values |
 | `accounts` | Cached balances |
@@ -387,6 +407,9 @@ For a current Nexus payout the argument passed to `payout_attempt_key()` is comp
   `nexus_txid:<txid>:<contract_id>` and the resulting signature is stored on the exact queue row.
 - Strict memo parsing and positive source/output reconstruction preserve the exact paid source;
   sparse, legacy or ambiguous evidence cannot create a terminal marker or release a liability.
+- Forward primary payouts, refunds and quarantine sends reserve one durable rolling-cap obligation
+  before RPC. Unknown outcomes retain capacity. Refund/quarantine terminalization still lacks exact
+  successful transaction proof, and wipeout recovery does not reconstruct primary cap events.
 - Transfer intents, operator selection and finalization bind the exact source contract. Finalization
   archives and removes only that source, preserving siblings and rejecting conflicting evidence.
 - Mutable multi-page Nexus offsets hold live checkpoints and cannot establish recovery completeness.
@@ -490,9 +513,18 @@ SELECT status, COUNT(*) FROM unprocessed_txids GROUP BY status;
 SELECT sig, reference, status FROM unprocessed_sigs
 WHERE status IN ('debit in flight','debit unverified');
 
--- rolling 24h outbound Solana-token units vs cap
-SELECT COALESCE(SUM(amount_usdc_units),0) FROM payouts
-WHERE timestamp >= strftime('%s','now') - 86400;
+-- inspect unresolved outbound Solana-token cap reservations
+SELECT obligation_id, kind, amount_usdc_units, timestamp
+FROM solana_payout_budget_events AS r
+WHERE event = 'reserved'
+  AND NOT EXISTS (
+    SELECT 1 FROM solana_payout_budget_events AS t
+    WHERE t.obligation_id = r.obligation_id AND t.event IN ('confirmed','released')
+  )
+ORDER BY timestamp;
+
+-- canonical rolling usage also merges confirmed events and legacy payout rows;
+-- use state_db.payout_budget_used(86400) rather than summing one table by hand.
 
 -- legacy-named Nexus quarantine records (automatic moves are disabled)
 SELECT txid, amount_usdd, status FROM quarantined_txids ORDER BY timestamp DESC;
@@ -500,7 +532,9 @@ SELECT txid, amount_usdd, status FROM quarantined_txids ORDER BY timestamp DESC;
 
 Alerts (`ALERT_WEBHOOK_URL` / `ALERT_COMMAND`) fire on: `backing_deficit_pause`,
 `unbacked_usdd_surplus`, `heartbeat_unreadable`, `heartbeat_asset_invalid`,
-`insufficient_vault_liquidity`, `payout_cap_exceeded`, `swap_over_cap`, `usdd_quarantined`.
+`insufficient_vault_liquidity`, `swap_over_cap`, `usdd_quarantined`. The new payout-budget refusal
+paths emit structured logs but no `payout_cap_exceeded` alert, and a cap-held primary row remains
+`ready for processing`; adding an actionable alert and dashboard-visible hold is an open gate.
 
 ---
 

@@ -1,11 +1,11 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
-**Date:** 2026-09-09
-**Documentation/code comparison baseline:** `1116a4a867553fa4d37ea338f121ee56aa702075` (`main`, matching `origin/main` at review start). Runtime, tests, dependencies and CI are byte-for-byte unchanged from the `917505b74f0b095d7c6ed202f55d4b94fb1378a5` implementation reviewed on 2026-09-08; the intervening commit is documentation only. This review refresh is local and uncommitted.
+**Date:** 2026-09-10
+**Documentation/code comparison baseline:** `3bd8f23f60c1658816ddb986c701ec81a6777143` (`main`, matching `origin/main` at review start), compared with the `1116a4a867553fa4d37ea338f121ee56aa702075` source snapshot reviewed on 2026-09-09. The delta contains ten commits, 25 files, 1,706 insertions and 292 deletions.
 **Status:** Current issue register and repair priority for `swapService`
-**Architecture-plan update:** 2026-09-09 (source identity, atomic fees and recovery safety remain locally repaired; the global payout-budget protocol, receipt-spend boundary and test isolation are the next implementation gates; provider-v2 remains planned).
+**Architecture-plan update:** 2026-09-10 (forward-path payout reservations, receipt-spend containment and test isolation improved locally; exact refund/quarantine proof and payout-budget recovery remain Critical blockers; provider-v2 remains planned).
 
-This document replaces the old June code-level audit as the current engineering evaluation. Historical findings and their original line references remain available in [`AUDIT_FINDINGS.md`](AUDIT_FINDINGS.md) and [`RISK_ASSESSMENT.md`](RISK_ASSESSMENT.md). The [2026-09-09 independent review](DEVELOPMENT_REVIEW_2026-09-09.md) is the current executed evidence. The [2026-09-08 review](DEVELOPMENT_REVIEW_2026-09-08.md) and [post-change report](POST_CHANGE_REVIEW_2026-09-07.md) retain their snapshot results. Dated sections 10–13 below are historical snapshots, not current open-finding assertions. Current candidate verification must include the documentation and index-aware inventory; no live-chain approval is implied.
+This document replaces the old June code-level audit as the current engineering evaluation. Historical findings and their original line references remain available in [`AUDIT_FINDINGS.md`](AUDIT_FINDINGS.md) and [`RISK_ASSESSMENT.md`](RISK_ASSESSMENT.md). The [2026-09-10 independent review](DEVELOPMENT_REVIEW_2026-09-10.md) is the current executed evidence. The [2026-09-09 review](DEVELOPMENT_REVIEW_2026-09-09.md) and [post-change report](POST_CHANGE_REVIEW_2026-09-07.md) retain their snapshot results. Dated sections 10–15 below are historical snapshots, not current open-finding assertions. Current candidate verification must include the documentation and index-aware inventory; no live-chain approval is implied.
 
 ## 1. Executive verdict
 
@@ -61,10 +61,10 @@ evidence remains held. These are local code repairs, not target-chain production
 | Atomic fee and terminal source state | Implemented with rollback, replay and frozen-term fixtures |
 | Installed-SDK recovery request construction | Signature-typed transaction lookups and recovery cursor are locally verified through real SDK encoders with a mocked provider; target-chain acceptance remains required |
 | Exact mixed-decimal money math | Existing local regression coverage retained; target-chain matrix required |
-| Rolling Solana payout cap | **Locally repaired:** primary payouts plus Solana refunds/quarantine sends atomically reserve their frozen exact payout before RPC, retain capacity across unknown outcomes, record submission identity and settle only from exact confirmation. Target-chain timeout/crash/finality acceptance remains required |
+| Rolling Solana payout cap | **Partial / Critical blockers:** forward paths reserve before RPC, but refund/quarantine finalization trusts signature status without checking transaction success or transfer terms, and successful wipeout reconstruction does not rebuild recent cap consumption |
 | Optional public receipt assets | Atomic exact obligation/readback implemented; **keep disabled** pending NXS spend controls, registration migration and target-node create/query acceptance |
-| Complete local engineering gate | Installed-dependency default order passed 285 tests and 33 subtests; standalone recovery and the receipt→payout→fee→SDK order now pass under the real pinned SDK/configuration boundary |
-| Exact-head CI and live devnet/testnet matrix | Committed `1116a4a` matches `origin/main`; no live-chain matrix or exact-candidate CI exists for this documentation refresh |
+| Complete local engineering gate | Installed-dependency default order passed 288 tests and 33 subtests; standalone recovery and both configured isolation orders pass under the real pinned SDK/configuration boundary |
+| Exact-head CI and live devnet/testnet matrix | Review-start `3bd8f23` matched `origin/main`, but GitHub exposed no CI run for that SHA; no live-chain matrix was run |
 
 ---
 
@@ -212,24 +212,42 @@ independently verified snapshot/cursor protocol, not removal of this refusal.
 **Severity:** Critical deployment blocker
 **Priority:** P0 — enforce before real-fund admission
 
-**Current status:** **locally repaired; target-chain acceptance remains required.** The primary
-Nexus→Solana path atomically reserves the frozen exact payout before RPC. Solana refund
-and quarantine paths now use the same append-only obligation ledger keyed by their exact
-incoming Solana signature: the source, payout units and rolling-cap reservation are persisted
-in one SQLite transaction before RPC; a returned signature is atomically recorded; only its
-exact confirmed status settles the obligation and source terminal state. A failed/ambiguous
-submission stays held and continues to consume capacity. The old read-then-send-then-
-best-effort-record helper is disabled for runtime financial use.
+**Current status:** **partially repaired; two Critical acceptance failures remain.** The primary
+Nexus→Solana path and new Solana refund/quarantine paths atomically reserve frozen output before
+RPC. Pending and unknown obligations consume capacity, submission identity is append-only, and
+the old read/send/best-effort-record helper is disabled for runtime callers. Concurrency and
+post-send database-failure fixtures pass.
 
-Focused regressions cover durable refund settlement, quarantine cap refusal, primary cap
-exhaustion, reservation/submission/confirmation identity, concurrency and a post-send
-submission-ledger failure. The target-chain timeout-after-acceptance, crash/restart and
-finality matrix remains a release gate.
+The refund/quarantine confirmation path does not meet the stated settlement boundary.
+`get_signatures_confirmation()` accepts a status without inspecting its `err` field and, even when
+deposit commitment is `finalized`, also accepts a merely `confirmed` status when its numeric
+confirmation count meets the threshold. `check_sig_confirmations()` and
+`check_quarantine_confirmations()` then call `confirm_solana_sig_disposition()`, which compares the
+signature and local frozen amounts but never reads the transaction. A failed transaction—or an
+unrelated finalized signature written into local state—can therefore archive the disposition,
+book the fee and delete the user liability without proving the vault transfer, mint, destination,
+amount or memo. The 2026-09-10 offline probe reproduced terminalization from a finalized status
+whose `err` contained an instruction failure, and separately reproduced confirmed-not-finalized
+acceptance.
 
-**Required exit:** claim/reserve cap capacity atomically with the frozen exact payout before RPC;
-retain it across unknown outcomes; settle it only from exact finalized evidence; and use the same
-protocol for primary payouts, refunds and quarantine sends. Cover concurrency, rolling-window,
-timeout-after-acceptance, crash/restart and payout-ledger failure.
+The rolling cap is also not reconstruction-safe. Startup wipeout recovery can identify and archive
+an exact historical primary payout, but calls `prepare_nexus_payout()` without the cap argument.
+`finalize_nexus_credit()` deliberately skips budget settlement when no reservation exists. The
+executed wipeout probe returned `recovery_complete=True`, reconstructed the paid payout, reported
+zero budget usage, and admitted another payout equal to the full cap. In-place upgrades count the
+legacy `payouts` table; database-loss reconstruction does not recreate either ledger.
+
+Cap exhaustion now produces structured logs only. The primary credit remains `ready for processing`,
+which is not in the dashboard issue-status set, and no `payout_cap_exceeded` alert exists despite the
+state-machine guide listing one. This does not itself spend funds, but it hides a production hold.
+
+**Required exit:** require successful finalized transaction evidence for every payout/refund/
+quarantine settlement, matching signature, vault authority/source, configured mint, exact recipient,
+integer output and versioned memo. Reject non-null transaction errors and confirmed-only status.
+Rebuild conservative cap events from complete exact chain evidence before recovery can return green;
+if the rolling window cannot be proven complete, retain an exposure pause/manual budget hold. Add
+failed-transaction, wrong-transfer, wrong-mint/destination/amount/memo, confirmed-only, wipeout,
+upgrade, rolling-window and alert-delivery regressions.
 
 ---
 
@@ -497,11 +515,12 @@ pass. Do not treat the pinned documentation as proof of the configured live node
 do not replace dotenv, and payout regressions import runtime modules directly instead of importing
 the critical-safety module for its global state. Scanner fixtures use parseable real-SDK signatures.
 
-The installed-dependency default suite passes 285 tests and 33 subtests. The standalone recovery
+The installed-dependency default suite passes 288 tests and 33 subtests. The standalone recovery
 module passes 15 tests and 8 subtests; recovery→SDK passes 16 tests and 8 subtests; and the
-receipt→payout→fee→SDK sequence passes 57 tests. CI now runs standalone recovery and the latter
+receipt→payout→fee→SDK sequence passes 59 tests. CI is configured to run standalone recovery and the latter
 sequence after the full suite. These checks prevent a future fake-module injection, invalid fixture
-identity or collection-order dependency from being masked by the default order.
+identity or collection-order dependency from being masked by the default order. GitHub did not expose
+an Actions run for review-start SHA `3bd8f23`; local success is not an exact-head CI claim.
 
 ---
 
@@ -561,7 +580,7 @@ persist intent -> execute once -> record returned identity ->
 resolve ambiguous outcome against chain -> finalize local state
 ```
 
-A timeout is not failure, an empty bounded scan is not absence, and a warning is not a safety control. This rule already protects the repaired Solana→Nexus debit path; it must also govern Nexus refunds, quarantine transfers, fee movements and any future automated maintenance action.
+A timeout is not failure, an empty bounded scan is not absence, a finalized signature is not proof of a successful intended transfer, and a warning is not a safety control. This rule protects the repaired primary payout evidence path; it must also govern Solana refunds/quarantine transfers, Nexus dispositions, fee movements and any future automated maintenance action.
 
 ### Current configurable pair and remaining architecture work
 
@@ -656,9 +675,10 @@ account-history, real finality and crash/restart matrix remain release gates.
 5. Remove collection-time dependency-module replacement and process-global environment leakage;
    require the payout/recovery/receipt/SDK shards to pass independently and in multiple orders.
 
-**Local engineering exit:** the default installed-dependency suite plus standalone recovery,
-recovery→SDK and receipt→payout→fee→SDK probes pass with the real pinned SDK; CI enforces the
-standalone recovery and receipt→payout→fee→SDK checks. The mixed-decimal contract still requires
+**Local engineering exit:** the 288-test default installed-dependency suite plus standalone recovery,
+recovery→SDK and 59-test receipt→payout→fee→SDK probes pass with the real pinned SDK; CI is configured
+for the standalone recovery and receipt→payout→fee→SDK checks, but exact-head remote execution must
+still be observed. The mixed-decimal contract still requires
 target-chain evidence in Batch 4.
 
 ### Batch 2 — Durable completed-state model and fail-closed reconciliation **PARTIAL**
@@ -705,25 +725,28 @@ semantics are unproven; local code holds whenever those properties cannot be est
 **Remaining exit:** run the target-node matrix at every acceptance and crash boundary. Review and
 resolve pre-upgrade ambiguity from real chain evidence; do not relabel legacy rows to bypass a hold.
 
-### Batch 3A — One global Solana payout-budget protocol **LOCALLY REPAIRED / LIVE GATE OPEN**
+### Batch 3A — One global Solana payout-budget protocol **PARTIAL / CRITICAL GATES OPEN**
 
 1. ✅ Add an append-only reservation/settlement ledger keyed by the exact durable obligation, not by
    a helper invocation or process-local counter.
 2. ✅ Reserve rolling-window capacity in the same SQLite transaction that freezes payout terms and
    claims the source, before any RPC. Pending, submitted and outcome-unknown obligations continue
    to consume capacity.
-3. ✅ Convert a reservation to confirmed spend only from exact finalized payout evidence. Release it
-   only from authoritative non-execution evidence or an attributable reviewed manual disposition.
+3. **Partial:** primary payouts use exact finalized transaction evidence. Refund/quarantine paths
+   currently trust status-only evidence that can include a failed or merely confirmed transaction.
+   Release capacity only from authoritative non-execution or reviewed disposition.
 4. ✅ Route primary payouts and every refund/quarantine token send through this protocol. The former
    read-then-send-then-best-effort-record helper is disabled; ledger failure holds the obligation.
-5. ✅ Cover two-worker contention, duplicate invocation, rolling-window boundaries and
-   database-write failure with local fixtures; target-chain timeout-after-acceptance,
-   crash/restart and confirmation/finality behavior remain Batch 4 evidence.
+5. **Partial:** cover two-worker contention and database-write failure locally. Add exact
+   refund/quarantine transfer proof and reconstruct recent confirmed spend after database loss;
+   then run target-chain timeout-after-acceptance, crash/restart and finality tests.
 
-**Remaining exit:** execute the target-chain matrix for cap exhaustion, timeout-after-acceptance,
-crash/restart and exact finality. Aggregate reserved plus finalized outbound units must not exceed
-the configured window cap under concurrency or restart, and every accepted send must remain
-durably attributable when its response or final local write is lost.
+**Remaining exit:** a failed or wrong Solana transaction cannot terminalize any disposition; successful
+recovery either reconstructs all recent confirmed cap spend or stays paused. Then execute the
+target-chain matrix for cap exhaustion, timeout-after-acceptance, crash/restart and exact finality.
+Aggregate reserved plus finalized outbound units must not exceed the configured window cap under
+concurrency, upgrade, database restore or restart, and every accepted send must remain attributable
+when its response or final local write is lost. Cap refusal must emit an actionable alert and visible hold.
 
 ### Batch 3B — Receipt publication cost and admission boundary **OPEN; FEATURE DEFAULT OFF**
 
@@ -757,9 +780,9 @@ unless reconciliation explicitly returns `healthy=True`.
 
 ### Batch 5 — Production operational gates
 
-1. **Local control repaired:** explicit `SWAP_PRODUCTION_MODE` requires positive per-swap/daily
-   payout-cap values and an alert route. All automated Solana payouts now reserve the cap atomically;
-   refund/quarantine timeout/crash/finality semantics remain target-chain acceptance evidence.
+1. **Partial:** explicit `SWAP_PRODUCTION_MODE` requires positive per-swap/daily payout-cap values and
+   an alert route. Forward paths reserve atomically, but refund/quarantine settlement and database-loss
+   cap reconstruction fail Batch 3A. Production remains blocked before target-chain acceptance.
 2. ✅ Require configured Solana and Nexus quarantine destinations before production startup; test at least one alert channel operationally.
 3. ✅ Refuse production mode when mandatory controls are absent, including the required `NEXUS_SESSION` when `NEXUS_MULTIUSER=true`.
 4. Complete the operator hold-resolution workflow with evidence, authorization and audit.
@@ -1012,3 +1035,16 @@ budget protocol. Receipt mode remains default-disabled without an NXS spend boun
 acceptance. Test isolation is still open: the documented alternate order again fails three payout
 tests, and the recovery module alone fails two scanner fixtures under the installed SDK even though
 the default order is green. No live financial or Nexus asset mutation was run.
+
+## 15. Independent review update — 2026-09-10 CEST
+
+The current evidence review at [`DEVELOPMENT_REVIEW_2026-09-10.md`](DEVELOPMENT_REVIEW_2026-09-10.md)
+examines review-start `3bd8f23`. Forward payout-cap reservation, default-off receipt NXS budgeting and
+test isolation improved. The installed-dependency gate passes 288 tests and 33 subtests; all configured
+isolation shards pass.
+
+Production remains hard-blocked. Executed offline probes show that refund/quarantine settlement can
+archive a liability from failed or merely confirmed signature status without reading exact transfer
+evidence. Successful wipeout reconstruction also omits the reconstructed payout from cap usage and can
+immediately admit another full-cap obligation. Cap refusal has no critical alert and a primary held row
+remains outside dashboard issue statuses. No live financial or Nexus asset mutation was run.
