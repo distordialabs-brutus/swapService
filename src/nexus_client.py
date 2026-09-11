@@ -1004,28 +1004,35 @@ def check_unconfirmed_debits(min_confirmations: int, timeout: int) -> int:
         receipt_asset_name = None
         if getattr(config, "NEXUS_SWAP_RECEIPTS_ENABLED", False):
             from . import swap_receipts
-            expected_owner = swap_receipts.expected_provider_owner()
-            if not expected_owner:
-                _log("nexus_receipt_owner_held", level=logging.WARNING, sig=sig, txid=txid,
-                     reason="provider_registration_owner_unavailable")
-                continue
             try:
-                receipt_payload = swap_receipts.build_receipt(
-                    source_signature=sig,
-                    solana_mint=str(config.SWAP_PAIR.solana.mint),
-                    solana_vault=str(config.SWAP_PAIR.solana.vault_account),
-                    nexus_token=str(config.SWAP_PAIR.nexus.register_address),
-                    nexus_account=nexus_destination,
-                    output_txid=txid_text,
-                    output_contract_id=exact_contracts[0].contract_id,
-                    output_units=nexus_out_base,
-                    reference=reference,
-                )
-                receipt_asset_name = swap_receipts.receipt_name(sig)
-            except ValueError as exc:
-                _log("nexus_receipt_evidence_held", level=logging.WARNING, sig=sig,
-                     txid=txid, reason=str(exc))
-                continue
+                expected_owner = swap_receipts.expected_provider_owner()
+            except Exception as exc:
+                _log("nexus_receipt_owner_unavailable", level=logging.WARNING, sig=sig, txid=txid,
+                     reason="provider_registration_owner_lookup_failed", error=str(exc))
+            if not expected_owner:
+                # Receipt publication is an optional, separately contained NXS-spending
+                # extension. Its provider-record availability must never block archival
+                # of an otherwise exact, confirmed bridge payout. Without a frozen owner
+                # we also cannot safely fabricate an obligation for a later create pass.
+                _log("nexus_receipt_publication_skipped", level=logging.WARNING, sig=sig, txid=txid,
+                     reason="provider_registration_owner_unavailable")
+            else:
+                try:
+                    receipt_payload = swap_receipts.build_receipt(
+                        source_signature=sig,
+                        solana_mint=str(config.SWAP_PAIR.solana.mint),
+                        solana_vault=str(config.SWAP_PAIR.solana.vault_account),
+                        nexus_token=str(config.SWAP_PAIR.nexus.register_address),
+                        nexus_account=nexus_destination,
+                        output_txid=txid_text,
+                        output_contract_id=exact_contracts[0].contract_id,
+                        output_units=nexus_out_base,
+                        reference=reference,
+                    )
+                    receipt_asset_name = swap_receipts.receipt_name(sig)
+                except ValueError as exc:
+                    _log("nexus_receipt_publication_skipped", level=logging.WARNING, sig=sig,
+                         txid=txid, reason="invalid_receipt_evidence", error=str(exc))
 
         finalized = state_db.finalize_confirmed_solana_payout(
             sig=sig,

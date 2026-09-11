@@ -418,3 +418,34 @@ def test_confirmation_path_freezes_chain_evidence_and_authoritative_provider_own
     assert payload["output_contract_id"] == "7"
     assert payload["output_units"] == "1898000"
     assert payload["reference"] == "77"
+
+
+def _raise_receipt_owner_lookup_error():
+    raise RuntimeError("provider registration unavailable")
+
+
+@pytest.mark.parametrize("owner_lookup", (lambda: None, _raise_receipt_owner_lookup_error))
+def test_unavailable_receipt_owner_does_not_hold_exact_confirmed_payout(db, monkeypatch, owner_lookup):
+    """Receipt publication availability cannot block an already-proven bridge debit."""
+    seed_confirmable_deposit()
+    evidence = nexus_client.TransferDebitEvidence(
+        remote_txid="nexus-output-txid", contract_id=7,
+        from_address=str(config.NEXUS_TOKEN_REGISTER_ADDRESS),
+        to_address="nexus-recipient", amount_usdd_units=1_898_000, reference="77",
+    )
+    monkeypatch.setattr(
+        nexus_client, "get_transactions_confirmations",
+        lambda txids: nexus_client.BatchLookup({"nexus-output-txid": 10}, True),
+    )
+    monkeypatch.setattr(
+        nexus_client, "get_nexus_transfer_debits_by_txid",
+        lambda txid: nexus_client.BatchLookup({txid: [evidence]}, True),
+    )
+    monkeypatch.setattr(swap_receipts, "expected_provider_owner", owner_lookup)
+
+    assert nexus_client.check_unconfirmed_debits(10, 8) == 1
+    assert state_db.is_processed_sig("solana-signature-full")
+    assert not state_db.is_unprocessed_sig("solana-signature-full")
+    # No owner was authoritatively frozen, so a later publication pass must not invent
+    # a receipt obligation for this historical payout.
+    assert state_db.get_swap_receipt("solana-signature-full") is None
