@@ -241,6 +241,23 @@ def test_primary_cap_refusal_creates_operator_visible_held_credit(tmp_path):
         assert issue["operator_action"] == "wait for cap capacity; do not retry manually"
 
 
+def test_dashboard_summary_uses_durable_cap_exposure_for_a_held_payout(tmp_path):
+    """The cap bar must include held reservations, not only legacy completed-payout rows."""
+    with isolated_state(tmp_path), patch.object(
+        config, "DAILY_PAYOUT_CAP_SOLANA_UNITS", 1_000, create=True
+    ):
+        assert state_db.reserve_solana_payout_budget(
+            obligation_id="nexus:cap-held:7",
+            kind="nexus_payout",
+            amount_usdc_units=100,
+            cap_units=1_000,
+        )
+        summary = dashboard.api_summary()
+
+    assert summary["payout_24h_solana"] == 0.0001
+    assert summary["payout_cap_pct"] == 10.0
+
+
 def queue_frozen_payout(*, contract_id=7, signature: str | None = PAYOUT_SIGNATURE):
     state_db.add_unprocessed_txid(
         txid=NEXUS_TXID,

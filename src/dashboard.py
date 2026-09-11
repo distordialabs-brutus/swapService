@@ -147,12 +147,19 @@ def api_summary() -> dict:
         cap = int(getattr(config, "DAILY_PAYOUT_CAP_SOLANA_UNITS", 0) or 0)
     except Exception:
         cap = 0
-    spent = snap.get("payouts_24h_units")
-    if spent is None:
-        spent = _scalar(
-            "SELECT COALESCE(SUM(amount_usdc_units),0) FROM payouts WHERE timestamp >= ?",
-            (now - 86400,),
-        )
+    # The durable ledger includes held/reserved exposure and reconstructed payouts;
+    # the legacy payouts table alone can understate the rolling cap after a crash.
+    try:
+        spent = state_db.payout_budget_used(86400)
+    except Exception:
+        # Preserve read-only dashboard availability if an old/corrupt database cannot
+        # yet expose the durable ledger; never let a UI query affect money-path state.
+        spent = snap.get("payouts_24h_units")
+        if spent is None:
+            spent = _scalar(
+                "SELECT COALESCE(SUM(amount_usdc_units),0) FROM payouts WHERE timestamp >= ?",
+                (now - 86400,),
+            )
 
     snap_age = (now - int(snap["timestamp"])) if snap.get("timestamp") else None
 
