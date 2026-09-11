@@ -61,7 +61,7 @@ evidence remains held. These are local code repairs, not target-chain production
 | Atomic fee and terminal source state | Implemented with rollback, replay and frozen-term fixtures |
 | Installed-SDK recovery request construction | Signature-typed transaction lookups and recovery cursor are locally verified through real SDK encoders with a mocked provider; target-chain acceptance remains required |
 | Exact mixed-decimal money math | Existing local regression coverage retained; target-chain matrix required |
-| Rolling Solana payout cap | **Partial / Critical blockers:** forward paths reserve before RPC, but refund/quarantine finalization trusts signature status without checking transaction success or transfer terms, and successful wipeout reconstruction does not rebuild recent cap consumption |
+| Rolling Solana payout cap | **Partial / Critical external gates:** forward paths reserve before RPC; refund/quarantine and primary-payout settlement require exact finalized transfer evidence; recovery rebuilds recent cap consumption; cap exhaustion creates a critical operator alert and dashboard/API hold. Target-chain timeout/crash/finality proof remains required |
 | Optional public receipt assets | Atomic exact obligation/readback implemented; **keep disabled** pending NXS spend controls, registration migration and target-node create/query acceptance |
 | Complete local engineering gate | Installed-dependency default order passed 288 tests and 33 subtests; standalone recovery and both configured isolation orders pass under the real pinned SDK/configuration boundary |
 | Exact-head CI and live devnet/testnet matrix | Review-start `3bd8f23` matched `origin/main`, but GitHub exposed no CI run for that SHA; no live-chain matrix was run |
@@ -212,7 +212,7 @@ independently verified snapshot/cursor protocol, not removal of this refusal.
 **Severity:** Critical deployment blocker
 **Priority:** P0 — enforce before real-fund admission
 
-**Current status:** **partially repaired; local cap reconstruction is enforced, but alerting and external acceptance remain Critical gates.**
+**Current status:** **partially repaired; local cap reconstruction, exact settlement proof and actionable cap holds are enforced, but external acceptance remains a Critical gate.**
 The primary Nexus→Solana path and new Solana refund/quarantine paths atomically reserve frozen output
 before RPC. Pending and unknown obligations consume capacity, submission identity is append-only, and
 the old read/send/best-effort-record helper is disabled for runtime callers. Concurrency and
@@ -236,13 +236,15 @@ already describe the same obligation. The wipeout regression proves recovered sp
 cap and prevents admission of a second equal-cap obligation. In-place upgrades continue to count the
 legacy `payouts` table without double-counting the durable confirmed event.
 
-Cap exhaustion now produces structured logs only. The primary credit remains `ready for processing`,
-which is not in the dashboard issue-status set, and no `payout_cap_exceeded` alert exists despite the
-state-machine guide listing one. This does not itself spend funds, but it hides a production hold.
+Cap exhaustion atomically marks the exact primary credit `payout cap held` without freezing
+payout terms or consuming capacity. The capped credit remains eligible only for the same durable
+claim path, emits the rate-limited critical `solana_payout_cap_held` operator alert, and appears in
+the read-only dashboard/API with its hold reason and a no-manual-retry instruction. A later successful
+reservation clears the hold and proceeds normally; an operator cannot bypass the rolling limit by
+reclassifying the credit.
 
 **Remaining exit:** verify the recovery scan, restore and rolling-window boundary matrix against the
-target chain, including timeout-after-acceptance, crash/restart and exact finality. Add an actionable
-cap-held alert and visible dashboard/API hold before production admission.
+target chain, including cap exhaustion, timeout-after-acceptance, crash/restart and exact finality.
 
 ---
 
@@ -733,11 +735,11 @@ resolve pre-upgrade ambiguity from real chain evidence; do not relabel legacy ro
    authoritative non-execution or reviewed disposition.
 4. ✅ Route primary payouts and every refund/quarantine token send through this protocol. The former
    read-then-send-then-best-effort-record helper is disabled; ledger failure holds the obligation.
-5. **Partial:** two-worker contention, database-write failure, exact refund/quarantine proof and
-   wipeout rolling-cap reconstruction are covered locally. Recovery re-enumerates the full current
-   cap window when needed and recreates only exact finalized primary-payout events with their chain
-   timestamps; incomplete/conflicting evidence blocks green startup. Run target-chain
-   timeout-after-acceptance, crash/restart and finality tests, then add the cap-held alert/dashboard state.
+5. ✅ Two-worker contention, database-write failure, exact refund/quarantine proof and wipeout
+   rolling-cap reconstruction are covered locally. Recovery re-enumerates the full current cap
+   window when needed and recreates only exact finalized primary-payout events with their chain
+   timestamps; incomplete/conflicting evidence blocks green startup. Cap exhaustion atomically creates
+   a retryable `payout cap held` dashboard/API issue and emits a rate-limited critical operator alert.
 
 **Remaining exit:** a failed or wrong Solana transaction cannot terminalize any disposition; successful
 recovery either reconstructs all recent confirmed cap spend or stays paused. Then execute the

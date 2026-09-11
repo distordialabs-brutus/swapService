@@ -184,7 +184,8 @@ def test_primary_payout_reserves_cap_before_rpc_and_holds_when_exhausted(tmp_pat
 
         send.assert_not_called()
         row = state_db.get_unprocessed_txids_as_dicts()[0]
-        assert row["comment"] == swap_nexus.NEXUS_STATUS_READY
+        assert row["comment"] == swap_nexus.NEXUS_STATUS_PAYOUT_CAP_HOLD
+        assert row["hold_reason"] == "rolling Solana payout cap exhausted"
         assert state_db.payout_budget_used(86400) == 0
 
 

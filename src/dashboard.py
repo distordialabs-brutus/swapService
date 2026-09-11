@@ -55,7 +55,7 @@ SIG_ISSUE_STATUSES = (
 )
 TXID_ISSUE_STATUSES = (
     "quarantined", "refund pending", "refund held for operator review", "collecting refund",
-    "trade balance to be checked", "sending", "sig created, awaiting confirmations",
+    "trade balance to be checked", "payout cap held", "sending", "sig created, awaiting confirmations",
 )
 SIG_OPERATOR_ACTIONS = {
     "debit in flight": "verify Nexus debit before any disposition",
@@ -75,6 +75,7 @@ TXID_OPERATOR_ACTIONS = {
     "refund pending": "do not retry Nexus refund; inspect on-chain evidence",
     "collecting refund": "do not retry Nexus refund; inspect on-chain evidence",
     "trade balance to be checked": "verify receival mapping and treasury balance before disposition",
+    "payout cap held": "wait for cap capacity; do not retry manually",
     "sending": "verify Solana payout by Nexus txid memo before any disposition",
     "sig created, awaiting confirmations": "verify Solana payout before any disposition",
     "quarantined": "verify payout outcome before any disposition",

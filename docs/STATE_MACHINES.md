@@ -133,8 +133,11 @@ Mutable multi-page offset enumeration cannot establish completeness, in recovery
 Positive credits may be retained, but requesting any page beyond offset zero holds the checkpoint.
 
 Primary payout preparation atomically freezes output/fee units, reserves rolling-cap capacity and
-claims the source before RPC. The send
-helper submits only: it cannot fabricate a terminal source row or a pseudo-txid idempotency marker.
+claims the source before RPC. If the cap has no capacity, the source instead becomes the retryable
+`payout cap held` state with no frozen payout terms or budget event; it emits a rate-limited critical
+operator alert and remains a dashboard/API issue until that same preparation path can reserve capacity.
+The send helper submits only: it cannot fabricate a terminal source row or a pseudo-txid idempotency
+marker.
 Finalization requires successful finalized transaction evidence binding the exact source memo,
 signature, vault signer/source, mint, recipient and integer output to the frozen intent. A confirmation
 status or memo alone is not settlement. Only then does one transaction archive terminal evidence,

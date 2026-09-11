@@ -3227,6 +3227,8 @@ def prepare_nexus_payout(
     payout_solana_units: int,
     payout_fee_nexus_units: int,
     payout_cap_solana_units: int | None = None,
+    payout_cap_hold_status: str | None = None,
+    payout_cap_hold_reason: str | None = None,
 ) -> bool:
     """Atomically freeze, cap-reserve, and claim one exact Nexus credit for RPC."""
     txid = str(txid or "").strip()
@@ -3246,6 +3248,17 @@ def prepare_nexus_payout(
     if payout_cap_solana_units is not None:
         _require_solana_payout_budget_units(
             payout_cap_solana_units, "cap", positive=False
+        )
+    if (payout_cap_hold_status is None) != (payout_cap_hold_reason is None):
+        raise ValueError("Nexus payout cap hold status and reason must be provided together")
+    if payout_cap_hold_status is not None:
+        if payout_cap_hold_reason is None:
+            raise ValueError("Nexus payout cap hold reason is required")
+        payout_cap_hold_status = _require_solana_payout_budget_text(
+            payout_cap_hold_status, "cap hold status", 200
+        )
+        payout_cap_hold_reason = _require_solana_payout_budget_text(
+            payout_cap_hold_reason, "cap hold reason", 500
         )
 
     conn = sqlite3.connect(DB_PATH)
@@ -3280,7 +3293,7 @@ def prepare_nexus_payout(
             conn.commit()
             return False
         status, stored_destination, stored_source_units, stored_payout, stored_fee = row
-        if (status != "ready for processing"
+        if (status not in ("ready for processing", payout_cap_hold_status)
                 or stored_destination != receival_account
                 or type(stored_source_units) is not int
                 or stored_source_units != amount_usdd_units
@@ -3297,14 +3310,25 @@ def prepare_nexus_payout(
             window_sec=86400,
             now=int(time.time()),
         ):
+            if payout_cap_hold_status is not None:
+                held = conn.execute(
+                    """UPDATE unprocessed_txids SET status = ?, hold_reason = ?
+                       WHERE txid = ? AND contract_id = ?
+                         AND status IN ('ready for processing', ?)
+                         AND payout_solana_units IS NULL AND payout_fee_nexus_units IS NULL""",
+                    (payout_cap_hold_status, payout_cap_hold_reason, txid, contract_id,
+                     payout_cap_hold_status),
+                ).rowcount
+                if held != 1:
+                    raise RuntimeError("Nexus payout source changed during cap hold")
             conn.commit()
             return False
         updated = conn.execute(
             """UPDATE unprocessed_txids
-               SET payout_solana_units = ?, payout_fee_nexus_units = ?, status = 'sending'
-               WHERE txid = ? AND contract_id = ? AND status = 'ready for processing'
+               SET payout_solana_units = ?, payout_fee_nexus_units = ?, status = 'sending', hold_reason = NULL
+               WHERE txid = ? AND contract_id = ? AND status IN ('ready for processing', ?)
                      AND payout_solana_units IS NULL AND payout_fee_nexus_units IS NULL""",
-            (payout_solana_units, payout_fee_nexus_units, txid, contract_id),
+            (payout_solana_units, payout_fee_nexus_units, txid, contract_id, payout_cap_hold_status),
         ).rowcount
         conn.commit()
         return updated == 1

@@ -13,7 +13,7 @@ from unittest.mock import patch
 import pytest
 from solders.signature import Signature
 
-from src import config, nexus_client, solana_client, state_db, swap_nexus
+from src import alerts, config, dashboard, nexus_client, solana_client, state_db, swap_nexus
 from src.nexus_memo import NexusPayoutEvidence
 
 
@@ -199,6 +199,46 @@ def test_disposition_never_settles_status_or_inexact_transaction(tmp_path, trans
     assert status == ("awaiting confirmation",)
     assert pending == ("refund sent, awaiting confirmation",)
     assert fee is None
+
+
+def test_primary_cap_refusal_creates_operator_visible_held_credit(tmp_path):
+    with isolated_state(tmp_path):
+        state_db.add_unprocessed_txid(
+            txid=NEXUS_TXID,
+            contract_id=7,
+            timestamp=2_000_000_000,
+            amount_usdd=0.001,
+            amount_usdd_units=1_000,
+            from_address="sender",
+            to_address="TREASURY",
+            owner_from_address="owner",
+            confirmations_credit=2,
+            status=swap_nexus.NEXUS_STATUS_READY,
+            receival_account="receiver",
+        )
+        with patch.object(config, "DAILY_PAYOUT_CAP_SOLANA_UNITS", 899, create=True), patch.object(
+            solana_client, "get_token_account_balance", return_value=1_000_000
+        ), patch.object(
+            solana_client, "send_solana_token_to_account_with_sig"
+        ) as send, patch.object(alerts, "critical") as cap_alert:
+            swap_nexus.process_unprocessed_txids()
+
+        send.assert_not_called()
+        row = state_db.get_unprocessed_txids_as_dicts()[0]
+        assert row["comment"] == swap_nexus.NEXUS_STATUS_PAYOUT_CAP_HOLD
+        assert row["hold_reason"] == "rolling Solana payout cap exhausted"
+        cap_alert.assert_called_once_with(
+            "solana_payout_cap_held",
+            "Solana rolling payout cap exhausted; payout held until capacity is available",
+            txid=NEXUS_TXID,
+            contract_id=7,
+            payout_units=900,
+            cap_units=899,
+        )
+        issue = next(item for item in dashboard.api_issues()["issues"] if item["id"] == NEXUS_TXID)
+        assert issue["status"] == swap_nexus.NEXUS_STATUS_PAYOUT_CAP_HOLD
+        assert issue["detail"] == "rolling Solana payout cap exhausted"
+        assert issue["operator_action"] == "wait for cap capacity; do not retry manually"
 
 
 def queue_frozen_payout(*, contract_id=7, signature: str | None = PAYOUT_SIGNATURE):

@@ -192,6 +192,7 @@ from src import swap_nexus  # noqa: E402
 EXPECTED_STATUSES = {
     "NEXUS_STATUS_PENDING": "pending_receival",
     "NEXUS_STATUS_READY": "ready for processing",
+    "NEXUS_STATUS_PAYOUT_CAP_HOLD": "payout cap held",
     "NEXUS_STATUS_SENDING": "sending",
     "NEXUS_STATUS_AWAITING": "sig created, awaiting confirmations",
     "NEXUS_STATUS_REFUNDED": "refunded",
