@@ -877,6 +877,7 @@ class CriticalSafetyTests(unittest.TestCase):
         """A production process must not start with disabled loss-limiting controls."""
         with (
             patch.object(config, "PRODUCTION_MODE", True),
+            patch.object(config, "production_pair_configuration_errors", return_value=[]),
             patch.object(config, "MAX_SWAP_SOLANA_UNITS", 0),
             patch.object(config, "MAX_SWAP_NEXUS_UNITS", 0),
             patch.object(config, "DAILY_PAYOUT_CAP_SOLANA_UNITS", 0),
@@ -906,6 +907,7 @@ class CriticalSafetyTests(unittest.TestCase):
         """A production bridge must not authorize Nexus debits by a display ticker alone."""
         with (
             patch.object(config, "PRODUCTION_MODE", True),
+            patch.object(config, "production_pair_configuration_errors", return_value=[]),
             patch.object(config, "MAX_SWAP_SOLANA_UNITS", 1),
             patch.object(config, "MAX_SWAP_NEXUS_UNITS", 1),
             patch.object(config, "DAILY_PAYOUT_CAP_SOLANA_UNITS", 1),
@@ -928,10 +930,50 @@ class CriticalSafetyTests(unittest.TestCase):
         )
 
     @patch.object(main.alerts, "critical")
+    def test_production_controls_require_explicit_pair_terms(self, critical):
+        """Production startup must not silently use default token precision or fees."""
+        pair_terms = {
+            "SOLANA_TOKEN_MINT": "solana-mint",
+            "SOLANA_VAULT_ACCOUNT": "solana-vault",
+            "SOLANA_TOKEN_DECIMALS": "6",
+            "NEXUS_TOKEN_REGISTER_ADDRESS": "TOKEN-REGISTER",
+            "NEXUS_TREASURY_ACCOUNT": "nexus-treasury",
+            "FEE_FLAT_TO_NEXUS": "0",
+            "FEE_FLAT_TO_SOLANA": "0",
+            "FEE_REFUND_SOLANA": "0",
+            "FEE_NEXUS_DISPOSITION": "0",
+            "FEE_BPS": "0",
+        }
+        with patch.dict(os.environ, pair_terms, clear=True):
+            with (
+                patch.object(config, "PRODUCTION_MODE", True),
+                patch.object(config, "MAX_SWAP_SOLANA_UNITS", 1),
+                patch.object(config, "MAX_SWAP_NEXUS_UNITS", 1),
+                patch.object(config, "DAILY_PAYOUT_CAP_SOLANA_UNITS", 1),
+                patch.object(config, "ALERT_COMMAND", "/usr/local/bin/bridge-alert"),
+                patch.object(config, "ALERT_WEBHOOK_URL", ""),
+                patch.object(config, "USDC_QUARANTINE_ACCOUNT", "SOLANA_QUARANTINE"),
+                patch.object(config, "NEXUS_USDD_QUARANTINE_ACCOUNT", "NEXUS_QUARANTINE"),
+                patch.object(config, "NEXUS_API_URL", "https://127.0.0.1:8443"),
+                patch.object(config, "NEXUS_API_USER", "api-user"),
+                patch.object(config, "NEXUS_API_PASSWORD", "api-password"),
+                patch.object(config, "NEXUS_MULTIUSER", False),
+                patch.object(config, "NEXUS_TOKEN_REGISTER_ADDRESS", "TOKEN-REGISTER"),
+            ):
+                self.assertFalse(main.validate_production_controls())
+
+        critical.assert_called_once_with(
+            "production_controls_missing",
+            "refusing production startup because mandatory exposure controls are disabled",
+            missing_controls=["NEXUS_TOKEN_DECIMALS (or USDD_DECIMALS)"],
+        )
+
+    @patch.object(main.alerts, "critical")
     def test_production_controls_require_https_nexus_api_transport(self, critical):
         """A live bridge must not place Nexus credentials in a child-process argv."""
         with (
             patch.object(config, "PRODUCTION_MODE", True),
+            patch.object(config, "production_pair_configuration_errors", return_value=[]),
             patch.object(config, "MAX_SWAP_SOLANA_UNITS", 1),
             patch.object(config, "MAX_SWAP_NEXUS_UNITS", 1),
             patch.object(config, "DAILY_PAYOUT_CAP_SOLANA_UNITS", 1),
@@ -960,6 +1002,7 @@ class CriticalSafetyTests(unittest.TestCase):
         """A multiuser Nexus node cannot admit a bridge without its session credential."""
         with (
             patch.object(config, "PRODUCTION_MODE", True),
+            patch.object(config, "production_pair_configuration_errors", return_value=[]),
             patch.object(config, "MAX_SWAP_SOLANA_UNITS", 1),
             patch.object(config, "MAX_SWAP_NEXUS_UNITS", 1),
             patch.object(config, "DAILY_PAYOUT_CAP_SOLANA_UNITS", 1),
@@ -986,6 +1029,7 @@ class CriticalSafetyTests(unittest.TestCase):
         """A default-off receipt flag must not become an uncapped production spend path."""
         with (
             patch.object(config, "PRODUCTION_MODE", True),
+            patch.object(config, "production_pair_configuration_errors", return_value=[]),
             patch.object(config, "MAX_SWAP_SOLANA_UNITS", 1),
             patch.object(config, "MAX_SWAP_NEXUS_UNITS", 1),
             patch.object(config, "DAILY_PAYOUT_CAP_SOLANA_UNITS", 1),
@@ -1015,6 +1059,7 @@ class CriticalSafetyTests(unittest.TestCase):
         """A live bridge cannot strand either chain's failed-payout funds in its vault."""
         with (
             patch.object(config, "PRODUCTION_MODE", True),
+            patch.object(config, "production_pair_configuration_errors", return_value=[]),
             patch.object(config, "MAX_SWAP_SOLANA_UNITS", 1),
             patch.object(config, "MAX_SWAP_NEXUS_UNITS", 1),
             patch.object(config, "DAILY_PAYOUT_CAP_SOLANA_UNITS", 1),

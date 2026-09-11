@@ -114,6 +114,10 @@ def validate_production_controls() -> bool:
     # so production cannot safely run without it.
     if not str(getattr(config, "NEXUS_TOKEN_REGISTER_ADDRESS", "") or "").strip():
         missing.append("NEXUS_TOKEN_REGISTER_ADDRESS")
+    # Development can retain defaults while compatibility migrations proceed. Production
+    # must make its exact token precision and every fee term an operator decision; a
+    # default copied from the historical pair could otherwise misprice a new deployment.
+    missing.extend(config.production_pair_configuration_errors())
     # The CLI accepts PIN/session only as argv parameters. Production must use the
     # equivalent HTTPS POST transport, which keeps these spending credentials out of
     # process listings while preserving Nexus' Basic API authentication boundary.

@@ -50,7 +50,7 @@ Excluded surfaces are explicit:
 | `.github/copilot-instructions.md` | Display metadata | Keep money-path and Nexus/Solana safety guidance synchronized with the validated canonical configuration. |
 <!-- token-pair-inventory: ASSET_STANDARD.md:15,171,183,188,189,451 -->
 | `ASSET_STANDARD.md` | Planned/schema example + Public pair-specific example | Keep v1 distinct from planned v2; Nexus `format=basic` fixes field sets, so never relabel an incomplete v1 asset as v2. |
-<!-- token-pair-inventory: CONFIG.md:24,25,28,38,39,40,41,42,43,44,45,46,47,48,49,50,53,59,60,61,62,71,73,81,108,109,110,212,225,226,227,238,258,259 -->
+<!-- token-pair-inventory: CONFIG.md:24,25,28,38,39,40,41,42,43,44,45,46,47,48,49,50,53,59,60,61,62,71,73,81,108,109,110,212,225,226,227,240,260,261 -->
 | `CONFIG.md` | Migration alias + Public pair-specific example | Document implemented canonical configuration, exact defaults/alias behavior and currently legacy-only settings; do not advertise future provider-v2 settings as active. |
 <!-- token-pair-inventory: README.md:3,30,33,40 -->
 | `README.md` | Display metadata + Migration alias | Deployment-neutral instructions describe the configured pair and existing public-record fields; retained token literals identify defaults or compatibility aliases only. |
@@ -70,11 +70,11 @@ Excluded surfaces are explicit:
 | `nexus_transfer_operator.py` | Runtime semantics + Frozen compatibility state | Intent/hold reason labels must move only through a tested durable-state migration. |
 <!-- token-pair-inventory: quarantine_viewer.py:25,26,27,28 -->
 | `quarantine_viewer.py` | Display metadata + Frozen compatibility state | Present canonical symbols while retaining existing state labels until migrated. |
-<!-- token-pair-inventory: src/config.py:12,13,15,27,31,33,39,78,79,81,83,84,85,87,88,91,95,96,97,98,104,133,138,148,154,155,157,166,167,168,170,172,173,175,186,187,227,271,272,273,275,278,279,281,287,289,291,292,313,317,319,322,327,331,345,346,348,350,361,362,364,369,372,373,375,380,388,399,400,402,462,463,464,465,468,469,478,481,483 -->
+<!-- token-pair-inventory: src/config.py:12,13,15,27,31,33,39,84,85,86,88,89,90,91,92,93,106,107,109,111,112,113,115,116,119,123,124,125,126,132,161,166,176,182,183,185,194,195,196,198,200,201,203,214,215,255,299,300,301,303,306,307,309,315,317,319,320,341,345,347,350,355,359,373,374,376,378,389,390,392,397,400,401,403,408,416,427,428,430,490,491,492,493,496,497,506,509,511 -->
 | `src/config.py` | Runtime semantics + Migration alias + Frozen compatibility state | The immutable `SwapPairConfig` exists. Extend remaining consumer coverage without renaming frozen state; preserve the exact conflict/precedence behavior of each supported legacy input. |
 <!-- token-pair-inventory: src/dashboard.py:43,44,45,46,471 -->
 | `src/dashboard.py` | Display metadata | Dashboard labels/fallbacks must consume canonical display symbols and never control custody or routing. |
-<!-- token-pair-inventory: src/main.py:96,98,100,108,109,110,111,318,319,332,335,374,375,377,381,444,459,501 -->
+<!-- token-pair-inventory: src/main.py:96,98,100,108,109,110,111,322,323,336,339,378,379,381,385,448,463,505 -->
 | `src/main.py` | Runtime semantics + Display metadata | Production admission and output must use canonical identities/terms, preserving only compatibility names where migration requires them. |
 <!-- token-pair-inventory: src/nexus_client.py:347,352,426,512,1044,1755 -->
 | `src/nexus_client.py` | Runtime semantics + Display metadata | Require immutable Nexus register identity for authorization/reconciliation; retain token name only where the Nexus API requires it and for presentation. |

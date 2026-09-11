@@ -228,6 +228,8 @@ When true, startup refuses before polling unless all of these are present:
 - `SOLANA_QUARANTINE_ACCOUNT`;
 - `NEXUS_QUARANTINE_ACCOUNT`;
 - `NEXUS_TOKEN_REGISTER_ADDRESS`;
+- explicit Solana/Nexus mint/register, custody-account and decimal settings (canonical or accepted legacy spelling);
+- explicit `FEE_FLAT_TO_NEXUS`, `FEE_FLAT_TO_SOLANA`, `FEE_REFUND_SOLANA`, `FEE_NEXUS_DISPOSITION` and `FEE_BPS` terms (canonical or accepted legacy spelling; explicit `0` is valid);
 - either `ALERT_WEBHOOK_URL` or `ALERT_COMMAND`;
 - valid `NEXUS_API_URL`, plus `NEXUS_API_USER` and `NEXUS_API_PASSWORD`;
 - `NEXUS_SESSION` when `NEXUS_MULTIUSER=true`.

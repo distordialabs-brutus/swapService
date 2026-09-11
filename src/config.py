@@ -72,6 +72,34 @@ def _compat_env(canonical: str, legacy: str, *, default: str = "") -> str:
         )
     return canonical_value or legacy_value or default
 
+
+def production_pair_configuration_errors(environ=None) -> list[str]:
+    """Return pair terms that production must state instead of inheriting defaults.
+
+    The canonical/legacy compatibility pairs remain valid during migration, but live
+    custody must name both identities, precisions and every fee component explicitly.
+    """
+    environ = os.environ if environ is None else environ
+    required = (
+        ("SOLANA_TOKEN_MINT", "USDC_MINT"),
+        ("SOLANA_VAULT_ACCOUNT", "VAULT_USDC_ACCOUNT"),
+        ("SOLANA_TOKEN_DECIMALS", "USDC_DECIMALS"),
+        ("NEXUS_TOKEN_REGISTER_ADDRESS",),
+        ("NEXUS_TREASURY_ACCOUNT", "NEXUS_USDD_TREASURY_ACCOUNT"),
+        ("NEXUS_TOKEN_DECIMALS", "USDD_DECIMALS"),
+        ("FEE_FLAT_TO_NEXUS", "FLAT_FEE_USDD"),
+        ("FEE_FLAT_TO_SOLANA", "FLAT_FEE_USDC"),
+        ("FEE_REFUND_SOLANA", "FLAT_FEE_USDD"),
+        ("FEE_NEXUS_DISPOSITION", "NEXUS_CONGESTION_FEE_USDD"),
+        ("FEE_BPS", "DYNAMIC_FEE_BPS"),
+    )
+    missing = []
+    for spellings in required:
+        if not any(str(environ.get(name, "") or "").strip() for name in spellings):
+            missing.append(" (or ".join(spellings) + ")")
+    return missing
+
+
 # Solana
 RPC_URL = os.getenv("SOLANA_RPC_URL")
 VAULT_KEYPAIR_PATH = os.getenv("VAULT_KEYPAIR")
