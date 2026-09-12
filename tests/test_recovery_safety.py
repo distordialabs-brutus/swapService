@@ -38,6 +38,7 @@ from src.nexus_memo import (  # noqa: E402
 
 NEXUS_TXID = "ab" * 64
 SOLANA_PAYOUT_SIGNATURE = "1" * 64
+SOLANA_DEPOSIT_SIGNATURE = str(solana_client.Signature.from_bytes(bytes([2]) * 64))
 
 
 class NexusPayoutMemoTests(unittest.TestCase):
@@ -80,7 +81,7 @@ class _MemoRpcClient:
 
 def _memo_transaction(memo: str, *, amount: int = 3_000_000) -> dict:
     return {
-        "transaction": {"message": {
+        "transaction": {"signatures": [SOLANA_PAYOUT_SIGNATURE], "message": {
             "accountKeys": [{
                 "pubkey": str(config.SOL_MAIN_ACCOUNT),
                 "signer": True,
@@ -150,6 +151,69 @@ class SolanaMemoScannerTests(unittest.TestCase):
                 amount_solana_units=3_000_000,
             )},
         )
+
+    def test_waterline_scanner_recognizes_current_disposition_and_recovery_holds(self):
+        """A wipeout may not silently omit a current refund/quarantine cap spend."""
+        for kind in ("refund", "quarantine"):
+            with self.subTest(kind=kind):
+                memo = f"swapService:v1:{kind}:{SOLANA_DEPOSIT_SIGNATURE}"
+                with patch.object(solana_client, "_get_client", return_value=_MemoRpcClient()), patch.object(
+                    solana_client,
+                    "_rpc_call",
+                    side_effect=[[
+                        {
+                            "signature": SOLANA_PAYOUT_SIGNATURE,
+                            "blockTime": 200,
+                            "confirmationStatus": "finalized",
+                            "err": None,
+                        }
+                    ], _memo_transaction(memo)],
+                ):
+                    scan = solana_client.scan_memos_since_timestamp(100)
+
+                self.assertTrue(scan["complete"], scan)
+                self.assertEqual(
+                    scan["solana_dispositions"],
+                    {
+                        (kind, SOLANA_DEPOSIT_SIGNATURE): {
+                            "kind": kind,
+                            "source_signature": SOLANA_DEPOSIT_SIGNATURE,
+                            "solana_signature": SOLANA_PAYOUT_SIGNATURE,
+                            "destination_token_account": "recipient-token-account",
+                            "amount_solana_units": 3_000_000,
+                            "timestamp": 200,
+                        }
+                    },
+                )
+                with patch.object(solana_client, "scan_memos_since_timestamp", return_value=scan):
+                    recovered = startup_recovery._rebuild_solana_from_waterline(100)
+
+                self.assertFalse(recovered["recovery_complete"])
+                self.assertEqual(
+                    recovered["error"],
+                    "current_solana_disposition_reconstruction_required",
+                )
+
+    def test_waterline_scanner_rejects_current_disposition_without_exact_transfer(self):
+        memo = f"swapService:v1:refund:{SOLANA_DEPOSIT_SIGNATURE}"
+        transaction = _memo_transaction(memo, amount=0)
+        with patch.object(solana_client, "_get_client", return_value=_MemoRpcClient()), patch.object(
+            solana_client,
+            "_rpc_call",
+            side_effect=[[
+                {
+                    "signature": SOLANA_PAYOUT_SIGNATURE,
+                    "blockTime": 200,
+                    "confirmationStatus": "finalized",
+                    "err": None,
+                }
+            ], transaction],
+        ):
+            scan = solana_client.scan_memos_since_timestamp(100)
+
+        self.assertFalse(scan["complete"])
+        self.assertEqual(scan["reason"], "missing_solana_disposition_transfer_evidence")
+        self.assertEqual(scan["solana_dispositions"], {})
 
 
 class SolanaMemoLookupTests(unittest.TestCase):
@@ -268,6 +332,7 @@ class StartupReconstructionTests(unittest.TestCase):
             "malformed_nexus_memos": [],
             "refund_sigs": {},
             "quarantined_sigs": {},
+            "solana_dispositions": {},
         }
         heartbeat = {
             "address": "heartbeat-address",

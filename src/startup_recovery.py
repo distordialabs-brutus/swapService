@@ -371,8 +371,10 @@ def _rebuild_solana_from_waterline(waterline_timestamp: int) -> dict:
     payout_timestamps = memo_map.get("nexus_payout_timestamps")
     refunds = memo_map.get("refund_sigs")
     quarantines = memo_map.get("quarantined_sigs")
+    dispositions = memo_map.get("solana_dispositions")
     if (not isinstance(malformed, list) or not isinstance(payouts, dict)
-            or not isinstance(payout_timestamps, dict)):
+            or not isinstance(payout_timestamps, dict)
+            or not isinstance(dispositions, dict)):
         return {
             "recovery_complete": False,
             "error": "solana_memo_scan_incomplete:invalid_payout_evidence",
@@ -381,6 +383,38 @@ def _rebuild_solana_from_waterline(waterline_timestamp: int) -> dict:
         return {
             "recovery_complete": False,
             "error": "solana_memo_scan_incomplete:malformed_nexus_payout_memo",
+        }
+    for identity, evidence in dispositions.items():
+        if (not isinstance(identity, tuple) or len(identity) != 2
+                or identity[0] not in {"refund", "quarantine"}
+                or not isinstance(identity[1], str)
+                or not isinstance(evidence, dict)
+                or evidence.get("kind") != identity[0]
+                or evidence.get("source_signature") != identity[1]
+                or not isinstance(evidence.get("solana_signature"), str)
+                or not evidence["solana_signature"]
+                or not isinstance(evidence.get("destination_token_account"), str)
+                or not evidence["destination_token_account"]
+                or type(evidence.get("amount_solana_units")) is not int
+                or evidence["amount_solana_units"] <= 0
+                or type(evidence.get("timestamp")) is not int or evidence["timestamp"] <= 0):
+            return {
+                "recovery_complete": False,
+                "error": "solana_memo_scan_incomplete:invalid_disposition_evidence",
+            }
+    # Current dispositions carry exact outbound transfer/cap evidence but cannot by
+    # themselves recreate their incoming deposit source and terminal row after a DB
+    # wipeout.  Refuse startup rather than omit their spend from the global cap.
+    if dispositions:
+        return {
+            "recovery_complete": False,
+            "error": "current_solana_disposition_reconstruction_required",
+            "unresolved_current_refund_memos": sum(
+                1 for kind, _source in dispositions if kind == "refund"
+            ),
+            "unresolved_current_quarantine_memos": sum(
+                1 for kind, _source in dispositions if kind == "quarantine"
+            ),
         }
     if not isinstance(refunds, dict) or not isinstance(quarantines, dict):
         return {

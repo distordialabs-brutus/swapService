@@ -2026,6 +2026,101 @@ def _extract_nexus_payout_evidence(
     )
 
 
+def _parse_solana_disposition_memo(memo: object) -> tuple[str, str] | None:
+    """Parse exactly one current, versioned refund/quarantine source identity."""
+    if not isinstance(memo, str):
+        return None
+    parts = memo.split(":")
+    if len(parts) != 4 or parts[:2] != ["swapService", "v1"]:
+        return None
+    kind, source_signature = parts[2:]
+    if kind not in {"refund", "quarantine"}:
+        return None
+    try:
+        Signature.from_string(source_signature)
+    except Exception:
+        return None
+    return kind, source_signature
+
+
+def _extract_solana_disposition_evidence(
+    tx_value: object,
+    *,
+    signature: str,
+    timestamp: int,
+    kind: str,
+    source_signature: str,
+) -> dict[str, object] | None:
+    """Bind a current disposition memo to one exact successful vault transfer."""
+    expected_memo = _solana_sig_disposition_memo(kind, source_signature)
+    if (type(timestamp) is not int or timestamp <= 0
+            or not _is_attributable_vault_transaction(tx_value)
+            or not isinstance(tx_value, dict)):
+        return None
+    transaction = tx_value.get("transaction")
+    signatures = transaction.get("signatures") if isinstance(transaction, dict) else None
+    meta = tx_value.get("meta")
+    message = transaction.get("message") if isinstance(transaction, dict) else None
+    instructions = message.get("instructions") if isinstance(message, dict) else None
+    if (not isinstance(signatures, list) or signatures != [signature]
+            or not isinstance(meta, dict) or meta.get("err") is not None
+            or not isinstance(instructions, list)):
+        return None
+
+    transfers: list[tuple[str, int]] = []
+    matching_memos = 0
+    for instruction in instructions:
+        if not isinstance(instruction, dict):
+            return None
+        program = str(instruction.get("programId") or instruction.get("program") or "")
+        if program in {"spl-token", str(TOKEN_PROGRAM_ID)}:
+            parsed = instruction.get("parsed")
+            info = parsed.get("info") if isinstance(parsed, dict) else None
+            if (not isinstance(parsed, dict) or not isinstance(info, dict)
+                    or parsed.get("type") not in {"transfer", "transferChecked"}
+                    or str(info.get("source") or "") != str(config.VAULT_USDC_ACCOUNT)
+                    or str(info.get("mint") or "") != str(config.USDC_MINT)):
+                continue
+            destination = info.get("destination")
+            raw_amount = info.get("amount")
+            if isinstance(info.get("tokenAmount"), dict):
+                raw_amount = info["tokenAmount"].get("amount")
+            amount_text = str(raw_amount or "")
+            if (not isinstance(destination, str) or not destination.strip()
+                    or not amount_text.isdigit()
+                    or (len(amount_text) > 1 and amount_text.startswith("0"))):
+                return None
+            amount_units = int(amount_text)
+            if amount_units <= 0:
+                return None
+            transfers.append((destination, amount_units))
+        elif (program.startswith("Memo111")
+              or program == "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"
+              or program == "spl-memo"):
+            data = instruction.get("data", instruction.get("parsed"))
+            if isinstance(data, list) and len(data) == 1:
+                data = data[0]
+            candidates = [data] if isinstance(data, str) else []
+            if isinstance(data, str):
+                try:
+                    candidates.append(base64.b64decode(data, validate=True).decode("utf-8"))
+                except Exception:
+                    pass
+            matching_memos += sum(candidate == expected_memo for candidate in candidates)
+
+    if matching_memos != 1 or len(transfers) != 1:
+        return None
+    destination, amount_units = transfers[0]
+    return {
+        "kind": kind,
+        "source_signature": source_signature,
+        "solana_signature": signature,
+        "destination_token_account": destination,
+        "amount_solana_units": amount_units,
+        "timestamp": timestamp,
+    }
+
+
 def scan_recent_memos(search_limit: int = 400) -> dict:
     """Scan recent signatures for the vault account collecting structured memos.
     Returns dict: {
@@ -2134,6 +2229,7 @@ def scan_memos_since_timestamp(since_timestamp: int, max_signatures: int = 10000
         "malformed_nexus_memos": [],
         "refund_sigs": {},
         "quarantined_sigs": {},
+        "solana_dispositions": {},
         "deposits": [],
         "complete": False,
         "reason": None,
@@ -2145,6 +2241,7 @@ def scan_memos_since_timestamp(since_timestamp: int, max_signatures: int = 10000
         out["legacy_nexus_txids"].clear()
         out["refund_sigs"].clear()
         out["quarantined_sigs"].clear()
+        out["solana_dispositions"].clear()
         out["complete"] = False
         out["reason"] = reason
         return out
@@ -2254,7 +2351,31 @@ def scan_memos_since_timestamp(since_timestamp: int, max_signatures: int = 10000
                 memos.append(data)
 
             for memo in memos:
-                if memo.startswith("nexus_txid:"):
+                if memo.startswith("swapService:v1:"):
+                    disposition = _parse_solana_disposition_memo(memo)
+                    if disposition is None:
+                        return incomplete("malformed_solana_disposition_memo")
+                    kind, source_signature = disposition
+                    evidence = _extract_solana_disposition_evidence(
+                        tx_val,
+                        signature=sig,
+                        timestamp=block_time,
+                        kind=kind,
+                        source_signature=source_signature,
+                    )
+                    if evidence is None:
+                        return incomplete("missing_solana_disposition_transfer_evidence")
+                    identity = (kind, source_signature)
+                    if any(
+                        known_source == source_signature and known_kind != kind
+                        for known_kind, known_source in out["solana_dispositions"]
+                    ):
+                        return incomplete("conflicting_solana_disposition_identity")
+                    existing = out["solana_dispositions"].get(identity)
+                    if existing is not None and existing != evidence:
+                        return incomplete("duplicate_solana_disposition_identity")
+                    out["solana_dispositions"][identity] = evidence
+                elif memo.startswith("nexus_txid:"):
                     parsed = nexus_memo.parse_nexus_payout_memo(memo)
                     if parsed is None:
                         out["malformed_nexus_memos"].append(memo)
