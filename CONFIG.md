@@ -150,8 +150,10 @@ target Nexus build.
 
 `receipt_schema` is an immutable optional field in the v1 provider record. Because a Nexus
 `format=basic` asset cannot add fields, enabling receipts does not add this advertisement to an
-existing registration. Create and verify a new receipt-capable registration as part of a reviewed
-migration; do not assume the runtime heartbeat update changes the fixed field set.
+existing registration. Receipt-enabled startup requires a readable record with exactly
+`receipt_schema=nexus-swap-receipt-v1`, a non-empty on-chain owner, and immutable pair/custody
+fields matching the current configuration. Create and verify a new receipt-capable registration as
+part of a reviewed migration; do not assume the runtime heartbeat update changes the fixed field set.
 
 ## Polling, timeouts and state
 

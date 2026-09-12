@@ -61,12 +61,41 @@ def receipt_name(source_signature: str) -> str:
 
 
 def expected_provider_owner() -> str | None:
-    """Read owner from our provider registration; never accept caller-configured owner."""
+    """Return the owner only from a receipt-capable current provider registration."""
+    owner, _reason = receipt_provider_registration()
+    return owner
+
+
+def receipt_provider_registration() -> tuple[str | None, str]:
+    """Validate the immutable registration contract needed to publish receipts.
+
+    ``format=basic`` fixes an asset's field set at creation. Merely turning on receipt
+    publication for an older heartbeat would otherwise create public receipt assets that
+    its provider record does not advertise. Compare immutable pair/custody fields as
+    well as the receipt schema so a misnamed or unrelated asset cannot supply an owner.
+    """
     record = nexus_client.read_service_record()
     if not isinstance(record, dict):
-        return None
+        return None, "configured provider registration is not readable"
+    if record.get("receipt_schema") != SCHEMA:
+        return None, (
+            f"configured provider registration lacks receipt_schema={SCHEMA!r}; "
+            "create and migrate to a new receipt-capable format=basic registration"
+        )
+    expected = nexus_client.build_service_record(last_poll=0)
+    mismatched = [
+        field for field in nexus_client.SERVICE_RECORD_IMMUTABLE
+        if record.get(field) != expected[field]
+    ]
+    if mismatched:
+        return None, (
+            "configured provider registration does not match this service's immutable "
+            f"pair/custody contract: {', '.join(mismatched)}"
+        )
     owner = record.get("owner")
-    return owner.strip() if isinstance(owner, str) and owner.strip() else None
+    if not isinstance(owner, str) or not owner.strip():
+        return None, "configured receipt-capable provider registration has no authoritative owner"
+    return owner.strip(), "receipt-capable provider registration is valid"
 
 
 def _decode_list_output(output: str) -> list[dict[str, Any]] | None:

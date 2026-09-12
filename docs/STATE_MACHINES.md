@@ -178,8 +178,10 @@ asset and optional-name creation. Before the create boundary, the runtime reserv
 maximum raw-NXS cost from an append-only lifetime ledger; uncertain outcomes retain that capacity.
 The target node has not established actual-cost, filtered-list completeness or indexing semantics.
 An existing fixed-field v1 registration also cannot add `receipt_schema` through a heartbeat update.
-Receipt mode therefore remains a separately gated, default-disabled extension; production admission
-rejects an explicit enablement until target-node and registration-migration acceptance pass.
+When enabled, startup therefore requires a readable receipt-capable record with the exact schema,
+an authoritative owner, and immutable pair/custody fields matching the running configuration.
+Receipt mode remains a separately gated, default-disabled extension; production admission rejects an
+explicit enablement until target-node and registration-migration acceptance pass.
 
 ## Solana token → Nexus token state machine
 

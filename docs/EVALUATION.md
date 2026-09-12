@@ -497,11 +497,13 @@ though it does not move bridged tokens. The configured local budget is not proof
 node's actual cost, and no target-node acceptance has established an authoritative fee/transaction
 readback protocol.
 
-The fixed-field v1 registration cannot gain `receipt_schema` through normal heartbeat updates, and
-startup does not require that field when receipt mode is enabled. JSON creation, global filtered
-query completeness, owner/address projection and indexing delay also remain unverified on the target
-node. Keep receipts disabled until cost controls, registration migration and the target-node matrix
-pass. Do not treat the pinned documentation as proof of the configured live node's behavior.
+The fixed-field v1 registration cannot gain `receipt_schema` through normal heartbeat updates.
+Receipt-enabled startup now requires that exact schema, a readable authoritative owner and immutable
+pair/custody fields matching the running configuration; an existing v1 record therefore still needs a
+reviewed replacement rather than an in-place update. JSON creation, global filtered query completeness,
+owner/address projection and indexing delay also remain unverified on the target node. Keep receipts
+disabled until cost controls, registration migration and the target-node matrix pass. Do not treat the
+pinned documentation as proof of the configured live node's behavior.
 
 ### E-017 — Test collection order contaminated SDK/config boundaries
 
@@ -755,8 +757,10 @@ when its response or final local write is lost. Cap refusal must emit an actiona
    parseable create identity ledger retain capacity across unknown outcomes. Establish authoritative
    target-node actual-cost readback and decide whether deterministic naming justifies its additional
    cost.
-3. Require a receipt-capable provider registration and authoritative owner at startup when enabled;
-   document and rehearse creation of a new fixed-field record rather than mutating v1 in place.
+3. ✅ Receipt-enabled startup requires a readable provider record with the exact immutable receipt
+   schema, authoritative owner, and configured immutable pair/custody fields. Create and rehearse a
+   new fixed-field record rather than mutating v1 in place; target-node registration acceptance remains
+   required.
 4. Prove create, rejection, timeout-after-acceptance, delayed indexing, exact filtered readback,
    duplicates and restart on the target Nexus build.
 

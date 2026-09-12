@@ -316,6 +316,21 @@ def run():
         )
         return False
 
+    # Receipts are a separately durable NXS-spending extension. Their provider record
+    # must have been created with the immutable receipt schema and must name this exact
+    # pair/custody contract before the enabled service can admit work. This read follows
+    # complete recovery so a receipt-only check cannot precede the custody recovery gate.
+    if getattr(config, "NEXUS_SWAP_RECEIPTS_ENABLED", False):
+        from . import swap_receipts
+        owner, receipt_message = swap_receipts.receipt_provider_registration()
+        if not owner:
+            alerts.critical(
+                "receipt_provider_registration_invalid",
+                "receipt publication is enabled but its provider registration is not admissible",
+                reason=receipt_message,
+            )
+            return False
+
     print("\n")
     print("🌐 Starting bidirectional swap service")
     print(f"   Solana RPC: {config.RPC_URL}")

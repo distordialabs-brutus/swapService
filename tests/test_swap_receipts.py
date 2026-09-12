@@ -42,6 +42,12 @@ def receipt_fields(signature="solana-signature-full"):
     )
 
 
+def receipt_capable_provider_record(owner="provider-genesis"):
+    record = nexus_client.build_service_record(last_poll=0)
+    record.update(owner=owner, receipt_schema=swap_receipts.SCHEMA)
+    return record
+
+
 def seed_confirmable_deposit():
     state_db.add_unprocessed_sig(
         "solana-signature-full", 100, "nexus:nexus-recipient", "sender", 2_000_000,
@@ -205,7 +211,7 @@ def test_receipt_nxs_budget_reserves_before_create_and_holds_after_timeout(db, m
         )
     monkeypatch.setattr(config, "NEXUS_SWAP_RECEIPT_EXPECTED_COST_NXS_UNITS", 20)
     monkeypatch.setattr(config, "NEXUS_SWAP_RECEIPT_BUDGET_NXS_UNITS", 20)
-    monkeypatch.setattr(nexus_client, "read_service_record", lambda: {"owner": "provider-genesis"})
+    monkeypatch.setattr(nexus_client, "read_service_record", receipt_capable_provider_record)
     creates = []
 
     def run(command, timeout=None):
@@ -265,7 +271,7 @@ def test_timeout_after_create_acceptance_never_blindly_creates_again(db, monkeyp
         return (0, "[]", "")
 
     monkeypatch.setattr(nexus_client, "_run", run)
-    monkeypatch.setattr(nexus_client, "read_service_record", lambda: {"owner": "provider-genesis"})
+    monkeypatch.setattr(nexus_client, "read_service_record", receipt_capable_provider_record)
 
     assert swap_receipts.publish_pending_receipts() == 0
     with sqlite3.connect(db) as conn:
@@ -358,7 +364,9 @@ def test_duplicate_exact_chain_receipts_keep_sqlite_obligation_unpublished(db, m
 def test_provider_owner_must_come_from_own_registration_before_create(db, monkeypatch):
     payload = receipt_fields()
     state_db.enqueue_swap_receipt(payload, "provider-genesis", swap_receipts.receipt_name(payload["source_signature"]))
-    monkeypatch.setattr(nexus_client, "read_service_record", lambda: {"owner": "different-owner"})
+    monkeypatch.setattr(
+        nexus_client, "read_service_record", lambda: receipt_capable_provider_record("different-owner")
+    )
     calls = []
     monkeypatch.setattr(nexus_client, "_run", lambda command, timeout=None: calls.append(command))
 
@@ -390,6 +398,26 @@ def test_registration_advertises_only_enabled_known_v1_extension(monkeypatch):
     assert nexus_client.build_service_record(last_poll=1)["receipt_schema"] == "nexus-swap-receipt-v1"
 
 
+def test_receipt_provider_registration_requires_schema_owner_and_exact_immutable_pair(monkeypatch):
+    valid = receipt_capable_provider_record()
+    monkeypatch.setattr(nexus_client, "read_service_record", lambda: valid)
+    assert swap_receipts.receipt_provider_registration() == (
+        "provider-genesis", "receipt-capable provider registration is valid"
+    )
+
+    for mutation, expected in (
+        ({"receipt_schema": "other"}, "lacks receipt_schema"),
+        ({"owner": ""}, "no authoritative owner"),
+        ({"owner": "   "}, "no authoritative owner"),
+        ({"solana_vault_address": "other-vault"}, "immutable pair/custody contract"),
+    ):
+        record = dict(valid, **mutation)
+        monkeypatch.setattr(nexus_client, "read_service_record", lambda record=record: record)
+        owner, reason = swap_receipts.receipt_provider_registration()
+        assert owner is None
+        assert expected in reason
+
+
 def test_confirmation_path_freezes_chain_evidence_and_authoritative_provider_owner(db, monkeypatch):
     seed_confirmable_deposit()
     evidence = nexus_client.TransferDebitEvidence(
@@ -406,7 +434,7 @@ def test_confirmation_path_freezes_chain_evidence_and_authoritative_provider_own
         lambda txid: nexus_client.BatchLookup({txid: [evidence]}, True),
     )
     monkeypatch.setattr(
-        nexus_client, "read_service_record", lambda: {"owner": "provider-genesis"}
+        nexus_client, "read_service_record", receipt_capable_provider_record
     )
 
     assert nexus_client.check_unconfirmed_debits(10, 8) == 1

@@ -28,6 +28,7 @@ from src import (  # noqa: E402
     startup_recovery,
     state_db,
 )
+from src import swap_receipts  # noqa: E402
 from src.nexus_memo import (  # noqa: E402
     NexusPayoutEvidence,
     NexusPayoutMemo,
@@ -410,6 +411,35 @@ class MainStartupRecoveryGateTests(unittest.TestCase):
         recover.assert_called_once_with()
         poller.assert_not_called()
         heartbeat_update.assert_not_called()
+
+    def test_receipt_enabled_startup_requires_receipt_capable_provider_registration(self):
+        recovery = {"recovery_complete": True, "recovery_incomplete": False}
+        with (
+            patch.object(main, "validate_production_controls", return_value=True),
+            patch.object(main.state_db, "init_db"),
+            patch.object(main, "acquire_singleton_lock", return_value=True),
+            patch.object(startup_recovery, "perform_startup_recovery", return_value=recovery),
+            patch.object(config, "NEXUS_SWAP_RECEIPTS_ENABLED", True),
+            patch.object(
+                swap_receipts,
+                "receipt_provider_registration",
+                return_value=(None, "configured provider registration is not readable"),
+            ) as receipt_registration,
+            patch.object(nexus_client, "validate_session_config") as session_check,
+            patch.object(nexus_client, "validate_heartbeat_asset") as heartbeat_check,
+            patch.object(main.alerts, "critical") as critical,
+        ):
+            result = main.run()
+
+        self.assertFalse(result)
+        receipt_registration.assert_called_once_with()
+        session_check.assert_not_called()
+        heartbeat_check.assert_not_called()
+        critical.assert_called_once_with(
+            "receipt_provider_registration_invalid",
+            "receipt publication is enabled but its provider registration is not admissible",
+            reason="configured provider registration is not readable",
+        )
 
 
 class NexusLegacyWrapperTests(unittest.TestCase):
