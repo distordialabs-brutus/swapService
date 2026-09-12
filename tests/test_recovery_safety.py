@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import sqlite3
@@ -194,6 +195,117 @@ class SolanaMemoScannerTests(unittest.TestCase):
                     "current_solana_disposition_reconstruction_required",
                 )
 
+    def test_waterline_scanner_never_certifies_unclassified_vault_spend(self):
+        """Unrecognized wire encoding may hold recovery, never erase cap spend."""
+        memo = solana_client._solana_sig_disposition_memo("refund", SOLANA_DEPOSIT_SIGNATURE)
+        variants = (
+            base64.b64encode(memo.encode()).decode(),
+            f"swapService:v2:refund:{SOLANA_DEPOSIT_SIGNATURE}",
+            "unrecognized-outbound-memo",
+            None,
+        )
+        for wire_memo in variants:
+            with self.subTest(wire_memo=wire_memo):
+                transaction = _memo_transaction(memo)
+                instructions = transaction["transaction"]["message"]["instructions"]
+                if wire_memo is None:
+                    instructions.pop()
+                else:
+                    instructions[-1]["data"] = wire_memo
+                with patch.object(solana_client, "_get_client", return_value=_MemoRpcClient()), patch.object(
+                    solana_client, "_rpc_call", side_effect=[[
+                        {"signature": SOLANA_PAYOUT_SIGNATURE, "blockTime": 200,
+                         "confirmationStatus": "finalized", "err": None}
+                    ], transaction],
+                ):
+                    scan = solana_client.scan_memos_since_timestamp(100)
+                self.assertFalse(scan["complete"], scan)
+                self.assertEqual(scan["reason"], "unclassified_solana_vault_spend")
+                self.assertEqual(scan["nexus_payouts"], {})
+                self.assertEqual(scan["solana_dispositions"], {})
+                with patch.object(solana_client, "scan_memos_since_timestamp", return_value=scan):
+                    recovered = startup_recovery._rebuild_solana_from_waterline(100)
+                self.assertFalse(recovered["recovery_complete"])
+
+    def test_waterline_scanner_holds_opaque_and_nested_vault_spend(self):
+        for variant in ("opaque", "inner", "extra_debit", "multiple_identities"):
+            with self.subTest(variant=variant):
+                transaction = _memo_transaction(f"nexus_txid:{NEXUS_TXID}:7")
+                instructions = transaction["transaction"]["message"]["instructions"]
+                if variant == "opaque":
+                    instructions[0] = {
+                        "programId": str(solana_client.TOKEN_PROGRAM_ID),
+                        "accounts": [str(config.VAULT_USDC_ACCOUNT)], "data": "unparsed",
+                    }
+                    instructions.pop()
+                elif variant == "inner":
+                    transaction["meta"]["innerInstructions"] = [
+                        {"index": 0, "instructions": [instructions.pop(0)]}
+                    ]
+                    instructions.clear()
+                elif variant == "extra_debit":
+                    instructions.append({
+                        "program": "spl-token", "parsed": {"type": "transfer", "info": {
+                            "source": str(config.VAULT_USDC_ACCOUNT),
+                            "destination": "another-recipient", "amount": "1000",
+                        }},
+                    })
+                else:
+                    instructions.append({"program": "spl-memo", "parsed": f"nexus_txid:{NEXUS_TXID}:8"})
+                with patch.object(solana_client, "_get_client", return_value=_MemoRpcClient()), patch.object(
+                    solana_client, "_rpc_call", side_effect=[[
+                        {"signature": SOLANA_PAYOUT_SIGNATURE, "blockTime": 200,
+                         "confirmationStatus": "finalized", "err": None}
+                    ], transaction],
+                ):
+                    scan = solana_client.scan_memos_since_timestamp(100)
+                self.assertFalse(scan["complete"], scan)
+                self.assertEqual(scan["nexus_payouts"], {})
+                self.assertEqual(scan["solana_dispositions"], {})
+
+    def test_waterline_scanner_rejects_incomplete_spend_schema(self):
+        for variant in ("missing_source", "missing_info", "missing_error", "invalid_inner"):
+            with self.subTest(variant=variant):
+                transaction = _memo_transaction("unused")
+                instructions = transaction["transaction"]["message"]["instructions"]
+                instructions.pop()
+                if variant == "missing_source":
+                    del instructions[0]["parsed"]["info"]["source"]
+                elif variant == "missing_info":
+                    instructions[0]["parsed"] = {}
+                elif variant == "missing_error":
+                    instructions.clear()
+                    del transaction["meta"]["err"]
+                else:
+                    instructions.clear()
+                    transaction["meta"]["innerInstructions"] = {}
+                with patch.object(solana_client, "_get_client", return_value=_MemoRpcClient()), patch.object(
+                    solana_client, "_rpc_call", side_effect=[[
+                        {"signature": SOLANA_PAYOUT_SIGNATURE, "blockTime": 200,
+                         "confirmationStatus": "finalized", "err": None}
+                    ], transaction],
+                ):
+                    scan = solana_client.scan_memos_since_timestamp(100)
+                self.assertFalse(scan["complete"], scan)
+                self.assertEqual(scan["nexus_payouts"], {})
+
+    def test_waterline_scanner_keeps_incoming_transfers_and_empty_history_available(self):
+        transaction = _memo_transaction("unused")
+        instructions = transaction["transaction"]["message"]["instructions"]
+        instructions.pop()
+        instructions[0]["parsed"]["info"].update({
+            "source": "external-source", "destination": str(config.VAULT_USDC_ACCOUNT),
+        })
+        for responses in ([[]], [[{"signature": SOLANA_PAYOUT_SIGNATURE, "blockTime": 200,
+                                    "confirmationStatus": "finalized", "err": None}], transaction]):
+            with self.subTest(responses=len(responses)):
+                with patch.object(solana_client, "_get_client", return_value=_MemoRpcClient()), patch.object(
+                    solana_client, "_rpc_call", side_effect=responses,
+                ):
+                    scan = solana_client.scan_memos_since_timestamp(100)
+                self.assertTrue(scan["complete"], scan)
+                self.assertEqual(scan["solana_dispositions"], {})
+
     def test_waterline_scanner_rejects_current_disposition_without_exact_transfer(self):
         memo = f"swapService:v1:refund:{SOLANA_DEPOSIT_SIGNATURE}"
         transaction = _memo_transaction(memo, amount=0)
@@ -254,6 +366,50 @@ class SolanaMemoLookupTests(unittest.TestCase):
 
 
 class StartupReconstructionTests(unittest.TestCase):
+    def test_disposition_before_newer_heartbeat_holds_actual_startup_and_preserves_budget(self):
+        """Both wipeout and restored DBs stay paused across the full cap window."""
+        for kind in ("refund", "quarantine"):
+            for existing_budget in (0, 12345):
+                with self.subTest(kind=kind, existing_budget=existing_budget), tempfile.TemporaryDirectory() as tmpdir:
+                    transaction = _memo_transaction(
+                        solana_client._solana_sig_disposition_memo(kind, SOLANA_DEPOSIT_SIGNATURE)
+                    )
+                    entry = {"signature": SOLANA_PAYOUT_SIGNATURE, "blockTime": 98000,
+                             "confirmationStatus": "finalized", "err": None}
+                    heartbeat = {
+                        "address": "heartbeat-address", "last_poll_timestamp": "100000",
+                        "last_safe_timestamp_nexus": "99000", "last_safe_timestamp_solana": "99000",
+                    }
+                    db_path = os.path.join(tmpdir, "state.db")
+                    with (
+                        patch.object(state_db, "DB_PATH", db_path),
+                        patch.object(startup_recovery.time, "time", return_value=100000),
+                        patch.object(nexus_client, "get_heartbeat_asset", return_value=heartbeat),
+                        patch.object(nexus_client, "fetch_deposits_since") as nexus_scan,
+                        patch.object(nexus_client, "get_last_reference") as reference,
+                        patch.object(solana_client, "_get_client", return_value=_MemoRpcClient()),
+                        patch.object(solana_client, "_rpc_call", side_effect=[
+                            [entry], [entry], transaction,
+                        ]) as rpc,
+                    ):
+                        state_db.init_db()
+                        if existing_budget:
+                            self.assertTrue(state_db.reserve_solana_payout_budget(
+                                obligation_id="existing-reservation", kind="nexus_payout",
+                                amount_usdc_units=existing_budget, cap_units=existing_budget,
+                            ))
+                        result = startup_recovery.perform_startup_recovery()
+                        self.assertFalse(result["recovery_complete"], result)
+                        self.assertTrue(result["recovery_incomplete"], result)
+                        self.assertEqual(result["error"], "current_solana_disposition_reconstruction_required")
+                        self.assertEqual(state_db.payout_budget_used(86400), existing_budget)
+                        self.assertEqual(rpc.call_count, 3)
+                        nexus_scan.assert_not_called()
+                        reference.assert_not_called()
+                        with sqlite3.connect(db_path) as conn:
+                            for table in ("processed_txids", "refunded_sigs", "quarantined_sigs"):
+                                self.assertEqual(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], 0)
+
     def test_incomplete_solana_enumeration_writes_no_recovery_markers(self):
         scan = {
             "complete": False,

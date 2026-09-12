@@ -78,7 +78,7 @@ Excluded surfaces are explicit:
 | `src/main.py` | Runtime semantics + Display metadata | Production admission and output must use canonical identities/terms, preserving only compatibility names where migration requires them. |
 <!-- token-pair-inventory: src/nexus_client.py:347,352,426,512,1051,1762 -->
 | `src/nexus_client.py` | Runtime semantics + Display metadata | Require immutable Nexus register identity for authorization/reconciliation; retain token name only where the Nexus API requires it and for presentation. |
-<!-- token-pair-inventory: src/solana_client.py:275,365,617,725,747,944,1357,1361,1405,1418,1480,1491,1492,1496,1526,1535,1536,1540,1566,1574,1591,1602,1609,1615,1683,1684,1801,1860,1861,1995,1998,2081,2082,2145,2276,2442,2453,2475,2476,2480,2507,2515,2516,2520 -->
+<!-- token-pair-inventory: src/solana_client.py:275,365,617,725,747,944,1357,1361,1405,1418,1480,1491,1492,1496,1526,1535,1536,1540,1566,1574,1591,1602,1609,1615,1683,1684,1801,1860,1861,1995,1998,2081,2082,2145,2276,2366,2370,2488,2499,2521,2522,2526,2553,2561,2562,2566 -->
 | `src/solana_client.py` | Runtime semantics + Frozen compatibility state | Route transfers, payout caps and persisted labels through the canonical pair object without renaming live state prematurely. |
 
 | `src/startup_recovery.py` | Runtime semantics | Recovery must preserve the validated pair/custody identity and exact integer amounts. |

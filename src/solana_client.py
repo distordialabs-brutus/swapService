@@ -2327,16 +2327,52 @@ def scan_memos_since_timestamp(since_timestamp: int, max_signatures: int = 10000
             tx_obj = tx_val.get("transaction")
             msg = tx_obj.get("message") if isinstance(tx_obj, dict) else None
             insts = msg.get("instructions") if isinstance(msg, dict) else None
-            if not isinstance(meta, dict) or not isinstance(insts, list):
+            if not isinstance(meta, dict) or "err" not in meta or not isinstance(insts, list):
                 return incomplete("invalid_transaction")
             if meta.get("err") is not None:
                 continue
 
             memos: list[str] = []
-            for ix in insts:
+            vault_outflows = 0
+            inspected_instructions = [(ix, False) for ix in insts]
+            inner_groups = meta.get("innerInstructions")
+            if inner_groups is None:
+                inner_groups = []
+            if not isinstance(inner_groups, list):
+                return incomplete("invalid_inner_instructions")
+            for group in inner_groups:
+                if not isinstance(group, dict) or not isinstance(group.get("instructions"), list):
+                    return incomplete("invalid_inner_instructions")
+                inspected_instructions.extend((ix, True) for ix in group["instructions"])
+            for ix, is_inner in inspected_instructions:
                 if not isinstance(ix, dict):
                     return incomplete("invalid_instruction")
+                parsed = ix.get("parsed")
+                info = parsed.get("info") if isinstance(parsed, dict) else None
                 prog = ix.get("programId") or ix.get("program")
+                is_token = str(prog) in {"spl-token", str(TOKEN_PROGRAM_ID)}
+                if is_token and isinstance(parsed, dict):
+                    if not isinstance(info, dict) or not isinstance(parsed.get("type"), str):
+                        return incomplete("invalid_solana_token_instruction")
+                    if parsed["type"] in {"transfer", "transferChecked"} and (
+                        not isinstance(info.get("source"), str) or not info["source"].strip()
+                    ):
+                        return incomplete("invalid_solana_token_instruction")
+                # Opaque token instructions cannot prove absence of a vault debit.
+                # Unknown programs explicitly touching the vault are equally held.
+                accounts = ix.get("accounts", [])
+                if not isinstance(parsed, dict) and (
+                    is_token
+                    or (isinstance(accounts, list) and str(config.VAULT_USDC_ACCOUNT) in accounts)
+                ):
+                    return incomplete("unsupported_solana_vault_instruction")
+                if (isinstance(info, dict)
+                        and str(info.get("source") or "") == str(config.VAULT_USDC_ACCOUNT)):
+                    if is_inner:
+                        return incomplete("unsupported_inner_solana_vault_spend")
+                    vault_outflows += 1
+                if is_inner:
+                    continue
                 if not prog or not (
                     str(prog).startswith("Memo111")
                     or str(prog) == "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"
@@ -2349,6 +2385,16 @@ def scan_memos_since_timestamp(since_timestamp: int, max_signatures: int = 10000
                 if not isinstance(data, str):
                     return incomplete("invalid_memo_instruction")
                 memos.append(data)
+
+            # Enumeration is not complete accounting when a vault debit has no
+            # understood business identity. In particular, encoded/new-version
+            # disposition memos must not bypass the startup reconstruction hold.
+            if vault_outflows > 1 or (vault_outflows and len(memos) != 1):
+                return incomplete("unclassified_solana_vault_spend")
+            if vault_outflows and not any(memo.startswith((
+                "swapService:v1:", "nexus_txid:", "refundSig:", "quarantinedSig:",
+            )) for memo in memos):
+                return incomplete("unclassified_solana_vault_spend")
 
             for memo in memos:
                 if memo.startswith("swapService:v1:"):
