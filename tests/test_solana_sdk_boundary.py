@@ -232,10 +232,14 @@ def _run_real_sdk_checks() -> int:
         {signature_a: transaction(signature_a)},
     )
     with patch.object(solana_client, "_get_client", return_value=client_with(provider)):
-        deposits = solana_client._fetch_deposits_core_rpc(
-            str(config.VAULT_USDC_ACCOUNT), 50, 1, 1
-        )
-    assert deposits == []
+        try:
+            solana_client._fetch_deposits_core_rpc(
+                str(config.VAULT_USDC_ACCOUNT), 50, 1, 1
+            )
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("missing exact vault evidence must hold the deposit scan")
     assert len(requests_for(provider, "getTransaction")) == 1
 
     print("real installed Solana SDK signature-boundary checks: PASS")

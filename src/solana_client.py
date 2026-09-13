@@ -143,7 +143,10 @@ def helius_get_transactions_for_address(
     if encoding:
         opts["encoding"] = encoding
     # Helius expects params: [address, options]
-    return _helius_rpc_call("getTransactionsForAddress", [address, opts]) or []
+    result = _helius_rpc_call("getTransactionsForAddress", [address, opts])
+    if not isinstance(result, list):
+        raise RuntimeError("Solana enriched transaction page is not a list")
+    return result
 
 
 def core_get_transactions_for_address(
@@ -254,6 +257,26 @@ def fetch_incoming_deposits_via_helius(
     return _fetch_deposits_core_rpc(token_account_addr, since_ts, min_units, limit)
 
 
+def _validate_deposit_page_order(
+    page: list, previous_timestamp: int | None = None, *, timestamp_field: str = "blockTime"
+) -> int | None:
+    """Validate the whole page before an old entry can terminate a timestamp scan.
+
+    A later entry (including on the next page) must never be newer. Providers that
+    cannot satisfy this timestamp contract require a slot/cursor backfill protocol;
+    silently sorting a malformed page would conceal incomplete history coverage.
+    """
+    for row in page:
+        if not isinstance(row, dict):
+            raise RuntimeError("Invalid Solana deposit page entry")
+        timestamp = row.get(timestamp_field, row.get("blockTime"))
+        if (type(timestamp) is not int or timestamp <= 0
+                or (previous_timestamp is not None and timestamp > previous_timestamp)):
+            raise RuntimeError("Solana deposit page timestamp order is incomplete")
+        previous_timestamp = timestamp
+    return previous_timestamp
+
+
 def _fetch_deposits_helius(
     token_account_addr: str,
     since_ts: int,
@@ -273,8 +296,14 @@ def _fetch_deposits_helius(
         page_size = max(1, min(1000, limit))
         before: str | None = None
         solana_mint = str(getattr(config, "USDC_MINT"))
+        seen: set[str] = set()
+        pages = 0
+        previous_page_timestamp = None
 
-        while len(collected) < limit:
+        while True:
+            pages += 1
+            if pages > 100:
+                raise RuntimeError("Solana enriched scan page budget exhausted")
             txs = helius_get_transactions_for_address(
                 str(token_account_addr),
                 limit=page_size,
@@ -283,20 +312,39 @@ def _fetch_deposits_helius(
                 # away after we have already minted supply against it.
                 commitment=getattr(config, "SOLANA_DEPOSIT_COMMITMENT", "finalized"),
                 encoding=None,
-            ) or []
+            )
+            if not isinstance(txs, list) or len(txs) > page_size:
+                raise RuntimeError("Invalid Solana enriched transaction page")
+            previous_page_timestamp = _validate_deposit_page_order(
+                txs, previous_page_timestamp, timestamp_field="timestamp"
+            )
             if not txs:
                 break
 
             for tx in txs:
-                # Timestamp (Helius uses 'timestamp'); fall back to 'blockTime'
-                ts = int(tx.get("timestamp") or tx.get("blockTime") or 0)
-                if ts and ts <= int(since_ts):
+                if not isinstance(tx, dict):
+                    raise RuntimeError("Invalid Solana enriched transaction")
+                sig = tx.get("signature")
+                ts = tx.get("timestamp", tx.get("blockTime"))
+                if (not isinstance(sig, str) or not sig or sig in seen
+                        or type(ts) is not int or ts <= 0):
+                    raise RuntimeError("Missing or duplicate Solana enriched identity/timestamp")
+                Signature.from_string(sig)
+                seen.add(sig)
+                if ts <= int(since_ts):
                     # Older than our waterline; stop scanning further pages.
                     txs = []
                     break
 
+                if "transactionError" not in tx:
+                    raise RuntimeError("Missing Solana enriched transaction outcome")
+                if tx["transactionError"] is not None:
+                    continue  # A finalized failed transaction moved no tokens.
+                transfers = tx.get("tokenTransfers")
+                if not isinstance(transfers, list):
+                    raise RuntimeError("Missing Solana enriched transfer evidence")
                 # Find incoming token transfer to our ATA
-                for t in (tx.get("tokenTransfers") or []):
+                for t in transfers:
                     if str(t.get("toTokenAccount")) != str(token_account_addr):
                         continue
                     if str(t.get("mint")) != solana_mint:
@@ -332,6 +380,8 @@ def _fetch_deposits_helius(
                     sig = tx.get("signature") or None
                     from_addr = t.get("fromUserAccount") or t.get("fromTokenAccount") or None
                     if sig and ts:
+                        if len(collected) >= limit:
+                            raise RuntimeError("Solana enriched deposit budget exhausted")
                         collected.append((sig, ts, memo, from_addr, amount_units))
                     break  # one incoming transfer per tx to our ATA is typical
 
@@ -339,6 +389,8 @@ def _fetch_deposits_helius(
             last_sig = txs[-1].get("signature") if txs else None
             if not last_sig or len(txs) < page_size:
                 break
+            if len(collected) >= limit:
+                raise RuntimeError("Solana enriched deposit budget reached before scan completion")
             before = last_sig
 
         # Oldest-first ordering to match DB processing semantics
@@ -347,6 +399,130 @@ def _fetch_deposits_helius(
     except Exception as e:
         _log("solana_helius_fetch_failed", level=logging.WARNING, error=str(e))
         return None  # Signal fallback needed
+
+
+def _deposit_rpc_result(response):
+    """Preserve empty results, but never turn a missing/error envelope into success."""
+    body = _rpc_to_json(response)
+    if not isinstance(body, dict) or "error" in body or "result" not in body:
+        raise RuntimeError("Invalid Solana deposit RPC envelope")
+    return body["result"]
+
+
+def _base_unit_amount(balance: dict, *, field: str) -> int:
+    """Return a strictly positive SPL base-unit balance from parsed RPC evidence."""
+    token_amount = balance.get("uiTokenAmount")
+    amount = token_amount.get("amount") if isinstance(token_amount, dict) else None
+    if (not isinstance(amount, str) or not amount.isascii() or not amount.isdecimal()
+            or not amount):
+        raise RuntimeError(f"Invalid Solana {field} token balance")
+    return int(amount)
+
+
+def _account_key_at_index(message: dict, index: int) -> str:
+    """Resolve an account index without accepting another account owned by the vault key."""
+    account_keys = message.get("accountKeys")
+    if not isinstance(account_keys, list) or index < 0 or index >= len(account_keys):
+        raise RuntimeError("Missing Solana transaction account-key evidence")
+    key = account_keys[index]
+    if isinstance(key, str):
+        value = key
+    elif isinstance(key, dict):
+        value = key.get("pubkey")
+    else:
+        value = None
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeError("Invalid Solana transaction account key")
+    return value
+
+
+def _extract_core_deposit_evidence(
+    tx_data: dict, *, signature: str, vault_account: str, mint: str
+) -> tuple[str | None, str | None, int]:
+    """Prove one inbound classic-SPL transfer against the exact configured vault account.
+
+    Ownership is deliberately not used to locate the vault: one owner can control many
+    token accounts.  A transaction that cannot bind its balance delta, parsed transfer,
+    mint and source token account to the configured vault remains an incomplete scan.
+    """
+    meta = tx_data.get("meta")
+    tx_obj = tx_data.get("transaction")
+    if not isinstance(meta, dict) or meta.get("err") is not None or not isinstance(tx_obj, dict):
+        raise RuntimeError("Missing successful Solana transaction evidence")
+    signatures = tx_obj.get("signatures")
+    message = tx_obj.get("message")
+    if (not isinstance(signatures, list) or signatures[:1] != [signature]
+            or not isinstance(message, dict)):
+        raise RuntimeError("Solana transaction signature/message mismatch")
+    pre_balances = meta.get("preTokenBalances")
+    post_balances = meta.get("postTokenBalances")
+    if (not isinstance(pre_balances, list) or not isinstance(post_balances, list)
+            or any(not isinstance(row, dict) for row in pre_balances + post_balances)):
+        raise RuntimeError("Missing Solana token balance evidence")
+
+    vault_indices = [
+        index for index in range(len(message.get("accountKeys", [])))
+        if _account_key_at_index(message, index) == vault_account
+    ]
+    if len(vault_indices) != 1:
+        raise RuntimeError("Configured Solana vault account is ambiguous or absent")
+    vault_index = vault_indices[0]
+    matching_pre = [row for row in pre_balances if row.get("accountIndex") == vault_index]
+    matching_post = [row for row in post_balances if row.get("accountIndex") == vault_index]
+    if len(matching_pre) != 1 or len(matching_post) != 1:
+        raise RuntimeError("Missing exact configured-vault token balance")
+    pre, post = matching_pre[0], matching_post[0]
+    if pre.get("mint") != mint or post.get("mint") != mint:
+        raise RuntimeError("Configured Solana vault mint mismatch")
+    vault_delta = _base_unit_amount(post, field="post") - _base_unit_amount(pre, field="pre")
+    if vault_delta <= 0:
+        return None, None, 0
+
+    instructions = list(message.get("instructions") or [])
+    inner_groups = meta.get("innerInstructions", [])
+    if not isinstance(inner_groups, list):
+        raise RuntimeError("Invalid Solana inner instruction evidence")
+    for group in inner_groups:
+        if not isinstance(group, dict) or not isinstance(group.get("instructions"), list):
+            raise RuntimeError("Invalid Solana inner instruction evidence")
+        instructions.extend(group["instructions"])
+
+    incoming: list[tuple[str, int]] = []
+    memos: list[str] = []
+    for instruction in instructions:
+        if not isinstance(instruction, dict):
+            raise RuntimeError("Invalid Solana transaction instruction")
+        program = str(instruction.get("program") or instruction.get("programId") or "")
+        parsed = instruction.get("parsed")
+        if program in {"spl-memo", "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"} or program.startswith("Memo111"):
+            memo = parsed if isinstance(parsed, str) else instruction.get("data")
+            if not isinstance(memo, str) or not memo:
+                raise RuntimeError("Invalid Solana memo evidence")
+            memos.append(memo)
+            continue
+        if program not in {"spl-token", str(TOKEN_PROGRAM_ID)} or not isinstance(parsed, dict):
+            continue
+        if parsed.get("type") != "transferChecked":
+            continue
+        info = parsed.get("info")
+        if not isinstance(info, dict):
+            raise RuntimeError("Invalid parsed SPL transfer")
+        if info.get("destination") != vault_account:
+            continue
+        source = info.get("source")
+        amount_obj = info.get("tokenAmount")
+        amount = amount_obj.get("amount") if isinstance(amount_obj, dict) else None
+        if (not isinstance(source, str) or not source.strip() or source == vault_account
+                or info.get("mint") != mint or not isinstance(amount, str)
+                or not amount.isascii() or not amount.isdecimal() or not amount):
+            raise RuntimeError("Invalid incoming SPL transfer evidence")
+        incoming.append((source, int(amount)))
+
+    if len(incoming) != 1 or incoming[0][1] != vault_delta:
+        raise RuntimeError("Configured-vault balance delta lacks one exact inbound transfer")
+    if len(memos) > 1:
+        raise RuntimeError("Ambiguous Solana deposit memo evidence")
+    return (memos[0] if memos else None), incoming[0][0], vault_delta
 
 
 def _fetch_deposits_core_rpc(
@@ -363,34 +539,47 @@ def _fetch_deposits_core_rpc(
         client = _get_client()
         collected: list[tuple[str, int, str | None, str | None, int]] = []
         solana_mint = str(getattr(config, "USDC_MINT"))
-        
-        # Step 1: Get signatures (1 API call)
+        if type(limit) is not int or limit <= 0:
+            raise RuntimeError("Solana deposit scan requires a positive limit")
+        page_size = min(1000, limit * 2)
+        reached_waterline = False
+        seen: set[str] = set()
+
+        # This bounded page is complete only if it ends or reaches the waterline.
         sig_resp = _rpc_call(
             client.get_signatures_for_address,
             PublicKey.from_string(token_account_addr),
-            limit=min(1000, limit * 2),  # Fetch extra since some may be filtered
+            limit=page_size,
             commitment=_deposit_commitment(),  # reorg safety: see _deposit_commitment()
             timeout=getattr(config, "SOLANA_RPC_TIMEOUT_SEC", 8),
         )
-        sig_entries = _rpc_get_value(sig_resp) or []
-        if not isinstance(sig_entries, list):
-            return []
-        
+        sig_entries = _deposit_rpc_result(sig_resp)
+        if not isinstance(sig_entries, list) or len(sig_entries) > page_size:
+            raise RuntimeError("Invalid Solana signature page")
+        _validate_deposit_page_order(sig_entries)
+
         # Step 2: For each signature, fetch full transaction (N API calls)
         for entry in sig_entries:
-            if len(collected) >= limit:
-                break
-                
             if not isinstance(entry, dict):
-                continue
-            
+                raise RuntimeError("Invalid Solana signature entry")
             block_time = entry.get("blockTime")
-            if block_time is None or block_time <= since_ts:
-                continue  # Skip old transactions
-            
             sig = entry.get("signature")
-            if not sig:
+            if (type(block_time) is not int or block_time <= 0
+                    or not isinstance(sig, str) or not sig or sig in seen):
+                raise RuntimeError("Missing or duplicate Solana signature identity/timestamp")
+            Signature.from_string(sig)
+            seen.add(sig)
+            if block_time <= since_ts:
+                reached_waterline = True
+                break
+            if "err" not in entry:
+                raise RuntimeError("Missing Solana signature outcome")
+            if entry["err"] is not None:
                 continue
+            if entry.get("confirmationStatus") != _deposit_commitment():
+                # Finalized also satisfies an explicitly relaxed confirmed policy.
+                if entry.get("confirmationStatus") != "finalized":
+                    raise RuntimeError("Solana signature commitment not satisfied")
             
             try:
                 signature_obj = Signature.from_string(sig)
@@ -398,76 +587,46 @@ def _fetch_deposits_core_rpc(
                     client.get_transaction,
                     signature_obj,
                     encoding="jsonParsed",
+                    commitment=_deposit_commitment(),
+                    max_supported_transaction_version=0,
                     timeout=getattr(config, "SOLANA_TX_FETCH_TIMEOUT_SEC", 12),
                 )
-                tx_data = _rpc_get_result(tx_resp)
-                if not tx_data or not isinstance(tx_data, dict):
+                tx_data = _deposit_rpc_result(tx_resp)
+                if not isinstance(tx_data, dict):
+                    raise RuntimeError("Missing Solana transaction")
+                meta = tx_data.get("meta")
+                if not isinstance(meta, dict) or "err" not in meta:
+                    raise RuntimeError("Missing Solana transaction outcome")
+                if meta["err"] is not None:
                     continue
-                
-                # Parse transaction for token transfer and memo
-                meta = tx_data.get("meta", {})
-                pre_balances = meta.get("preTokenBalances", [])
-                post_balances = meta.get("postTokenBalances", [])
-                
-                # Calculate vault delta
-                vault_delta = 0
-                from_addr = None
-                for post in post_balances:
-                    if not isinstance(post, dict):
-                        continue
-                    if post.get("mint") == solana_mint and post.get("owner") == str(config.SOL_MAIN_ACCOUNT):
-                        post_amount = int(post.get("uiTokenAmount", {}).get("amount", "0"))
-                        for pre in pre_balances:
-                            if (isinstance(pre, dict) and
-                                pre.get("accountIndex") == post.get("accountIndex") and
-                                pre.get("mint") == post.get("mint")):
-                                pre_amount = int(pre.get("uiTokenAmount", {}).get("amount", "0"))
-                                vault_delta = post_amount - pre_amount
-                                break
-                        break
-                
-                if vault_delta < min_units:
+                tx_obj = tx_data.get("transaction")
+                if not isinstance(tx_obj, dict) or tx_obj.get("signatures", [None])[0] != sig:
+                    raise RuntimeError("Solana transaction signature mismatch")
+                memo, from_addr, vault_delta = _extract_core_deposit_evidence(
+                    tx_data,
+                    signature=sig,
+                    vault_account=str(token_account_addr),
+                    mint=solana_mint,
+                )
+                if vault_delta <= 0 or vault_delta < min_units:
                     continue
-                
-                # Extract sender from preTokenBalances (account that decreased)
-                for pre in pre_balances:
-                    if isinstance(pre, dict) and pre.get("mint") == solana_mint:
-                        pre_amt = int(pre.get("uiTokenAmount", {}).get("amount", "0"))
-                        for post in post_balances:
-                            if (isinstance(post, dict) and 
-                                post.get("accountIndex") == pre.get("accountIndex")):
-                                post_amt = int(post.get("uiTokenAmount", {}).get("amount", "0"))
-                                if post_amt < pre_amt:  # This account sent tokens
-                                    from_addr = pre.get("owner")
-                                    break
-                        if from_addr:
-                            break
-                
-                # Extract memo from instructions
-                memo = None
-                tx_obj = tx_data.get("transaction", {})
-                msg = tx_obj.get("message", {})
-                insts = msg.get("instructions", [])
-                for ix in insts:
-                    prog = ix.get("program")
-                    if prog and str(prog) == "spl-memo":
-                        memo = ix.get("parsed", {})
-                        if isinstance(memo, str):
-                            break
-                        memo = None
-                
+
+                if len(collected) >= limit:
+                    raise RuntimeError("Solana deposit budget exhausted before scan completion")
                 collected.append((sig, block_time, memo, from_addr, vault_delta))
-                
-            except Exception:
-                continue
+
+            except Exception as exc:
+                raise RuntimeError("Solana transaction scan incomplete") from exc
         
+        if len(sig_entries) >= page_size and not reached_waterline:
+            raise RuntimeError("Solana signature page exhausted before reaching waterline")
         # Oldest-first ordering
         collected.sort(key=lambda r: r[1])
         return collected
         
     except Exception as e:
         _log("solana_core_rpc_fetch_failed", level=logging.ERROR, error=str(e))
-        return []
+        raise RuntimeError("Solana deposit scan incomplete; waterline must remain held") from e
     
 
 def process_helius_deposits(deposits: list, db_check: bool = True) -> tuple:
