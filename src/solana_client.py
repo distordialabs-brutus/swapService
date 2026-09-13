@@ -4,6 +4,7 @@ import base64
 import logging
 from time import time
 from typing import Any, Optional
+from dataclasses import dataclass
 import os
 import requests
 from solana.rpc.api import Client
@@ -44,6 +45,16 @@ class PayoutCapExceeded(Exception):
     must leave the item's status untouched and retry on a later cycle - treating this
     like a failure would divert a legitimate refund into quarantine over a temporary cap.
     """
+
+
+@dataclass(frozen=True)
+class SolanaDepositBacklogProgress:
+    """One durably committed finalized-vault-history page."""
+
+    complete: bool
+    admitted_count: int
+    upper_timestamp: int | None
+    next_before_signature: str | None
 
 # SPL Token and ATA Program IDs (constants)
 TOKEN_PROGRAM_ID = PublicKey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
@@ -636,6 +647,113 @@ def _fetch_deposits_core_rpc(
     except Exception as e:
         _log("solana_core_rpc_fetch_failed", level=logging.ERROR, error=str(e))
         raise RuntimeError("Solana deposit scan incomplete; waterline must remain held") from e
+
+
+def scan_incoming_deposits_with_durable_cursor(
+    token_account_addr: str, *, since_ts: int, min_units: int, page_size: int,
+) -> SolanaDepositBacklogProgress:
+    """Commit one exact-cursor core-RPC history page before advancing its cursor.
+
+    `getSignaturesForAddress(before=...)` establishes a fixed descending range even
+    when new signatures arrive at the head.  The public timestamp waterline remains
+    held until a range reaches strictly below its lower timestamp; equal timestamps
+    are scanned rather than used as a pagination boundary.
+    """
+    if type(since_ts) is not int or since_ts < 0:
+        raise ValueError("Solana scan lower timestamp must be a nonnegative integer")
+    if type(min_units) is not int or min_units < 0:
+        raise ValueError("Solana scan minimum must be a nonnegative integer")
+    if type(page_size) is not int or page_size <= 0 or page_size > 1000:
+        raise ValueError("Solana scan page size must be between 1 and 1000")
+
+    vault_account = str(token_account_addr)
+    mint = str(getattr(config, "USDC_MINT"))
+    cursor = state_db.get_solana_deposit_scan_cursor(vault_account)
+    if cursor is not None and (cursor["mint"] != mint or cursor["lower_timestamp"] != since_ts):
+        raise RuntimeError("existing Solana scan cursor conflicts with current deployment/waterline")
+    request_before = cursor["before_signature"] if cursor else None
+    expected_upper_timestamp = cursor["upper_timestamp"] if cursor else None
+
+    try:
+        client = _get_client()
+        args: dict[str, Any] = {
+            "limit": page_size,
+            "commitment": _deposit_commitment(),
+        }
+        if request_before is not None:
+            args["before"] = Signature.from_string(request_before)
+        response = _rpc_call(
+            client.get_signatures_for_address,
+            PublicKey.from_string(vault_account),
+            timeout=getattr(config, "SOLANA_RPC_TIMEOUT_SEC", 8),
+            **args,
+        )
+        entries = _deposit_rpc_result(response)
+        if not isinstance(entries, list) or len(entries) > page_size:
+            raise RuntimeError("invalid Solana cursor signature page")
+        _validate_deposit_page_order(entries)
+
+        deposits: list[tuple[str, int, str | None, str | None, int]] = []
+        seen: set[str] = set()
+        upper_timestamp = expected_upper_timestamp
+        reached_lower = False
+        last_signature = None
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise RuntimeError("invalid Solana cursor signature entry")
+            signature = entry.get("signature")
+            block_time = entry.get("blockTime")
+            if (not isinstance(signature, str) or not signature or signature in seen
+                    or type(block_time) is not int or block_time <= 0 or "err" not in entry):
+                raise RuntimeError("incomplete Solana cursor signature evidence")
+            Signature.from_string(signature)
+            seen.add(signature)
+            last_signature = signature
+            if upper_timestamp is None:
+                upper_timestamp = block_time
+            if block_time < since_ts:
+                reached_lower = True
+                break
+            if entry["err"] is not None:
+                continue
+            if entry.get("confirmationStatus") != _deposit_commitment():
+                if entry.get("confirmationStatus") != "finalized":
+                    raise RuntimeError("Solana cursor signature commitment not satisfied")
+            tx_response = _rpc_call(
+                client.get_transaction,
+                Signature.from_string(signature),
+                encoding="jsonParsed",
+                commitment=_deposit_commitment(),
+                max_supported_transaction_version=0,
+                timeout=getattr(config, "SOLANA_TX_FETCH_TIMEOUT_SEC", 12),
+            )
+            tx_data = _deposit_rpc_result(tx_response)
+            if not isinstance(tx_data, dict):
+                raise RuntimeError("missing Solana cursor transaction")
+            memo, from_address, amount_units = _extract_core_deposit_evidence(
+                tx_data, signature=signature, vault_account=vault_account, mint=mint,
+            )
+            if amount_units >= min_units and amount_units > 0:
+                deposits.append((signature, block_time, memo, from_address, amount_units))
+
+        if upper_timestamp is None:
+            # An empty history proves the range only when no continuation was ever
+            # required.  There is no timestamp to publish, so retain the heartbeat.
+            return SolanaDepositBacklogProgress(True, 0, None, None)
+        complete = reached_lower or len(entries) < page_size
+        next_before = None if complete else last_signature
+        if not complete and not next_before:
+            raise RuntimeError("Solana cursor page has no exact continuation")
+        admitted = state_db.commit_solana_deposit_scan_page(
+            vault_account=vault_account, mint=mint, lower_timestamp=since_ts,
+            request_before_signature=request_before, next_before_signature=next_before,
+            upper_timestamp=upper_timestamp, scanned_signature_count=len(entries),
+            deposits=deposits, complete=complete,
+        )
+        return SolanaDepositBacklogProgress(complete, admitted, upper_timestamp, next_before)
+    except Exception as exc:
+        _log("solana_cursor_scan_failed", level=logging.ERROR, error=str(exc))
+        raise RuntimeError("Solana cursor scan incomplete; waterline must remain held") from exc
     
 
 def process_helius_deposits(deposits: list, db_check: bool = True) -> tuple:

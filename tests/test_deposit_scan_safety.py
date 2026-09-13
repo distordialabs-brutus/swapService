@@ -79,6 +79,14 @@ def core(monkeypatch):
     return client
 
 
+@pytest.fixture
+def durable_scan_db(monkeypatch, tmp_path):
+    """Use a fresh append-only cursor journal for each paginated-scan case."""
+    monkeypatch.setattr(state_db, "DB_PATH", str(tmp_path / "state.db"))
+    state_db.init_db()
+    return tmp_path
+
+
 def scan_core(limit=10):
     return solana_client._fetch_deposits_core_rpc(str(config.VAULT_USDC_ACCOUNT), 100, 1, limit)
 
@@ -122,6 +130,44 @@ def test_core_valid_empty_page_and_complete_deposit_are_supported(core):
     assert scan_core() == [(signature(), 200, "nexus:recipient", "source-token-account", 2000000)]
     core.get_signatures_for_address.return_value = {"result": []}
     assert scan_core() == []
+
+
+def test_durable_cursor_resumes_saturated_history_without_advancing_waterline(core, durable_scan_db):
+    """Each finalized page is queued before its exact `before` cursor is committed."""
+    core.get_signatures_for_address.side_effect = [
+        {"result": [entry(1, 300), entry(2, 299)]},
+        {"result": [entry(3, 298), entry(4, 99)]},
+    ]
+    core.get_transaction.side_effect = [
+        {"result": transaction(1)}, {"result": transaction(2)}, {"result": transaction(3)},
+    ]
+
+    first = solana_client.scan_incoming_deposits_with_durable_cursor(
+        str(config.VAULT_USDC_ACCOUNT), since_ts=100, min_units=1, page_size=2,
+    )
+    assert not first.complete
+    assert first.next_before_signature == signature(2)
+    cursor = state_db.get_solana_deposit_scan_cursor(str(config.VAULT_USDC_ACCOUNT))
+    assert cursor is not None
+    assert cursor["before_signature"] == signature(2)
+    assert cursor["upper_timestamp"] == 300
+
+    second = solana_client.scan_incoming_deposits_with_durable_cursor(
+        str(config.VAULT_USDC_ACCOUNT), since_ts=100, min_units=1, page_size=2,
+    )
+    assert second.complete
+    assert second.upper_timestamp == 300
+    assert str(core.get_signatures_for_address.call_args_list[1].kwargs["before"]) == signature(2)
+    assert state_db.get_solana_deposit_scan_cursor(str(config.VAULT_USDC_ACCOUNT)) is None
+    assert [row[0] for row in state_db.get_unprocessed_sigs()] == [signature(3), signature(2), signature(1)]
+    with __import__("sqlite3").connect(state_db.DB_PATH) as conn:
+        assert conn.execute(
+            "SELECT event, request_before_signature, next_before_signature, admitted_count "
+            "FROM solana_deposit_scan_events ORDER BY id"
+        ).fetchall() == [
+            ("page_committed", None, signature(2), 2),
+            ("range_completed", signature(2), None, 1),
+        ]
 
 
 def test_core_uses_configured_vault_index_not_first_same_owner_balance(core):
@@ -322,7 +368,7 @@ def test_core_scan_through_real_installed_sdk_request_builders(monkeypatch):
 
 
 @pytest.mark.parametrize("mode", ["rpc_failure", "out_of_order"])
-def test_real_poller_holds_waterline_and_queue_on_incomplete_scan(core, mode):
+def test_real_poller_holds_waterline_and_queue_on_incomplete_scan(core, durable_scan_db, mode):
     if mode == "rpc_failure":
         core.get_signatures_for_address.side_effect = TimeoutError("offline RPC failure")
     else:

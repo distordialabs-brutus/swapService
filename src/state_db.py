@@ -301,6 +301,40 @@ def init_db():
             proposed_timestamp INTEGER NOT NULL
         )
     """)
+
+    # Durable cursor for a bounded, finalized Solana vault-history range.  The
+    # public heartbeat retains a timestamp for compatibility, but a timestamp is
+    # not a pagination cursor: multiple signatures may share it.  This state is
+    # written in the same transaction as every admitted deposit page so a crash
+    # cannot skip history by remembering `before` without its queue rows.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS solana_deposit_scan_cursor (
+            vault_account TEXT PRIMARY KEY,
+            mint TEXT NOT NULL,
+            lower_timestamp INTEGER NOT NULL,
+            before_signature TEXT,
+            upper_timestamp INTEGER NOT NULL,
+            started_timestamp INTEGER NOT NULL
+        )
+    """)
+    # Append-only evidence for each committed range page and completion.  It is
+    # operational evidence, never a financial lifecycle replacement.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS solana_deposit_scan_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            vault_account TEXT NOT NULL,
+            mint TEXT NOT NULL,
+            lower_timestamp INTEGER NOT NULL,
+            upper_timestamp INTEGER NOT NULL,
+            request_before_signature TEXT,
+            next_before_signature TEXT,
+            signature_count INTEGER NOT NULL,
+            admitted_count INTEGER NOT NULL,
+            event TEXT NOT NULL CHECK (event IN ('page_committed', 'range_completed')),
+            timestamp INTEGER NOT NULL
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_solana_deposit_scan_events_vault ON solana_deposit_scan_events(vault_account, id)")
     
     # Fee tracking journal
     cursor.execute("""
@@ -1272,6 +1306,125 @@ def get_nexus_transfer_intents_by_status(statuses: tuple[str, ...], limit: int =
         ).fetchall()
         return [intent for row in rows
                 if (intent := _nexus_transfer_intent_dict(row)) is not None]
+    finally:
+        conn.close()
+
+
+## Durable Solana deposit scan cursor
+
+def get_solana_deposit_scan_cursor(vault_account: str) -> dict | None:
+    """Return the incomplete exact-cursor range for one configured vault."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        row = conn.execute(
+            """SELECT vault_account, mint, lower_timestamp, before_signature,
+                      upper_timestamp, started_timestamp
+                 FROM solana_deposit_scan_cursor WHERE vault_account = ?""",
+            (vault_account,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "vault_account": row[0], "mint": row[1], "lower_timestamp": row[2],
+            "before_signature": row[3], "upper_timestamp": row[4],
+            "started_timestamp": row[5],
+        }
+    finally:
+        conn.close()
+
+
+def commit_solana_deposit_scan_page(
+    *, vault_account: str, mint: str, lower_timestamp: int, request_before_signature: str | None,
+    next_before_signature: str | None, upper_timestamp: int, scanned_signature_count: int,
+    deposits: list[tuple[str, int, str | None, str | None, int]], complete: bool,
+) -> int:
+    """Atomically persist one validated history page and its exact resume cursor.
+
+    The page's deposits enter the normal durable queue before the cursor can move.
+    Existing lifecycle rows are retained rather than overwritten on range overlap.
+    """
+    if (not isinstance(vault_account, str) or not vault_account
+            or not isinstance(mint, str) or not mint
+            or type(lower_timestamp) is not int or lower_timestamp < 0
+            or type(upper_timestamp) is not int or upper_timestamp <= 0
+            or type(scanned_signature_count) is not int or scanned_signature_count < 0):
+        raise ValueError("invalid Solana deposit scan page")
+    if complete and next_before_signature is not None:
+        raise ValueError("completed Solana scan cannot retain a pagination cursor")
+    if not complete and (not isinstance(next_before_signature, str) or not next_before_signature):
+        raise ValueError("incomplete Solana scan requires an exact cursor")
+
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            """SELECT mint, lower_timestamp, before_signature, upper_timestamp
+                 FROM solana_deposit_scan_cursor WHERE vault_account = ?""",
+            (vault_account,),
+        ).fetchone()
+        if existing is None:
+            if request_before_signature is not None:
+                raise ValueError("Solana scan cursor disappeared before page commit")
+            conn.execute(
+                """INSERT INTO solana_deposit_scan_cursor
+                   (vault_account, mint, lower_timestamp, before_signature, upper_timestamp, started_timestamp)
+                   VALUES (?, ?, ?, NULL, ?, ?)""",
+                (vault_account, mint, lower_timestamp, upper_timestamp, int(time.time())),
+            )
+        else:
+            if (existing[0] != mint or existing[1] != lower_timestamp
+                    or existing[2] != request_before_signature):
+                raise ValueError("Solana scan cursor/configuration conflict")
+            # A later page must not claim a newer range head.
+            if existing[3] != upper_timestamp:
+                raise ValueError("Solana scan upper timestamp conflict")
+
+        admitted = 0
+        for deposit in deposits:
+            if not isinstance(deposit, tuple) or len(deposit) != 5:
+                raise ValueError("invalid Solana deposit evidence")
+            sig, timestamp, memo, from_address, amount_units = deposit
+            if (not isinstance(sig, str) or not sig or type(timestamp) is not int or timestamp <= 0
+                    or not isinstance(memo, (str, type(None)))
+                    or not isinstance(from_address, (str, type(None)))
+                    or type(amount_units) is not int or amount_units <= 0):
+                raise ValueError("invalid Solana deposit evidence")
+            locations = sum(
+                conn.execute(f"SELECT 1 FROM {table} WHERE sig = ?", (sig,)).fetchone() is not None
+                for table in ("unprocessed_sigs", "processed_sigs", "refunded_sigs", "quarantined_sigs")
+            )
+            if locations > 1:
+                raise ValueError("conflicting existing Solana deposit lifecycle evidence")
+            if locations == 0:
+                conn.execute(
+                    """INSERT INTO unprocessed_sigs
+                       (sig, timestamp, memo, from_address, amount_usdc_units, status, txid)
+                       VALUES (?, ?, ?, ?, ?, 'ready for processing', NULL)""",
+                    (sig, timestamp, memo or "", from_address, amount_units),
+                )
+                admitted += 1
+
+        event = "range_completed" if complete else "page_committed"
+        conn.execute(
+            """INSERT INTO solana_deposit_scan_events
+               (vault_account, mint, lower_timestamp, upper_timestamp, request_before_signature,
+                next_before_signature, signature_count, admitted_count, event, timestamp)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (vault_account, mint, lower_timestamp, upper_timestamp, request_before_signature,
+             next_before_signature, scanned_signature_count, admitted, event, int(time.time())),
+        )
+        if complete:
+            conn.execute("DELETE FROM solana_deposit_scan_cursor WHERE vault_account = ?", (vault_account,))
+        else:
+            conn.execute(
+                "UPDATE solana_deposit_scan_cursor SET before_signature = ? WHERE vault_account = ?",
+                (next_before_signature, vault_account),
+            )
+        conn.commit()
+        return admitted
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

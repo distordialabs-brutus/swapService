@@ -107,6 +107,13 @@ EXPECTED_SCHEMA = {
     # payout row; its append-only events retain capacity across unknown outcomes.
     "solana_payout_budget_events": ["id", "obligation_id", "kind", "event",
                                     "amount_usdc_units", "signature", "evidence", "timestamp"],
+    # The finalized-history cursor is an additive, durable availability journal. Its
+    # events prove page-before-cursor ordering; it does not rewrite financial rows.
+    "solana_deposit_scan_cursor": ["vault_account", "mint", "lower_timestamp", "before_signature",
+                                    "upper_timestamp", "started_timestamp"],
+    "solana_deposit_scan_events": ["id", "vault_account", "mint", "lower_timestamp",
+                                    "upper_timestamp", "request_before_signature", "next_before_signature",
+                                    "signature_count", "admitted_count", "event", "timestamp"],
     # These append-only fields are intentionally introduced by the E-004 durable
     # reconciliation migration. Existing rows retain their original columns and are
     # treated as incomplete evidence until a separately verified backfill exists.

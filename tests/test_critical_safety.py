@@ -724,9 +724,8 @@ class CriticalSafetyTests(unittest.TestCase):
             "last_safe_timestamp_nexus": 100,
             "last_safe_timestamp_solana": 100,
         }), patch.object(
-            swap_solana.solana_client, "fetch_incoming_deposits_via_helius", return_value=[]
-        ), patch.object(
-            swap_solana.solana_client, "process_helius_deposits", return_value=(2, None)
+            swap_solana.solana_client, "scan_incoming_deposits_with_durable_cursor",
+            return_value=solana_client.SolanaDepositBacklogProgress(True, 2, 200, None),
         ), patch.object(
             swap_solana.solana_client, "process_unprocessed_solana_deposits",
             return_value=[3, 4, 5, 6],
@@ -759,7 +758,7 @@ class CriticalSafetyTests(unittest.TestCase):
 
         check_unconfirmed.assert_called_once_with(17, 8.0)
         self.assertIn(
-            call("SOLANA_DEPOSITS_INGESTED", count=2),
+            call("SOLANA_DEPOSITS_INGESTED", count=2, cursor_complete=True),
             log.call_args_list,
         )
         self.assertIn(
