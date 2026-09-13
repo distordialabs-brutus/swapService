@@ -30,14 +30,6 @@ def entry(n=1, timestamp=200):
             "err": None, "confirmationStatus": "finalized"}
 
 
-def enriched(n=1, timestamp=200):
-    return {"signature": signature(n), "timestamp": timestamp,
-            "transactionError": None, "memos": ["nexus:recipient"],
-            "tokenTransfers": [{"toTokenAccount": str(config.VAULT_USDC_ACCOUNT),
-                               "mint": str(config.USDC_MINT),
-                               "fromUserAccount": "sender", "tokenAmount": "2000000"}]}
-
-
 def transaction(n=1):
     def balance(amount):
         return {"accountIndex": 0, "mint": str(config.USDC_MINT),
@@ -57,6 +49,21 @@ def transaction(n=1):
                     }}},
                     {"program": "spl-memo", "parsed": "nexus:recipient"},
                 ]}}}
+
+
+def full_transaction(n=1, timestamp=200, *, amount=2000000):
+    """Helius `transactionDetails=full` omits the signatures-mode status field."""
+    tx = transaction(n)
+    tx["blockTime"] = timestamp
+    tx["meta"]["postTokenBalances"][0]["uiTokenAmount"]["amount"] = str(amount)
+    tx["transaction"]["message"]["instructions"][0]["parsed"]["info"]["tokenAmount"]["amount"] = str(amount)
+    return tx
+
+
+def no_deposit_transaction(n=1, timestamp=200):
+    tx = full_transaction(n, timestamp, amount=0)
+    tx["transaction"]["message"]["instructions"] = []
+    return tx
 
 
 @pytest.fixture
@@ -164,29 +171,31 @@ def test_core_failed_transaction_cannot_create_a_deposit(core, where):
     assert scan_core() == []
 
 
-def test_failed_enriched_transaction_never_reaches_queue(monkeypatch):
-    tx = enriched()
-    tx["transactionError"] = {"error": "InstructionError"}
+def test_failed_helius_full_transaction_never_reaches_queue(monkeypatch):
+    tx = full_transaction()
+    tx["meta"]["err"] = {"InstructionError": [1, "Custom"]}
     monkeypatch.setattr(solana_client, "_helius_rpc_url", lambda: "offline")
-    monkeypatch.setattr(solana_client, "helius_get_transactions_for_address", lambda *a, **k: [tx])
+    monkeypatch.setattr(solana_client, "_helius_get_full_deposit_page", lambda *_args, **_kwargs: ([tx], None))
     rows = solana_client._fetch_deposits_helius(str(config.VAULT_USDC_ACCOUNT), 100, 1, 10)
-    assert rows is not None
+    assert rows == []
     with patch.object(state_db, "add_unprocessed_sig") as enqueue:
         assert solana_client.process_helius_deposits(rows, False) == (0, None)
         enqueue.assert_not_called()
 
 
-def test_missing_enriched_outcome_requests_fallback(monkeypatch):
-    tx = enriched()
-    del tx["transactionError"]
+def test_helius_missing_full_transaction_outcome_requests_fallback(monkeypatch):
+    tx = full_transaction()
+    del tx["meta"]["err"]
     monkeypatch.setattr(solana_client, "_helius_rpc_url", lambda: "offline")
-    monkeypatch.setattr(solana_client, "helius_get_transactions_for_address", lambda *a, **k: [tx])
+    monkeypatch.setattr(solana_client, "_helius_get_full_deposit_page", lambda *_args, **_kwargs: ([tx], None))
     assert solana_client._fetch_deposits_helius(str(config.VAULT_USDC_ACCOUNT), 100, 1, 10) is None
 
 
-def test_saturated_enriched_page_requests_complete_fallback(monkeypatch):
+def test_helius_deposit_budget_requires_waterline_coverage(monkeypatch):
     monkeypatch.setattr(solana_client, "_helius_rpc_url", lambda: "offline")
-    monkeypatch.setattr(solana_client, "helius_get_transactions_for_address", lambda *a, **k: [enriched()])
+    monkeypatch.setattr(
+        solana_client, "_helius_get_full_deposit_page", lambda *_args, **_kwargs: ([full_transaction()], "next")
+    )
     assert solana_client._fetch_deposits_helius(str(config.VAULT_USDC_ACCOUNT), 100, 1, 1) is None
 
 
@@ -204,18 +213,46 @@ def test_full_core_page_is_complete_when_it_reaches_waterline(core):
     assert scan_core(limit=1) == [(signature(), 200, "nexus:recipient", "source-token-account", 2000000)]
 
 
-def test_enriched_complete_success_and_repeated_cursor(monkeypatch):
+def test_helius_full_evidence_uses_exact_core_parser(monkeypatch):
     monkeypatch.setattr(solana_client, "_helius_rpc_url", lambda: "offline")
-    provider = Mock(return_value=[enriched()])
-    monkeypatch.setattr(solana_client, "helius_get_transactions_for_address", provider)
+    provider = Mock(return_value=([full_transaction()], None))
+    monkeypatch.setattr(solana_client, "_helius_get_full_deposit_page", provider)
     assert solana_client._fetch_deposits_helius(str(config.VAULT_USDC_ACCOUNT), 100, 1, 10) == [
-        (signature(), 200, "nexus:recipient", "sender", 2000000)]
-    unrelated = enriched()
-    unrelated["tokenTransfers"] = []
-    provider.return_value = [unrelated]
-    # Full pages of non-deposits do not consume the deposit budget; repeated cursors
-    # must nevertheless stop in bounded time rather than loop forever.
-    assert solana_client._fetch_deposits_helius(str(config.VAULT_USDC_ACCOUNT), 100, 1, 1) is None
+        (signature(), 200, "nexus:recipient", "source-token-account", 2000000)]
+    kwargs = provider.call_args.kwargs
+    assert kwargs["commitment"] == "finalized"
+    assert kwargs["pagination_token"] is None
+
+
+def test_helius_full_page_requests_json_parsed_evidence_and_pagination(monkeypatch):
+    rpc = Mock(return_value={"data": [full_transaction()], "paginationToken": "next"})
+    monkeypatch.setattr(solana_client, "_helius_rpc_call", rpc)
+
+    rows, continuation = solana_client._helius_get_full_deposit_page(
+        "vault", limit=20, pagination_token="previous", commitment="finalized"
+    )
+
+    assert rows == [full_transaction()]
+    assert continuation == "next"
+    assert rpc.call_args.args == ("getTransactionsForAddress", ["vault", {
+        "limit": 20,
+        "commitment": "finalized",
+        "transactionDetails": "full",
+        "encoding": "jsonParsed",
+        "maxSupportedTransactionVersion": 0,
+        "sortOrder": "desc",
+        "paginationToken": "previous",
+    }])
+
+
+def test_helius_full_page_uses_continuation_and_rejects_duplicate_identity(monkeypatch):
+    first_page = [no_deposit_transaction(1, 200), no_deposit_transaction(2, 199)]
+    provider = Mock(side_effect=[(first_page, "next"), ([no_deposit_transaction(1, 198)], None)])
+    monkeypatch.setattr(solana_client, "_helius_rpc_url", lambda: "offline")
+    monkeypatch.setattr(solana_client, "_helius_get_full_deposit_page", provider)
+    assert solana_client._fetch_deposits_helius(str(config.VAULT_USDC_ACCOUNT), 100, 1, 10) is None
+    assert provider.call_count == 2
+    assert provider.call_args.kwargs["pagination_token"] == "next"
 
 
 def test_core_out_of_order_page_cannot_hide_newer_deposit(core):
@@ -225,21 +262,22 @@ def test_core_out_of_order_page_cannot_hide_newer_deposit(core):
     core.get_transaction.assert_not_called()
 
 
-def test_enriched_out_of_order_page_requests_fallback(monkeypatch):
+def test_helius_out_of_order_page_requests_fallback(monkeypatch):
     monkeypatch.setattr(solana_client, "_helius_rpc_url", lambda: "offline")
-    monkeypatch.setattr(solana_client, "helius_get_transactions_for_address",
-                        lambda *a, **k: [enriched(1, 90), enriched(2, 200)])
+    monkeypatch.setattr(
+        solana_client,
+        "_helius_get_full_deposit_page",
+        lambda *_args, **_kwargs: ([full_transaction(1, 90), full_transaction(2, 200)], None),
+    )
     assert solana_client._fetch_deposits_helius(str(config.VAULT_USDC_ACCOUNT), 100, 1, 10) is None
 
 
-@pytest.mark.parametrize("second_page", [None, {"error": "offline"}, [enriched(2, 250)]])
-def test_enriched_second_page_failure_or_reversed_order_never_returns_partial(monkeypatch, second_page):
-    first = enriched()
-    first["tokenTransfers"] = []
+def test_helius_second_page_failure_never_returns_partial(monkeypatch):
+    first_page = [no_deposit_transaction(1, 200), no_deposit_transaction(2, 199)]
+    provider = Mock(side_effect=[(first_page, "next"), RuntimeError("offline")])
     monkeypatch.setattr(solana_client, "_helius_rpc_url", lambda: "offline")
-    provider = Mock(side_effect=[[first], second_page])
-    monkeypatch.setattr(solana_client, "helius_get_transactions_for_address", provider)
-    assert solana_client._fetch_deposits_helius(str(config.VAULT_USDC_ACCOUNT), 100, 1, 1) is None
+    monkeypatch.setattr(solana_client, "_helius_get_full_deposit_page", provider)
+    assert solana_client._fetch_deposits_helius(str(config.VAULT_USDC_ACCOUNT), 100, 1, 10) is None
     assert provider.call_count == 2
 
 
@@ -250,10 +288,13 @@ def test_core_transaction_error_envelope_or_signature_mismatch_holds(core, bad_r
         scan_core()
 
 
-def test_enriched_and_core_incomplete_scans_cannot_become_empty_success(core, monkeypatch):
+def test_helius_and_core_incomplete_scans_cannot_become_empty_success(core, monkeypatch):
     monkeypatch.setattr(solana_client, "_helius_rpc_url", lambda: "offline")
-    monkeypatch.setattr(solana_client, "helius_get_transactions_for_address",
-                        lambda *a, **k: [enriched(1, 90), enriched(2, 200)])
+    monkeypatch.setattr(
+        solana_client,
+        "_helius_get_full_deposit_page",
+        lambda *_args, **_kwargs: ([full_transaction(1, 90), full_transaction(2, 200)], None),
+    )
     core.get_signatures_for_address.side_effect = TimeoutError("fallback failed")
     with pytest.raises(RuntimeError):
         solana_client.fetch_incoming_deposits_via_helius(str(config.VAULT_USDC_ACCOUNT), 100, 1, 10)

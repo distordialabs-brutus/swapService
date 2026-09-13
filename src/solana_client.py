@@ -149,6 +149,43 @@ def helius_get_transactions_for_address(
     return result
 
 
+def _helius_get_full_deposit_page(
+    address: str,
+    *,
+    limit: int,
+    pagination_token: str | None,
+    commitment: str,
+) -> tuple[list[dict], str | None]:
+    """Read one trusted Helius page with core-RPC-equivalent transaction evidence.
+
+    Helius is the transport and indexer here, not a substitute for immutable evidence:
+    financial admission consumes only the complete ``transaction``/``meta`` structure
+    documented for ``transactionDetails=full``.
+    """
+    options: dict[str, Any] = {
+        "limit": max(1, min(1000, int(limit))),
+        "commitment": commitment,
+        "transactionDetails": "full",
+        "encoding": "jsonParsed",
+        "maxSupportedTransactionVersion": 0,
+        "sortOrder": "desc",
+    }
+    if pagination_token is not None:
+        if not isinstance(pagination_token, str) or not pagination_token:
+            raise RuntimeError("Invalid Helius deposit pagination token")
+        options["paginationToken"] = pagination_token
+    result = _helius_rpc_call("getTransactionsForAddress", [address, options])
+    if not isinstance(result, dict):
+        raise RuntimeError("Helius deposit result lacks full transaction envelope")
+    transactions = result.get("data")
+    next_token = result.get("paginationToken")
+    if (not isinstance(transactions, list)
+            or any(not isinstance(row, dict) for row in transactions)
+            or (next_token is not None and (not isinstance(next_token, str) or not next_token))):
+        raise RuntimeError("Invalid Helius full transaction page")
+    return transactions, next_token
+
+
 def core_get_transactions_for_address(
     address: str,
     *,
@@ -283,122 +320,94 @@ def _fetch_deposits_helius(
     min_units: int,
     limit: int,
 ) -> list[tuple[str, int, str | None, str | None, int]] | None:
+    """Use Helius's full transaction response with the canonical core evidence parser.
+
+    If Helius cannot provide a complete, ordered full-response range, return ``None`` so
+    the core scanner performs the same fail-closed check through the configured RPC.
     """
-    Internal: Fetch deposits using Helius enriched RPC.
-    Returns None if Helius is not configured or fails (signals fallback needed).
-    """
-    # Check if Helius is configured
     if not _helius_rpc_url():
         return None
-    
+
     try:
+        if type(limit) is not int or limit <= 0:
+            raise RuntimeError("Solana deposit scan requires a positive limit")
         collected: list[tuple[str, int, str | None, str | None, int]] = []
-        page_size = max(1, min(1000, limit))
-        before: str | None = None
+        page_size = min(1000, limit * 2)
+        pagination_token: str | None = None
         solana_mint = str(getattr(config, "USDC_MINT"))
+        commitment = _deposit_commitment()
         seen: set[str] = set()
         pages = 0
         previous_page_timestamp = None
+        reached_waterline = False
 
         while True:
             pages += 1
             if pages > 100:
-                raise RuntimeError("Solana enriched scan page budget exhausted")
-            txs = helius_get_transactions_for_address(
+                raise RuntimeError("Helius deposit scan page budget exhausted")
+            txs, next_token = _helius_get_full_deposit_page(
                 str(token_account_addr),
                 limit=page_size,
-                before=before,
-                # 'finalized' by default: a 'confirmed' deposit can still be reorged
-                # away after we have already minted supply against it.
-                commitment=getattr(config, "SOLANA_DEPOSIT_COMMITMENT", "finalized"),
-                encoding=None,
+                pagination_token=pagination_token,
+                commitment=commitment,
             )
-            if not isinstance(txs, list) or len(txs) > page_size:
-                raise RuntimeError("Invalid Solana enriched transaction page")
-            previous_page_timestamp = _validate_deposit_page_order(
-                txs, previous_page_timestamp, timestamp_field="timestamp"
-            )
+            if len(txs) > page_size:
+                raise RuntimeError("Helius returned oversized deposit page")
+            previous_page_timestamp = _validate_deposit_page_order(txs, previous_page_timestamp)
             if not txs:
+                if next_token is not None:
+                    raise RuntimeError("Helius returned empty deposit page with continuation")
                 break
 
             for tx in txs:
-                if not isinstance(tx, dict):
-                    raise RuntimeError("Invalid Solana enriched transaction")
-                sig = tx.get("signature")
-                ts = tx.get("timestamp", tx.get("blockTime"))
-                if (not isinstance(sig, str) or not sig or sig in seen
-                        or type(ts) is not int or ts <= 0):
-                    raise RuntimeError("Missing or duplicate Solana enriched identity/timestamp")
-                Signature.from_string(sig)
-                seen.add(sig)
-                if ts <= int(since_ts):
-                    # Older than our waterline; stop scanning further pages.
-                    txs = []
+                tx_obj = tx.get("transaction")
+                meta = tx.get("meta")
+                if not isinstance(tx_obj, dict) or not isinstance(meta, dict):
+                    raise RuntimeError("Helius deposit lacks full transaction evidence")
+                signatures = tx_obj.get("signatures")
+                block_time = tx.get("blockTime")
+                signature = signatures[0] if isinstance(signatures, list) and signatures else None
+                if (not isinstance(signature, str) or not signature or signature in seen
+                        or type(block_time) is not int or block_time <= 0):
+                    raise RuntimeError("Helius deposit identity/timestamp is incomplete")
+                Signature.from_string(signature)
+                seen.add(signature)
+                if block_time <= since_ts:
+                    reached_waterline = True
                     break
+                if "err" not in meta:
+                    raise RuntimeError("Helius deposit lacks transaction outcome")
+                if meta["err"] is not None:
+                    continue
+                # Helius applies the requested commitment to this full-history query.
+                # Its documented `transactionDetails=full` rows expose transaction/meta but
+                # not the signatures-mode `confirmationStatus` field, so requiring that absent
+                # field would turn every valid full page into an unnecessary core-RPC fallback.
+                memo, source_token_account, amount_units = _extract_core_deposit_evidence(
+                    tx,
+                    signature=signature,
+                    vault_account=str(token_account_addr),
+                    mint=solana_mint,
+                )
+                if amount_units <= 0 or amount_units < min_units:
+                    continue
+                if len(collected) >= limit:
+                    raise RuntimeError("Helius deposit budget exhausted before waterline")
+                collected.append((signature, block_time, memo, source_token_account, amount_units))
 
-                if "transactionError" not in tx:
-                    raise RuntimeError("Missing Solana enriched transaction outcome")
-                if tx["transactionError"] is not None:
-                    continue  # A finalized failed transaction moved no tokens.
-                transfers = tx.get("tokenTransfers")
-                if not isinstance(transfers, list):
-                    raise RuntimeError("Missing Solana enriched transfer evidence")
-                # Find incoming token transfer to our ATA
-                for t in transfers:
-                    if str(t.get("toTokenAccount")) != str(token_account_addr):
-                        continue
-                    if str(t.get("mint")) != solana_mint:
-                        continue
-
-                    # Amount in base units (tokenAmount is base units in enriched)
-                    amt_str = str(t.get("tokenAmount") or "0")
-                    try:
-                        amount_units = int(amt_str)
-                    except Exception:
-                        # Fallback if tokenAmount was UI; convert with decimals if present
-                        from decimal import Decimal, ROUND_DOWN
-                        decimals = int(t.get("decimals") or 6)
-                        amount_units = int((Decimal(amt_str) * (Decimal(10) ** decimals)).to_integral_value(rounding=ROUND_DOWN))
-
-                    if amount_units < int(min_units):
-                        continue
-
-                    # Memo from enriched 'memos', else scan instructions (rare fallback)
-                    memo = None
-                    memos = tx.get("memos") or []
-                    if memos:
-                        memo = memos[0]
-                    else:
-                        for ix in (tx.get("instructions") or []):
-                            pid = str(ix.get("programId") or "")
-                            if pid == "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr" or pid.startswith("Memo111"):
-                                data = ix.get("data")
-                                if isinstance(data, str) and data:
-                                    memo = data
-                                    break
-
-                    sig = tx.get("signature") or None
-                    from_addr = t.get("fromUserAccount") or t.get("fromTokenAccount") or None
-                    if sig and ts:
-                        if len(collected) >= limit:
-                            raise RuntimeError("Solana enriched deposit budget exhausted")
-                        collected.append((sig, ts, memo, from_addr, amount_units))
-                    break  # one incoming transfer per tx to our ATA is typical
-
-            # Prepare pagination
-            last_sig = txs[-1].get("signature") if txs else None
-            if not last_sig or len(txs) < page_size:
+            if reached_waterline:
+                break
+            if next_token is None:
                 break
             if len(collected) >= limit:
-                raise RuntimeError("Solana enriched deposit budget reached before scan completion")
-            before = last_sig
+                raise RuntimeError("Helius deposit budget reached before waterline")
+            pagination_token = next_token
 
-        # Oldest-first ordering to match DB processing semantics
-        collected.sort(key=lambda r: r[1])
+        collected.sort(key=lambda row: row[1])
         return collected
-    except Exception as e:
-        _log("solana_helius_fetch_failed", level=logging.WARNING, error=str(e))
-        return None  # Signal fallback needed
+    except Exception as exc:
+        _log("solana_helius_fetch_failed", level=logging.WARNING, error=str(exc))
+        return None
 
 
 def _deposit_rpc_result(response):
