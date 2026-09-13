@@ -50,7 +50,7 @@ Excluded surfaces are explicit:
 | `.github/copilot-instructions.md` | Display metadata | Keep money-path and Nexus/Solana safety guidance synchronized with the validated canonical configuration. |
 <!-- token-pair-inventory: ASSET_STANDARD.md:15,171,183,188,189,451 -->
 | `ASSET_STANDARD.md` | Planned/schema example + Public pair-specific example | Keep v1 distinct from planned v2; Nexus `format=basic` fixes field sets, so never relabel an incomplete v1 asset as v2. |
-<!-- token-pair-inventory: CONFIG.md:24,25,28,38,39,40,41,42,43,44,45,46,47,48,49,50,53,59,60,61,62,71,73,81,108,109,110,220,233,234,235,248,268,269 -->
+<!-- token-pair-inventory: CONFIG.md:24,25,28,38,39,40,41,42,43,44,45,46,47,48,49,50,53,59,60,61,62,71,73,81,108,109,110,214,227,228,229,242,262,263 -->
 | `CONFIG.md` | Migration alias + Public pair-specific example | Document implemented canonical configuration, exact defaults/alias behavior and currently legacy-only settings; do not advertise future provider-v2 settings as active. |
 <!-- token-pair-inventory: README.md:3,30,33,40 -->
 | `README.md` | Display metadata + Migration alias | Deployment-neutral instructions describe the configured pair and existing public-record fields; retained token literals identify defaults or compatibility aliases only. |
@@ -58,11 +58,11 @@ Excluded surfaces are explicit:
 | `SETUP.md` | Public pair-specific example + Migration alias | Document the implemented single-pair runtime with canonical settings and clearly separate planned provider-v2 work; retain exact supported legacy-only settings. |
 <!-- token-pair-inventory: create_heartbeat_asset.py:24,26,42,43,44,250,251,253,318,319,328,329,338,339,380,382 -->
 | `create_heartbeat_asset.py` | Runtime semantics + Public pair-specific example | Retire default pair/ticker arguments behind a config-derived address-based v2 creation workflow. |
-<!-- token-pair-inventory: docs/EVALUATION.md:311,580,628,641,655,841,842,891,927 -->
+<!-- token-pair-inventory: docs/EVALUATION.md:300,543,591,604,618,798,799,848,884 -->
 | `docs/EVALUATION.md` | Planned/schema example | Maintain as evaluated remediation evidence; change only with verified implementation evidence. |
 <!-- token-pair-inventory: docs/SECURITY.md:51,58,64,71,95,98 -->
 | `docs/SECURITY.md` | Runtime semantics + Migration alias + Frozen compatibility state | Describe controls by chain and preserve actual configuration/compatibility identifiers; defaults are not fixed token identities. |
-<!-- token-pair-inventory: docs/STATE_MACHINES.md:7,130,209,250,271,311,312,374 -->
+<!-- token-pair-inventory: docs/STATE_MACHINES.md:7,121,193,234,255,295,296,358 -->
 | `docs/STATE_MACHINES.md` | Migration alias + Frozen compatibility state | Preserve current lifecycle terminology; migrate persisted names only with append-only database evidence. |
 <!-- token-pair-inventory: docs/SWAP_INITIATOR_STATE_MACHINES.md:150,157,158 -->
 | `docs/SWAP_INITIATOR_STATE_MACHINES.md` | Frozen compatibility state | Describe configured-pair flows and effective published terms; any retained fixed-pair values must be explicit examples, not universal minimums or refund guarantees. |
