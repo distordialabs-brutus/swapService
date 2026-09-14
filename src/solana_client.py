@@ -49,12 +49,31 @@ class PayoutCapExceeded(Exception):
 
 @dataclass(frozen=True)
 class SolanaDepositBacklogProgress:
-    """One durably committed finalized-vault-history page."""
+    """One durably committed bounded vault-history page."""
 
     complete: bool
     admitted_count: int
     upper_timestamp: int | None
     next_before_signature: str | None
+    provider: str = "core"
+    next_pagination_token: str | None = None
+    held_count: int = 0
+
+
+class UnsupportedDepositEvidence(RuntimeError):
+    """A valid successful transaction changed the vault in an unsupported way.
+
+    The signature can be durably held for parser/operator replay without making an
+    otherwise complete provider page look incomplete.  Malformed or missing evidence
+    continues to raise ordinary RuntimeError and holds the whole page/cursor.
+    """
+
+    def __init__(self, reason: str, amount_units: int):
+        super().__init__(reason)
+        self.reason = reason
+        if type(amount_units) is not int or amount_units <= 0:
+            raise ValueError("unsupported deposit evidence requires proven positive principal")
+        self.amount_units = amount_units
 
 # SPL Token and ATA Program IDs (constants)
 TOKEN_PROGRAM_ID = PublicKey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
@@ -80,20 +99,37 @@ def _get_client() -> Client:
 # --- Optional Helius JSON-RPC helpers -----------------------------------------------------------
 def _helius_rpc_url() -> Optional[str]:
     """Build the Helius RPC URL from config or environment.
-    Priority: config.HELIUS_RPC_URL -> env HELIUS_RPC_URL -> https://rpc.helius.xyz/?api-key=KEY
+
+    An explicit Helius URL wins, followed by an explicit Helius-owned
+    ``SOLANA_RPC_URL``. Only then may an API key synthesize a modern endpoint for the
+    configured network. Official hostnames are validated against ``SOLANA_NETWORK``.
     """
-    try:
-        url = getattr(config, "HELIUS_RPC_URL", None) or os.getenv("HELIUS_RPC_URL")
-        if url:
-            return url
-    except Exception:
-        pass
-    try:
-        key = getattr(config, "HELIUS_API_KEY", None) or os.getenv("HELIUS_API_KEY")
-        if key:
-            return f"https://rpc.helius.xyz/?api-key={key}"
-    except Exception:
-        pass
+    from urllib.parse import quote, urlparse
+
+    rpc_url = str(getattr(config, "RPC_URL", "") or "").strip()
+    rpc_network = _network_identity_for_url(rpc_url)
+    explicit = str(
+        getattr(config, "HELIUS_RPC_URL", "") or os.getenv("HELIUS_RPC_URL") or ""
+    ).strip()
+    if explicit:
+        network = _network_identity_for_url(explicit)
+        if rpc_network in {"mainnet", "devnet", "testnet"} and network != rpc_network:
+            raise ValueError("Helius endpoint network conflicts with SOLANA_RPC_URL")
+        return explicit
+
+    rpc_host = (urlparse(rpc_url).hostname or "").lower()
+    if rpc_host == "rpc.helius.xyz" or rpc_host.endswith(".helius-rpc.com"):
+        _network_identity_for_url(rpc_url)
+        return rpc_url
+
+    key = str(
+        getattr(config, "HELIUS_API_KEY", "") or os.getenv("HELIUS_API_KEY") or ""
+    ).strip()
+    if key:
+        network = rpc_network
+        if network not in {"mainnet", "devnet"}:
+            raise ValueError("HELIUS_API_KEY shorthand requires an identifiable mainnet/devnet network")
+        return f"https://{network}.helius-rpc.com/?api-key={quote(key, safe='')}"
     return None
 
 
@@ -131,33 +167,33 @@ def _deposit_commitment() -> str:
     return str(getattr(config, "SOLANA_DEPOSIT_COMMITMENT", "finalized") or "finalized")
 
 
-def helius_get_transactions_for_address(
-    address: str,
-    *,
-    limit: int = 100,
-    before: Optional[str] = None,
-    until: Optional[str] = None,
-    commitment: str | None = None,
-    encoding: Optional[str] = None,
-) -> list:
-    """Fetch transactions for an address via Helius `getTransactionsForAddress`.
-
-    Returns a list of enriched transaction objects (shape defined by Helius). If the method
-    is unavailable or fails, callers can catch and fallback to core RPC.
-    """
-    lim = max(1, min(1000, int(limit)))
-    opts: dict = {"limit": lim, "commitment": commitment or _deposit_commitment()}
-    if before:
-        opts["before"] = before
-    if until:
-        opts["until"] = until
-    if encoding:
-        opts["encoding"] = encoding
-    # Helius expects params: [address, options]
-    result = _helius_rpc_call("getTransactionsForAddress", [address, opts])
-    if not isinstance(result, list):
-        raise RuntimeError("Solana enriched transaction page is not a list")
-    return result
+def _helius_deposit_options(
+    *, limit: int, commitment: str, lower_timestamp: int, upper_timestamp: int,
+    pagination_token: str | None = None,
+) -> dict[str, Any]:
+    """Build the single canonical Helius wire-query representation."""
+    if (type(lower_timestamp) is not int or lower_timestamp < 0
+            or type(upper_timestamp) is not int or upper_timestamp <= lower_timestamp):
+        raise ValueError("Helius deposit query requires a fixed increasing timestamp range")
+    if commitment not in {"confirmed", "finalized"}:
+        raise ValueError("Helius deposit commitment must be confirmed or finalized")
+    options: dict[str, Any] = {
+        "limit": max(1, min(1000, int(limit))),
+        "commitment": commitment,
+        "transactionDetails": "full",
+        "encoding": "jsonParsed",
+        "maxSupportedTransactionVersion": 0,
+        "sortOrder": "desc",
+        "filters": {
+            "blockTime": {"gte": lower_timestamp, "lte": upper_timestamp},
+            "status": "succeeded",
+        },
+    }
+    if pagination_token is not None:
+        if not isinstance(pagination_token, str) or not pagination_token:
+            raise RuntimeError("Invalid Helius deposit pagination token")
+        options["paginationToken"] = pagination_token
+    return options
 
 
 def _helius_get_full_deposit_page(
@@ -166,6 +202,8 @@ def _helius_get_full_deposit_page(
     limit: int,
     pagination_token: str | None,
     commitment: str,
+    lower_timestamp: int,
+    upper_timestamp: int,
 ) -> tuple[list[dict], str | None]:
     """Read one trusted Helius page with core-RPC-equivalent transaction evidence.
 
@@ -173,18 +211,10 @@ def _helius_get_full_deposit_page(
     financial admission consumes only the complete ``transaction``/``meta`` structure
     documented for ``transactionDetails=full``.
     """
-    options: dict[str, Any] = {
-        "limit": max(1, min(1000, int(limit))),
-        "commitment": commitment,
-        "transactionDetails": "full",
-        "encoding": "jsonParsed",
-        "maxSupportedTransactionVersion": 0,
-        "sortOrder": "desc",
-    }
-    if pagination_token is not None:
-        if not isinstance(pagination_token, str) or not pagination_token:
-            raise RuntimeError("Invalid Helius deposit pagination token")
-        options["paginationToken"] = pagination_token
+    options = _helius_deposit_options(
+        limit=limit, commitment=commitment, lower_timestamp=lower_timestamp,
+        upper_timestamp=upper_timestamp, pagination_token=pagination_token,
+    )
     result = _helius_rpc_call("getTransactionsForAddress", [address, options])
     if not isinstance(result, dict):
         raise RuntimeError("Helius deposit result lacks full transaction envelope")
@@ -195,114 +225,6 @@ def _helius_get_full_deposit_page(
             or (next_token is not None and (not isinstance(next_token, str) or not next_token))):
         raise RuntimeError("Invalid Helius full transaction page")
     return transactions, next_token
-
-
-def core_get_transactions_for_address(
-    address: str,
-    *,
-    limit: int = 100,
-    before: Optional[str] = None,
-    until: Optional[str] = None,
-    commitment: str | None = None,
-) -> list:
-    """Fallback using core RPC: getSignaturesForAddress + getTransaction (jsonParsed).
-    Returns a list of transaction JSONs similar to getTransaction results.
-    """
-    client = _get_client()
-    lim = max(1, min(1000, int(limit)))
-    sig_args = {"limit": lim, "commitment": commitment or _deposit_commitment()}
-    if before:
-        sig_args["before"] = before
-    if until:
-        sig_args["until"] = until
-    # Fetch signatures
-    sig_resp = _rpc_call(
-        client.get_signatures_for_address,
-        PublicKey.from_string(address),
-        **sig_args,
-        timeout=getattr(config, "SOLANA_RPC_TIMEOUT_SEC", 8),
-    )
-    sig_entries = _rpc_get_result(sig_resp) or []
-    if not isinstance(sig_entries, list):
-        return []
-    sigs = [e.get("signature") for e in sig_entries if isinstance(e, dict) and e.get("signature")]
-    out: list = []
-    for sig in sigs:
-        try:
-            signature_obj = Signature.from_string(sig)
-            tx_resp = _rpc_call(
-                client.get_transaction,
-                signature_obj,
-                encoding="jsonParsed",
-                timeout=getattr(config, "SOLANA_RPC_TIMEOUT_SEC", 8),
-            )
-            tx = _rpc_get_result(tx_resp)
-            if tx:
-                out.append(tx)
-        except Exception:
-            continue
-    return out
-
-
-def get_transactions_for_address(
-    address: str,
-    *,
-    limit: int = 100,
-    before: Optional[str] = None,
-    until: Optional[str] = None,
-    commitment: str | None = None,
-    prefer: str = "helius",
-) -> list:
-    """Unified helper: try Helius RPC first (if configured), else fallback to core RPC.
-    prefer: "helius" | "core"
-    """
-    if prefer == "helius":
-        try:
-            return helius_get_transactions_for_address(
-                address,
-                limit=limit,
-                before=before,
-                until=until,
-                commitment=commitment,
-            )
-        except Exception:
-            # Fallback to core
-            pass
-    return core_get_transactions_for_address(
-        address,
-        limit=limit,
-        before=before,
-        until=until,
-        commitment=commitment,
-    )
-
-
-def fetch_incoming_deposits_via_helius(
-    token_account_addr: str,
-    since_ts: int,
-    min_units: int = 0,
-    limit: int = 200,
-) -> list[tuple[str, int, str | None, str | None, int]]:
-    """
-    Fetch recent incoming token transfers to token_account_addr with memos.
-    
-    Performance comparison:
-    - Helius: 1-2 API calls (enriched data with parsed tokenTransfers + memos)
-    - Core RPC: N+1 calls (1 getSignaturesForAddress + N getTransaction calls)
-    
-    For 100 deposits, Helius is ~50-100x faster (1 call vs 101 calls).
-    
-    Returns a list of tuples: (signature, timestamp, memo, from_address, amount_usdc_units).
-    Falls back to core RPC if Helius is not configured or fails.
-    """
-    # Try Helius first (fast path: 1-2 API calls for enriched data)
-    helius_result = _fetch_deposits_helius(token_account_addr, since_ts, min_units, limit)
-    if helius_result is not None:
-        return helius_result
-    
-    # Fallback to core RPC (slow path: N+1 API calls)
-    _log("solana_helius_fallback", level=logging.WARNING, fallback="core_rpc")
-    return _fetch_deposits_core_rpc(token_account_addr, since_ts, min_units, limit)
 
 
 def _validate_deposit_page_order(
@@ -323,102 +245,6 @@ def _validate_deposit_page_order(
             raise RuntimeError("Solana deposit page timestamp order is incomplete")
         previous_timestamp = timestamp
     return previous_timestamp
-
-
-def _fetch_deposits_helius(
-    token_account_addr: str,
-    since_ts: int,
-    min_units: int,
-    limit: int,
-) -> list[tuple[str, int, str | None, str | None, int]] | None:
-    """Use Helius's full transaction response with the canonical core evidence parser.
-
-    If Helius cannot provide a complete, ordered full-response range, return ``None`` so
-    the core scanner performs the same fail-closed check through the configured RPC.
-    """
-    if not _helius_rpc_url():
-        return None
-
-    try:
-        if type(limit) is not int or limit <= 0:
-            raise RuntimeError("Solana deposit scan requires a positive limit")
-        collected: list[tuple[str, int, str | None, str | None, int]] = []
-        page_size = min(1000, limit * 2)
-        pagination_token: str | None = None
-        solana_mint = str(getattr(config, "USDC_MINT"))
-        commitment = _deposit_commitment()
-        seen: set[str] = set()
-        pages = 0
-        previous_page_timestamp = None
-        reached_waterline = False
-
-        while True:
-            pages += 1
-            if pages > 100:
-                raise RuntimeError("Helius deposit scan page budget exhausted")
-            txs, next_token = _helius_get_full_deposit_page(
-                str(token_account_addr),
-                limit=page_size,
-                pagination_token=pagination_token,
-                commitment=commitment,
-            )
-            if len(txs) > page_size:
-                raise RuntimeError("Helius returned oversized deposit page")
-            previous_page_timestamp = _validate_deposit_page_order(txs, previous_page_timestamp)
-            if not txs:
-                if next_token is not None:
-                    raise RuntimeError("Helius returned empty deposit page with continuation")
-                break
-
-            for tx in txs:
-                tx_obj = tx.get("transaction")
-                meta = tx.get("meta")
-                if not isinstance(tx_obj, dict) or not isinstance(meta, dict):
-                    raise RuntimeError("Helius deposit lacks full transaction evidence")
-                signatures = tx_obj.get("signatures")
-                block_time = tx.get("blockTime")
-                signature = signatures[0] if isinstance(signatures, list) and signatures else None
-                if (not isinstance(signature, str) or not signature or signature in seen
-                        or type(block_time) is not int or block_time <= 0):
-                    raise RuntimeError("Helius deposit identity/timestamp is incomplete")
-                Signature.from_string(signature)
-                seen.add(signature)
-                if block_time <= since_ts:
-                    reached_waterline = True
-                    break
-                if "err" not in meta:
-                    raise RuntimeError("Helius deposit lacks transaction outcome")
-                if meta["err"] is not None:
-                    continue
-                # Helius applies the requested commitment to this full-history query.
-                # Its documented `transactionDetails=full` rows expose transaction/meta but
-                # not the signatures-mode `confirmationStatus` field, so requiring that absent
-                # field would turn every valid full page into an unnecessary core-RPC fallback.
-                memo, source_token_account, amount_units = _extract_core_deposit_evidence(
-                    tx,
-                    signature=signature,
-                    vault_account=str(token_account_addr),
-                    mint=solana_mint,
-                )
-                if amount_units <= 0 or amount_units < min_units:
-                    continue
-                if len(collected) >= limit:
-                    raise RuntimeError("Helius deposit budget exhausted before waterline")
-                collected.append((signature, block_time, memo, source_token_account, amount_units))
-
-            if reached_waterline:
-                break
-            if next_token is None:
-                break
-            if len(collected) >= limit:
-                raise RuntimeError("Helius deposit budget reached before waterline")
-            pagination_token = next_token
-
-        collected.sort(key=lambda row: row[1])
-        return collected
-    except Exception as exc:
-        _log("solana_helius_fetch_failed", level=logging.WARNING, error=str(exc))
-        return None
 
 
 def _deposit_rpc_result(response):
@@ -489,16 +315,13 @@ def _extract_core_deposit_evidence(
     vault_index = vault_indices[0]
     matching_pre = [row for row in pre_balances if row.get("accountIndex") == vault_index]
     matching_post = [row for row in post_balances if row.get("accountIndex") == vault_index]
-    if len(matching_pre) != 1 or len(matching_post) != 1:
+    if len(matching_pre) > 1 or len(matching_post) != 1:
         raise RuntimeError("Missing exact configured-vault token balance")
-    pre, post = matching_pre[0], matching_post[0]
-    if pre.get("mint") != mint or post.get("mint") != mint:
-        raise RuntimeError("Configured Solana vault mint mismatch")
-    vault_delta = _base_unit_amount(post, field="post") - _base_unit_amount(pre, field="pre")
-    if vault_delta <= 0:
-        return None, None, 0
 
-    instructions = list(message.get("instructions") or [])
+    raw_instructions = message.get("instructions")
+    if not isinstance(raw_instructions, list):
+        raise RuntimeError("Missing Solana transaction instructions")
+    instructions = list(raw_instructions)
     inner_groups = meta.get("innerInstructions", [])
     if not isinstance(inner_groups, list):
         raise RuntimeError("Invalid Solana inner instruction evidence")
@@ -506,6 +329,69 @@ def _extract_core_deposit_evidence(
         if not isinstance(group, dict) or not isinstance(group.get("instructions"), list):
             raise RuntimeError("Invalid Solana inner instruction evidence")
         instructions.extend(group["instructions"])
+
+    post = matching_post[0]
+    if post.get("mint") != mint:
+        raise RuntimeError("Configured Solana vault mint mismatch")
+    if matching_pre:
+        pre = matching_pre[0]
+        if pre.get("mint") != mint:
+            raise RuntimeError("Configured Solana vault mint mismatch")
+        pre_units = _base_unit_amount(pre, field="pre")
+    else:
+        expected_owner = post.get("owner")
+        if not isinstance(expected_owner, str) or not expected_owner:
+            raise RuntimeError("Missing exact configured-vault creation owner evidence")
+        ata_creates: list[tuple[int, dict]] = []
+        for index, instruction in enumerate(raw_instructions):
+            if not isinstance(instruction, dict):
+                raise RuntimeError("Invalid Solana transaction instruction")
+            program = str(instruction.get("program") or instruction.get("programId") or "")
+            parsed = instruction.get("parsed")
+            info = parsed.get("info") if isinstance(parsed, dict) else None
+            if (program in {"spl-associated-token-account", str(ASSOCIATED_TOKEN_PROGRAM_ID)}
+                    and isinstance(parsed, dict)
+                    and parsed.get("type") in {"create", "createIdempotent"}
+                    and isinstance(info, dict) and info.get("account") == vault_account):
+                if info.get("mint") != mint or info.get("wallet") != expected_owner:
+                    raise RuntimeError("Conflicting configured-vault creation evidence")
+                ata_creates.append((index, instruction))
+        if len(ata_creates) > 1:
+            raise RuntimeError("Duplicate independent configured-vault creation evidence")
+
+        token_initializes: list[dict] = []
+        for group in inner_groups:
+            group_index = group.get("index")
+            for instruction in group["instructions"]:
+                if not isinstance(instruction, dict):
+                    raise RuntimeError("Invalid Solana inner instruction evidence")
+                program = str(instruction.get("program") or instruction.get("programId") or "")
+                parsed = instruction.get("parsed")
+                info = parsed.get("info") if isinstance(parsed, dict) else None
+                is_init = (
+                    program in {"spl-token", str(TOKEN_PROGRAM_ID)}
+                    and isinstance(parsed, dict)
+                    and parsed.get("type") in {
+                        "initializeAccount", "initializeAccount2", "initializeAccount3",
+                    }
+                )
+                if not is_init or not isinstance(info, dict):
+                    continue
+                related_to_ata = bool(ata_creates and group_index == ata_creates[0][0])
+                if info.get("account") == vault_account or related_to_ata:
+                    if (info.get("account") != vault_account or info.get("mint") != mint
+                            or info.get("owner") != expected_owner):
+                        raise RuntimeError("Conflicting configured-vault creation evidence")
+                    token_initializes.append(instruction)
+        if len(token_initializes) > 1:
+            raise RuntimeError("Duplicate independent configured-vault creation evidence")
+        if not ata_creates and not token_initializes:
+            raise RuntimeError("Missing exact configured-vault creation evidence")
+        pre_units = 0
+
+    vault_delta = _base_unit_amount(post, field="post") - pre_units
+    if vault_delta <= 0:
+        return None, None, 0
 
     incoming: list[tuple[str, int]] = []
     memos: list[str] = []
@@ -522,7 +408,8 @@ def _extract_core_deposit_evidence(
             continue
         if program not in {"spl-token", str(TOKEN_PROGRAM_ID)} or not isinstance(parsed, dict):
             continue
-        if parsed.get("type") != "transferChecked":
+        transfer_type = parsed.get("type")
+        if transfer_type not in {"transfer", "transferChecked"}:
             continue
         info = parsed.get("info")
         if not isinstance(info, dict):
@@ -530,127 +417,432 @@ def _extract_core_deposit_evidence(
         if info.get("destination") != vault_account:
             continue
         source = info.get("source")
-        amount_obj = info.get("tokenAmount")
-        amount = amount_obj.get("amount") if isinstance(amount_obj, dict) else None
+        if transfer_type == "transferChecked":
+            amount_obj = info.get("tokenAmount")
+            amount = amount_obj.get("amount") if isinstance(amount_obj, dict) else None
+            mint_matches = info.get("mint") == mint
+        else:
+            amount = info.get("amount")
+            # Classic transfer omits mint; the exact destination balance metadata above
+            # supplies it.  If a provider does include mint, it still must agree.
+            mint_matches = info.get("mint") in {None, mint}
         if (not isinstance(source, str) or not source.strip() or source == vault_account
-                or info.get("mint") != mint or not isinstance(amount, str)
-                or not amount.isascii() or not amount.isdecimal() or not amount):
+                or not mint_matches or not isinstance(amount, str)
+                or not amount.isascii() or not amount.isdecimal() or not amount
+                or int(amount) <= 0):
             raise RuntimeError("Invalid incoming SPL transfer evidence")
         incoming.append((source, int(amount)))
 
-    if len(incoming) != 1 or incoming[0][1] != vault_delta:
-        raise RuntimeError("Configured-vault balance delta lacks one exact inbound transfer")
+    if not incoming or sum(amount for _source, amount in incoming) != vault_delta:
+        raise UnsupportedDepositEvidence("unsupported_vault_balance_change", vault_delta)
+    sources = {source for source, _amount in incoming}
+    if len(sources) != 1:
+        raise UnsupportedDepositEvidence("ambiguous_incoming_sources", vault_delta)
     if len(memos) > 1:
-        raise RuntimeError("Ambiguous Solana deposit memo evidence")
-    return (memos[0] if memos else None), incoming[0][0], vault_delta
+        raise UnsupportedDepositEvidence("ambiguous_deposit_memos", vault_delta)
+    return (memos[0] if memos else None), next(iter(sources)), vault_delta
 
 
-def _fetch_deposits_core_rpc(
-    token_account_addr: str,
-    since_ts: int,
-    min_units: int,
-    limit: int,
-) -> list[tuple[str, int, str | None, str | None, int]]:
-    """
-    Internal: Fetch deposits using core Solana RPC (N+1 queries fallback).
-    Slower but works without Helius API key.
-    """
-    try:
-        client = _get_client()
-        collected: list[tuple[str, int, str | None, str | None, int]] = []
-        solana_mint = str(getattr(config, "USDC_MINT"))
-        if type(limit) is not int or limit <= 0:
-            raise RuntimeError("Solana deposit scan requires a positive limit")
-        page_size = min(1000, limit * 2)
-        reached_waterline = False
-        seen: set[str] = set()
+def _network_identity_for_url(url: str) -> str:
+    from urllib.parse import urlparse
+    parsed = urlparse(str(url or ""))
+    host = (parsed.hostname or "").lower()
+    official_network = None
+    if host in {"devnet.helius-rpc.com", "api.devnet.solana.com"}:
+        official_network = "devnet"
+    elif host in {"mainnet.helius-rpc.com", "rpc.helius.xyz", "api.mainnet-beta.solana.com"}:
+        official_network = "mainnet"
+    elif host == "api.testnet.solana.com":
+        official_network = "testnet"
+    configured = str(getattr(config, "SOLANA_NETWORK", "") or "").strip().lower()
+    if configured:
+        if configured not in {"mainnet", "devnet"}:
+            raise ValueError("SOLANA_NETWORK must be mainnet or devnet")
+        if official_network and configured != official_network:
+            raise ValueError("official Solana RPC hostname conflicts with SOLANA_NETWORK")
+        return configured
+    if official_network:
+        return official_network
+    # Custom/proxied endpoints are bound without persisting query-string credentials.
+    if not parsed.scheme or not host:
+        raise ValueError("Solana RPC URL cannot identify a network endpoint")
+    port = f":{parsed.port}" if parsed.port else ""
+    return f"endpoint:{parsed.scheme.lower()}://{host}{port}{parsed.path or '/'}"
 
-        # This bounded page is complete only if it ends or reaches the waterline.
-        sig_resp = _rpc_call(
-            client.get_signatures_for_address,
-            PublicKey.from_string(token_account_addr),
-            limit=page_size,
-            commitment=_deposit_commitment(),  # reorg safety: see _deposit_commitment()
-            timeout=getattr(config, "SOLANA_RPC_TIMEOUT_SEC", 8),
+
+def _core_network_identity() -> str:
+    return _network_identity_for_url(str(getattr(config, "RPC_URL", "") or ""))
+
+
+def _deposit_query_identity(
+    *, provider: str, network: str, vault_account: str, mint: str,
+    commitment: str, lower_timestamp: int, upper_timestamp: int, page_size: int,
+) -> str:
+    import hashlib
+    wire_options = (
+        _helius_deposit_options(
+            limit=page_size, commitment=commitment, lower_timestamp=lower_timestamp,
+            upper_timestamp=upper_timestamp,
         )
-        sig_entries = _deposit_rpc_result(sig_resp)
-        if not isinstance(sig_entries, list) or len(sig_entries) > page_size:
-            raise RuntimeError("Invalid Solana signature page")
-        _validate_deposit_page_order(sig_entries)
+        if provider == "helius" else {
+            "limit": page_size, "commitment": commitment, "encoding": "jsonParsed",
+            "maxSupportedTransactionVersion": 0, "sortOrder": "desc",
+        }
+    )
+    query = {
+        "provider": provider, "network": network, "vault_account": vault_account,
+        "mint": mint, "lower_timestamp": lower_timestamp,
+        "upper_timestamp": upper_timestamp, "options": wire_options,
+    }
+    encoded = json.dumps(query, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
-        # Step 2: For each signature, fetch full transaction (N API calls)
-        for entry in sig_entries:
-            if not isinstance(entry, dict):
-                raise RuntimeError("Invalid Solana signature entry")
-            block_time = entry.get("blockTime")
-            sig = entry.get("signature")
-            if (type(block_time) is not int or block_time <= 0
-                    or not isinstance(sig, str) or not sig or sig in seen):
-                raise RuntimeError("Missing or duplicate Solana signature identity/timestamp")
-            Signature.from_string(sig)
-            seen.add(sig)
-            if block_time <= since_ts:
-                reached_waterline = True
-                break
-            if "err" not in entry:
-                raise RuntimeError("Missing Solana signature outcome")
-            if entry["err"] is not None:
-                continue
-            if entry.get("confirmationStatus") != _deposit_commitment():
-                # Finalized also satisfies an explicitly relaxed confirmed policy.
-                if entry.get("confirmationStatus") != "finalized":
-                    raise RuntimeError("Solana signature commitment not satisfied")
-            
+
+def _requires_finalized_deposit(amount_units: int) -> bool:
+    threshold = int(getattr(config, "SOLANA_FINALIZED_ABOVE_UNITS", 0) or 0)
+    return (
+        _deposit_commitment() != "finalized"
+        and threshold > 0
+        and type(amount_units) is int
+        and amount_units >= threshold
+    )
+
+
+def _deposit_hold_tuple(
+    *, signature: str, block_timestamp: int, reason: str, evidence: dict,
+    provider: str, query_identity: str, memo: str | None = None,
+    from_address: str | None = None, amount_units: int | None = None,
+    network: str, vault_account: str, mint: str, observed_commitment: str,
+    finality_required: bool,
+) -> tuple:
+    return (
+        signature, block_timestamp, memo, from_address, amount_units, reason,
+        json.dumps(evidence, sort_keys=True, separators=(",", ":")),
+        provider, query_identity, network, vault_account, mint, observed_commitment,
+        int(finality_required),
+    )
+
+
+def _get_strictly_finalized_signatures(
+    signatures: list[str], *, provider: str = "helius",
+) -> set[str]:
+    """Return rooted successful signatures, rejecting incomplete status enumeration."""
+    unique = list(dict.fromkeys(signatures))
+    if not unique:
+        return set()
+    for signature in unique:
+        Signature.from_string(signature)
+    if provider not in {"helius", "core"}:
+        raise ValueError("unknown Solana deposit provider")
+    values: list = []
+    for offset in range(0, len(unique), 256):
+        batch = unique[offset:offset + 256]
+        if provider == "helius":
+            result = _helius_rpc_call(
+                "getSignatureStatuses", [batch, {"searchTransactionHistory": True}],
+            )
+            batch_values = result.get("value") if isinstance(result, dict) else None
+        else:
+            response = _rpc_call(
+                _get_client().get_signature_statuses,
+                [Signature.from_string(signature) for signature in batch],
+                search_transaction_history=True,
+                timeout=getattr(config, "SOLANA_RPC_TIMEOUT_SEC", 8),
+            )
+            batch_values = _rpc_get_value(response)
+        if not isinstance(batch_values, list) or len(batch_values) != len(batch):
+            raise RuntimeError("Solana finality status enumeration is incomplete")
+        values.extend(batch_values)
+    finalized: set[str] = set()
+    for signature, status in zip(unique, values):
+        if status is None:
+            continue
+        if not isinstance(status, dict) or "err" not in status:
+            raise RuntimeError("Malformed Solana finality status evidence")
+        if status["err"] is not None:
+            raise RuntimeError("Successful deposit conflicts with failed signature status")
+        commitment = status.get("confirmationStatus")
+        if commitment == "finalized":
+            finalized.add(signature)
+        elif commitment != "confirmed":
+            raise RuntimeError("Unexpected Solana finality status")
+    return finalized
+
+
+def _scan_incoming_deposits_helius(
+    token_account_addr: str, *, since_ts: int, page_size: int,
+    upper_timestamp: int,
+) -> SolanaDepositBacklogProgress:
+    """Commit one full-evidence Helius page and its exact provider continuation."""
+
+    vault_account = str(token_account_addr)
+    mint = str(getattr(config, "USDC_MINT"))
+    commitment = _deposit_commitment()
+    helius_url = _helius_rpc_url()
+    if not helius_url:
+        raise RuntimeError("Helius deposit provider is not configured")
+    network = _network_identity_for_url(helius_url)
+    cursor = state_db.get_helius_deposit_scan_cursor(vault_account)
+    if cursor is None:
+        fixed_upper = upper_timestamp
+        request_token = None
+        previous_timestamp = None
+        query_identity = _deposit_query_identity(
+            provider="helius", network=network, vault_account=vault_account, mint=mint,
+            commitment=commitment, lower_timestamp=since_ts, upper_timestamp=fixed_upper,
+            page_size=page_size,
+        )
+    else:
+        fixed_upper = cursor["upper_timestamp"]
+        request_token = cursor["pagination_token"]
+        previous_timestamp = cursor["previous_timestamp"]
+        query_identity = _deposit_query_identity(
+            provider="helius", network=network, vault_account=vault_account, mint=mint,
+            commitment=commitment, lower_timestamp=since_ts, upper_timestamp=fixed_upper,
+            page_size=page_size,
+        )
+        expected = (
+            network, mint, commitment, since_ts, query_identity,
+        )
+        actual = (
+            cursor["network"], cursor["mint"], cursor["commitment"],
+            cursor["lower_timestamp"], cursor["query_identity"],
+        )
+        if actual != expected:
+            raise RuntimeError("existing Helius cursor conflicts with current query identity")
+
+    try:
+        transactions, next_token = _helius_get_full_deposit_page(
+            vault_account, limit=page_size, pagination_token=request_token,
+            commitment=commitment, lower_timestamp=since_ts,
+            upper_timestamp=fixed_upper,
+        )
+        if len(transactions) > page_size:
+            raise RuntimeError("Helius returned oversized deposit page")
+        if not transactions and next_token is not None:
+            raise RuntimeError("Helius returned empty deposit page with continuation")
+        page_last_timestamp = _validate_deposit_page_order(
+            transactions, previous_timestamp,
+        )
+
+        scanned: list[tuple[str, int]] = []
+        parsed_candidates: list[tuple[str, int, str | None, str | None, int, dict]] = []
+        holds: list[tuple] = []
+        page_seen: set[str] = set()
+        for evidence in transactions:
+            tx_obj = evidence.get("transaction")
+            meta = evidence.get("meta")
+            block_timestamp = evidence.get("blockTime")
+            signatures = tx_obj.get("signatures") if isinstance(tx_obj, dict) else None
+            signature = signatures[0] if isinstance(signatures, list) and signatures else None
+            if (not isinstance(signature, str) or not signature or signature in page_seen
+                    or type(block_timestamp) is not int
+                    or block_timestamp < since_ts or block_timestamp > fixed_upper
+                    or not isinstance(meta, dict) or "err" not in meta):
+                raise RuntimeError("Helius deposit identity/range/outcome is incomplete")
+            Signature.from_string(signature)
+            if meta["err"] is not None:
+                raise RuntimeError("Helius succeeded filter returned a failed transaction")
+            page_seen.add(signature)
+            scanned.append((signature, block_timestamp))
             try:
-                signature_obj = Signature.from_string(sig)
-                tx_resp = _rpc_call(
-                    client.get_transaction,
-                    signature_obj,
-                    encoding="jsonParsed",
-                    commitment=_deposit_commitment(),
-                    max_supported_transaction_version=0,
-                    timeout=getattr(config, "SOLANA_TX_FETCH_TIMEOUT_SEC", 12),
+                memo, source, amount_units = _extract_core_deposit_evidence(
+                    evidence, signature=signature, vault_account=vault_account, mint=mint,
                 )
-                tx_data = _deposit_rpc_result(tx_resp)
-                if not isinstance(tx_data, dict):
-                    raise RuntimeError("Missing Solana transaction")
-                meta = tx_data.get("meta")
-                if not isinstance(meta, dict) or "err" not in meta:
-                    raise RuntimeError("Missing Solana transaction outcome")
-                if meta["err"] is not None:
-                    continue
-                tx_obj = tx_data.get("transaction")
-                if not isinstance(tx_obj, dict) or tx_obj.get("signatures", [None])[0] != sig:
-                    raise RuntimeError("Solana transaction signature mismatch")
-                memo, from_addr, vault_delta = _extract_core_deposit_evidence(
-                    tx_data,
-                    signature=sig,
-                    vault_account=str(token_account_addr),
-                    mint=solana_mint,
+            except UnsupportedDepositEvidence as exc:
+                holds.append(_deposit_hold_tuple(
+                    signature=signature, block_timestamp=block_timestamp,
+                    reason=exc.reason, evidence=evidence, provider="helius",
+                    query_identity=query_identity, amount_units=exc.amount_units,
+                    network=network, vault_account=vault_account, mint=mint,
+                    observed_commitment=commitment,
+                    finality_required=commitment != "finalized",
+                ))
+                continue
+            if amount_units > 0:
+                parsed_candidates.append(
+                    (signature, block_timestamp, memo, source, amount_units, evidence)
                 )
-                if vault_delta <= 0 or vault_delta < min_units:
-                    continue
 
-                if len(collected) >= limit:
-                    raise RuntimeError("Solana deposit budget exhausted before scan completion")
-                collected.append((sig, block_time, memo, from_addr, vault_delta))
+        requires_finality = [
+            candidate[0] for candidate in parsed_candidates
+            if _requires_finalized_deposit(candidate[4])
+        ]
+        finalized = _get_strictly_finalized_signatures(
+            requires_finality, provider="helius",
+        ) if requires_finality else set()
+        deposits: list[tuple[str, int, str | None, str | None, int]] = []
+        for signature, block_timestamp, memo, source, amount_units, evidence in parsed_candidates:
+            if signature in requires_finality and signature not in finalized:
+                holds.append(_deposit_hold_tuple(
+                    signature=signature, block_timestamp=block_timestamp,
+                    reason="awaiting_finalized", evidence=evidence, provider="helius",
+                    query_identity=query_identity, memo=memo, from_address=source,
+                    amount_units=amount_units,
+                    network=network, vault_account=vault_account, mint=mint,
+                    observed_commitment=commitment, finality_required=True,
+                ))
+            else:
+                deposits.append((signature, block_timestamp, memo, source, amount_units))
 
-            except Exception as exc:
-                raise RuntimeError("Solana transaction scan incomplete") from exc
-        
-        if len(sig_entries) >= page_size and not reached_waterline:
-            raise RuntimeError("Solana signature page exhausted before reaching waterline")
-        # Oldest-first ordering
-        collected.sort(key=lambda r: r[1])
-        return collected
-        
-    except Exception as e:
-        _log("solana_core_rpc_fetch_failed", level=logging.ERROR, error=str(e))
-        raise RuntimeError("Solana deposit scan incomplete; waterline must remain held") from e
+        complete = next_token is None
+        admitted, held = state_db.commit_helius_deposit_scan_page(
+            vault_account=vault_account, network=network, mint=mint,
+            commitment=commitment, lower_timestamp=since_ts,
+            upper_timestamp=fixed_upper, query_identity=query_identity,
+            request_pagination_token=request_token,
+            next_pagination_token=next_token,
+            previous_timestamp=previous_timestamp,
+            page_last_timestamp=page_last_timestamp,
+            scanned_signatures=scanned, deposits=deposits, holds=holds,
+            complete=complete,
+        )
+        return SolanaDepositBacklogProgress(
+            complete, admitted, fixed_upper, None, provider="helius",
+            next_pagination_token=next_token, held_count=held,
+        )
+    except Exception as exc:
+        _log("solana_helius_cursor_scan_failed", level=logging.ERROR, error=str(exc))
+        raise RuntimeError("Helius deposit scan incomplete; waterline must remain held") from exc
+
+
+def replay_solana_deposit_holds(limit: int = 1000) -> int:
+    """Fairly reparse holds without changing their frozen custody/finality provenance."""
+    held_rows = state_db.get_solana_deposit_holds(limit)
+    candidates: list[tuple[dict, str | None, str | None, int, bool]] = []
+    current_vault = str(getattr(config, "VAULT_USDC_ACCOUNT"))
+    current_mint = str(getattr(config, "USDC_MINT"))
+
+    for row in held_rows:
+        state_db.record_solana_deposit_hold_replay_attempt(row["signature"])
+        provenance = {
+            "network": row.get("network"),
+            "vault_account": row.get("vault_account"),
+            "mint": row.get("mint"),
+            "observed_commitment": row.get("observed_commitment"),
+        }
+        if row["provider"] == "helius" and any(value is None for value in provenance.values()):
+            audited = state_db.get_completed_helius_query_provenance(row["query_identity"])
+            if audited is not None:
+                provenance = audited
+        # Pre-upgrade rows remain explicitly unknown; never backfill or relabel them.
+        # They may nevertheless be resolved against the current exact vault/mint when a
+        # fresh provider finality proof is obtained for the immutable signature/evidence.
+        if (provenance["vault_account"] not in {None, current_vault}
+                or provenance["mint"] not in {None, current_mint}):
+            continue
+        try:
+            if row["provider"] == "helius":
+                provider_url = _helius_rpc_url()
+            elif row["provider"] == "core":
+                provider_url = str(getattr(config, "RPC_URL", "") or "").strip()
+            else:
+                continue
+            if not provider_url:
+                continue
+            current_network = _network_identity_for_url(provider_url)
+        except Exception as exc:
+            _log("solana_deposit_hold_network_unavailable", level=logging.WARNING,
+                 sig=row.get("signature"), error=str(exc))
+            continue
+        if (provenance["network"] is not None
+                and current_network != provenance["network"]):
+            continue
+
+        try:
+            evidence = json.loads(row["evidence_json"])
+            memo, source, amount_units = _extract_core_deposit_evidence(
+                evidence, signature=row["signature"],
+                vault_account=current_vault, mint=current_mint,
+            )
+        except UnsupportedDepositEvidence:
+            continue
+        except Exception as exc:
+            _log("solana_deposit_hold_replay_failed", level=logging.WARNING,
+                 sig=row.get("signature"), error=str(exc))
+            continue
+        if amount_units <= 0 or row.get("amount_units") != amount_units:
+            continue
+        observed = provenance["observed_commitment"]
+        needs_finalized = (
+            row["reason"] == "awaiting_finalized"
+            or row.get("finality_required") != 0
+            or observed != "finalized"
+        )
+        candidates.append((row, memo, source, amount_units, needs_finalized))
+
+    # Validate every provider batch before moving any financial row. A malformed later
+    # batch therefore cannot leave an earlier batch partially promoted.
+    finalized_by_provider: dict[str, set[str]] = {}
+    for provider in {row[0]["provider"] for row in candidates}:
+        signatures = [
+            row[0]["signature"] for row in candidates
+            if row[0]["provider"] == provider and row[4]
+        ]
+        if signatures:
+            finalized_by_provider[provider] = _get_strictly_finalized_signatures(
+                signatures, provider=provider,
+            )
+
+    promoted = 0
+    for row, memo, source, amount_units, needs_finalized in candidates:
+        if (needs_finalized
+                and row["signature"] not in finalized_by_provider.get(row["provider"], set())):
+            continue
+        promoted += int(state_db.promote_solana_deposit_hold(
+            row["signature"], memo=memo, from_address=source, amount_units=amount_units,
+        ))
+    return promoted
 
 
 def scan_incoming_deposits_with_durable_cursor(
-    token_account_addr: str, *, since_ts: int, min_units: int, page_size: int,
+    token_account_addr: str, *, since_ts: int, page_size: int,
+    upper_timestamp: int | None = None,
+) -> SolanaDepositBacklogProgress:
+    """Use trusted Helius when configured; preserve provider-specific durable cursors."""
+    if type(since_ts) is not int or since_ts < 0:
+        raise ValueError("Solana scan lower timestamp must be a nonnegative integer")
+    if type(page_size) is not int or page_size <= 0 or page_size > 1000:
+        raise ValueError("Solana scan page size must be between 1 and 1000")
+    if upper_timestamp is None:
+        upper_timestamp = int(time.time())
+    if type(upper_timestamp) is not int or upper_timestamp <= since_ts:
+        raise ValueError("Solana scan upper timestamp must exceed its lower timestamp")
+
+    vault_account = str(token_account_addr)
+    helius_cursor = state_db.get_helius_deposit_scan_cursor(vault_account)
+    core_cursor = state_db.get_solana_deposit_scan_cursor(vault_account)
+    if (core_cursor is not None
+            and any(core_cursor.get(field) is None
+                    for field in ("network", "commitment", "query_identity"))):
+        if not state_db.discard_preupgrade_solana_deposit_scan_cursor(vault_account, since_ts):
+            raise RuntimeError("pre-upgrade Solana cursor conflicts with current checkpoint")
+        core_cursor = None
+    if helius_cursor is not None and core_cursor is not None:
+        raise RuntimeError("conflicting Helius and core deposit cursors require operator review")
+    if helius_cursor is not None:
+        if not _helius_rpc_url():
+            raise RuntimeError("Helius cursor cannot be resumed through core RPC")
+        return _scan_incoming_deposits_helius(
+            vault_account, since_ts=since_ts, page_size=page_size,
+            upper_timestamp=upper_timestamp,
+        )
+    if core_cursor is not None:
+        return _scan_incoming_deposits_core(
+            vault_account, since_ts=since_ts, page_size=page_size,
+        )
+    if _helius_rpc_url():
+        return _scan_incoming_deposits_helius(
+            vault_account, since_ts=since_ts, page_size=page_size,
+            upper_timestamp=upper_timestamp,
+        )
+    return _scan_incoming_deposits_core(
+        vault_account, since_ts=since_ts, page_size=page_size,
+    )
+
+
+def _scan_incoming_deposits_core(
+    token_account_addr: str, *, since_ts: int, page_size: int,
 ) -> SolanaDepositBacklogProgress:
     """Commit one exact-cursor core-RPC history page before advancing its cursor.
 
@@ -661,18 +853,30 @@ def scan_incoming_deposits_with_durable_cursor(
     """
     if type(since_ts) is not int or since_ts < 0:
         raise ValueError("Solana scan lower timestamp must be a nonnegative integer")
-    if type(min_units) is not int or min_units < 0:
-        raise ValueError("Solana scan minimum must be a nonnegative integer")
+
     if type(page_size) is not int or page_size <= 0 or page_size > 1000:
         raise ValueError("Solana scan page size must be between 1 and 1000")
 
     vault_account = str(token_account_addr)
     mint = str(getattr(config, "USDC_MINT"))
+    network = _core_network_identity()
+    commitment = _deposit_commitment()
     cursor = state_db.get_solana_deposit_scan_cursor(vault_account)
-    if cursor is not None and (cursor["mint"] != mint or cursor["lower_timestamp"] != since_ts):
-        raise RuntimeError("existing Solana scan cursor conflicts with current deployment/waterline")
+    if cursor is not None:
+        expected_identity = _deposit_query_identity(
+            provider="core", network=network, vault_account=vault_account, mint=mint,
+            commitment=commitment, lower_timestamp=since_ts,
+            upper_timestamp=cursor["upper_timestamp"], page_size=page_size,
+        )
+        if (cursor["mint"] != mint or cursor["lower_timestamp"] != since_ts
+                or cursor["network"] != network or cursor["commitment"] != commitment
+                or cursor["query_identity"] != expected_identity):
+            raise RuntimeError(
+                "existing Solana scan cursor conflicts with current deployment/waterline"
+            )
     request_before = cursor["before_signature"] if cursor else None
     expected_upper_timestamp = cursor["upper_timestamp"] if cursor else None
+    previous_timestamp = cursor["previous_timestamp"] if cursor else None
 
     try:
         client = _get_client()
@@ -691,11 +895,25 @@ def scan_incoming_deposits_with_durable_cursor(
         entries = _deposit_rpc_result(response)
         if not isinstance(entries, list) or len(entries) > page_size:
             raise RuntimeError("invalid Solana cursor signature page")
-        _validate_deposit_page_order(entries)
+        page_last_timestamp = _validate_deposit_page_order(entries, previous_timestamp)
+
+        upper_timestamp = (
+            expected_upper_timestamp
+            if expected_upper_timestamp is not None
+            else (entries[0]["blockTime"] if entries else None)
+        )
+        core_query_identity = (
+            _deposit_query_identity(
+                provider="core", network=network, vault_account=vault_account, mint=mint,
+                commitment=commitment, lower_timestamp=since_ts,
+                upper_timestamp=upper_timestamp, page_size=page_size,
+            )
+            if upper_timestamp is not None else None
+        )
 
         deposits: list[tuple[str, int, str | None, str | None, int]] = []
+        holds: list[tuple] = []
         seen: set[str] = set()
-        upper_timestamp = expected_upper_timestamp
         reached_lower = False
         last_signature = None
         for entry in entries:
@@ -709,8 +927,7 @@ def scan_incoming_deposits_with_durable_cursor(
             Signature.from_string(signature)
             seen.add(signature)
             last_signature = signature
-            if upper_timestamp is None:
-                upper_timestamp = block_time
+
             if block_time < since_ts:
                 reached_lower = True
                 break
@@ -730,11 +947,35 @@ def scan_incoming_deposits_with_durable_cursor(
             tx_data = _deposit_rpc_result(tx_response)
             if not isinstance(tx_data, dict):
                 raise RuntimeError("missing Solana cursor transaction")
-            memo, from_address, amount_units = _extract_core_deposit_evidence(
-                tx_data, signature=signature, vault_account=vault_account, mint=mint,
-            )
-            if amount_units >= min_units and amount_units > 0:
-                deposits.append((signature, block_time, memo, from_address, amount_units))
+            try:
+                memo, from_address, amount_units = _extract_core_deposit_evidence(
+                    tx_data, signature=signature, vault_account=vault_account, mint=mint,
+                )
+            except UnsupportedDepositEvidence as exc:
+                holds.append(_deposit_hold_tuple(
+                    signature=signature, block_timestamp=block_time, reason=exc.reason,
+                    evidence=tx_data, provider="core",
+                    query_identity=str(core_query_identity),
+                    amount_units=exc.amount_units, network=network,
+                    vault_account=vault_account, mint=mint,
+                    observed_commitment=commitment,
+                    finality_required=commitment != "finalized",
+                ))
+                continue
+            if amount_units > 0:
+                candidate = (signature, block_time, memo, from_address, amount_units)
+                if (_requires_finalized_deposit(amount_units)
+                        and entry.get("confirmationStatus") != "finalized"):
+                    holds.append(_deposit_hold_tuple(
+                        signature=signature, block_timestamp=block_time,
+                        reason="awaiting_finalized", evidence=tx_data, provider="core",
+                        query_identity=str(core_query_identity),
+                        memo=memo, from_address=from_address, amount_units=amount_units,
+                        network=network, vault_account=vault_account, mint=mint,
+                        observed_commitment=commitment, finality_required=True,
+                    ))
+                else:
+                    deposits.append(candidate)
 
         if upper_timestamp is None:
             # An empty history proves the range only when no continuation was ever
@@ -745,92 +986,22 @@ def scan_incoming_deposits_with_durable_cursor(
         if not complete and not next_before:
             raise RuntimeError("Solana cursor page has no exact continuation")
         admitted = state_db.commit_solana_deposit_scan_page(
-            vault_account=vault_account, mint=mint, lower_timestamp=since_ts,
+            vault_account=vault_account, mint=mint, network=network,
+            commitment=commitment, query_identity=str(core_query_identity),
+            lower_timestamp=since_ts,
             request_before_signature=request_before, next_before_signature=next_before,
-            upper_timestamp=upper_timestamp, scanned_signature_count=len(entries),
-            deposits=deposits, complete=complete,
+            upper_timestamp=upper_timestamp, previous_timestamp=previous_timestamp,
+            page_last_timestamp=page_last_timestamp,
+            scanned_signature_count=len(entries),
+            deposits=deposits, holds=holds, complete=complete,
         )
-        return SolanaDepositBacklogProgress(complete, admitted, upper_timestamp, next_before)
+        return SolanaDepositBacklogProgress(
+            complete, admitted, upper_timestamp, next_before,
+            provider="core", held_count=len(holds),
+        )
     except Exception as exc:
         _log("solana_cursor_scan_failed", level=logging.ERROR, error=str(exc))
         raise RuntimeError("Solana cursor scan incomplete; waterline must remain held") from exc
-    
-
-def process_helius_deposits(deposits: list, db_check: bool = True) -> tuple:
-    """Persist enriched deposits from ``fetch_incoming_deposits_via_helius``.
-
-    Each item is a tuple ``(sig, timestamp, memo, from_address, amount_units)`` that
-    already contains everything we need, so we write straight to ``unprocessed_sigs``
-    with **no per-deposit get_transaction re-fetch** (that would defeat the 1-2 call
-    enriched fast path).
-
-    Returns ``(added, oldest_deferred_ts)``. ``oldest_deferred_ts`` is the block time of
-    the oldest deposit withheld pending finalization, or ``None``. The caller MUST keep
-    the waterline behind it - a deferred deposit is not in the DB, so nothing else would
-    stop the waterline advancing past it and hiding it forever.
-    """
-    if not deposits:
-        return (0, None)
-    from . import state_db
-
-    # Carve-out: when the operator has relaxed ingestion below 'finalized', deposits at
-    # or above SOLANA_FINALIZED_ABOVE_UNITS still require finalization before we mint
-    # against them, so a reorg cannot cost us the large amounts.
-    require_final: set = set()
-    big_threshold = int(getattr(config, "SOLANA_FINALIZED_ABOVE_UNITS", 0) or 0)
-    if big_threshold > 0 and _deposit_commitment() != "finalized":
-        big_sigs = []
-        for it in deposits:
-            try:
-                s, _ts, _memo, _from, amt = it
-            except Exception:
-                continue
-            if s and int(amt or 0) >= big_threshold:
-                big_sigs.append(s)
-        if big_sigs:
-            finalized = get_signatures_confirmation(big_sigs)
-            require_final = {s for s in big_sigs if not finalized.get(s)}
-            if require_final:
-                _log("solana_deposits_finality_held", level=logging.WARNING,
-                     deferred_count=len(require_final), reason="not_finalized")
-
-    added = 0
-    oldest_deferred_ts = None
-    for item in deposits:
-        try:
-            sig, ts, memo, from_address, amount_units = item
-        except Exception:
-            # Tolerate dict-shaped rows too, for forward-compatibility.
-            if isinstance(item, dict):
-                sig = item.get("signature") or item.get("sig")
-                ts = item.get("blocktime") or item.get("timestamp")
-                memo = item.get("memo")
-                from_address = item.get("from_address") or item.get("from")
-                amount_units = item.get("amount")
-            else:
-                continue
-        if not sig:
-            continue
-        if sig in require_final:
-            # Large deposit awaiting finalization; picked up on a later poll. Track its
-            # timestamp so the caller pins the waterline behind it.
-            try:
-                ts_i = int(ts or 0)
-                if ts_i and (oldest_deferred_ts is None or ts_i < oldest_deferred_ts):
-                    oldest_deferred_ts = ts_i
-            except Exception:
-                pass
-            continue
-        if db_check and (
-            state_db.is_processed_sig(sig)
-            or state_db.is_unprocessed_sig(sig)
-            or state_db.is_quarantined_sig(sig)
-            or state_db.is_refunded_sig(sig)
-        ):
-            continue
-        state_db.add_unprocessed_sig(sig, ts, memo or "", from_address, amount_units, "ready for processing", None)
-        added += 1
-    return (added, oldest_deferred_ts)
 
 
 def process_unprocessed_solana_deposits(limit: int = 1000, timeout: float = 8.0) -> list:
@@ -1279,56 +1450,6 @@ def send_solana_token(destination: str, amount_base_units: int, memo: str | None
     _log("legacy_solana_sender_refused", level=logging.ERROR,
          destination=str(destination), amount_units=amount_base_units)
     return False, None
-
-
-def get_signatures_confirmation(sigs: list, min_confirmations: int = 1) -> dict:
-    """Batch-check Solana signatures via getSignatureStatuses (up to 256 per call).
-
-    Returns ``{sig: True}`` for successful signatures at the configured commitment.
-    Unknown, failed and merely-confirmed statuses under finalized commitment are
-    omitted.  Status alone never authorizes financial disposition finalization.
-    Uses the shared client and converts to Signature objects as the RPC expects.
-    """
-    from solders.signature import Signature
-    out: dict = {}
-    uniq = [s for s in dict.fromkeys(sigs) if s]
-    if not uniq:
-        return out
-    client = _get_client()
-    for i in range(0, len(uniq), 256):
-        chunk = uniq[i:i + 256]
-        objs = []
-        keep = []
-        for s in chunk:
-            try:
-                objs.append(Signature.from_string(s))
-                keep.append(s)
-            except Exception:
-                continue
-        if not objs:
-            continue
-        try:
-            resp = _rpc_call(client.get_signature_statuses, objs)
-            val = _rpc_get_value(resp)
-        except Exception:
-            continue
-        if not isinstance(val, list):
-            continue
-        # If we ingest at 'finalized', settle our own payouts at 'finalized' too - a
-        # merely 'confirmed' refund can still be reorged away after we mark it done.
-        accepted = ("finalized",) if _deposit_commitment() == "finalized" else ("finalized", "confirmed")
-        for s, st in zip(keep, val):
-            if isinstance(st, dict):
-                cs = st.get("confirmationStatus")
-                confs = st.get("confirmations")
-                if st.get("err") is not None:
-                    continue
-                if cs in accepted or (
-                    _deposit_commitment() != "finalized"
-                    and confs is not None and confs >= min_confirmations
-                ):
-                    out[s] = True
-    return out
 
 
 def check_sig_confirmations(min_confirmations: int, timeout: float) -> int:
@@ -2407,6 +2528,67 @@ def _extract_solana_disposition_evidence(
     }
 
 
+def _complete_solana_disposition_source_evidence(
+    client: Any,
+    evidence: dict[str, object],
+) -> dict[str, object] | None:
+    """Attach the exact finalized incoming deposit named by a disposition memo."""
+    source_signature = evidence.get("source_signature")
+    payout_timestamp = evidence.get("timestamp")
+    if not isinstance(source_signature, str) or type(payout_timestamp) is not int:
+        return None
+    source_response = _rpc_call(
+        client.get_transaction,
+        Signature.from_string(source_signature),
+        encoding="jsonParsed",
+        commitment="finalized",
+        max_supported_transaction_version=0,
+        timeout=getattr(config, "SOLANA_TX_FETCH_TIMEOUT_SEC", 6),
+    )
+    source_tx = _rpc_get_result(source_response)
+    if not isinstance(source_tx, dict):
+        return None
+    source_timestamp = source_tx.get("blockTime")
+    if (type(source_timestamp) is not int or source_timestamp <= 0
+            or source_timestamp > payout_timestamp):
+        return None
+    try:
+        source_memo, source_token_account, source_amount = _extract_core_deposit_evidence(
+            source_tx,
+            signature=source_signature,
+            vault_account=str(config.VAULT_USDC_ACCOUNT),
+            mint=str(config.USDC_MINT),
+        )
+    except Exception as exc:
+        _log(
+            "solana_disposition_source_evidence_rejected",
+            level=logging.WARNING,
+            source_signature=source_signature,
+            reason=structured_logging.redact(f"{type(exc).__name__}: {exc}"),
+        )
+        return None
+    payout_amount = evidence.get("amount_solana_units")
+    destination = evidence.get("destination_token_account")
+    kind = evidence.get("kind")
+    if (not isinstance(source_token_account, str) or not source_token_account
+            or type(source_amount) is not int or source_amount <= 0
+            or type(payout_amount) is not int or payout_amount > source_amount):
+        return None
+    if kind == "refund" and destination != source_token_account:
+        return None
+    if kind == "quarantine":
+        quarantine_account = str(getattr(config, "USDC_QUARANTINE_ACCOUNT", "") or "")
+        if not quarantine_account or destination != quarantine_account:
+            return None
+    return {
+        **evidence,
+        "source_timestamp": source_timestamp,
+        "source_token_account": source_token_account,
+        "source_amount_solana_units": source_amount,
+        "source_memo": source_memo,
+    }
+
+
 def scan_recent_memos(search_limit: int = 400) -> dict:
     """Scan recent signatures for the vault account collecting structured memos.
     Returns dict: {
@@ -2547,6 +2729,7 @@ def scan_memos_since_timestamp(since_timestamp: int, max_signatures: int = 10000
     fetched_count = 0
     before_sig = None
     batch_size = 1000
+    previous_block_time: int | None = None
 
     while fetched_count < max_signatures:
         request_limit = min(batch_size, max_signatures - fetched_count)
@@ -2572,6 +2755,19 @@ def scan_memos_since_timestamp(since_timestamp: int, max_signatures: int = 10000
         if not entries:
             out["complete"] = True
             return out
+
+        # Validate the entire page and its boundary with the prior page before an old
+        # timestamp is allowed to terminate enumeration.
+        for ordered_entry in entries:
+            if not isinstance(ordered_entry, dict):
+                return incomplete("invalid_signature_entry")
+            ordered_time = ordered_entry.get("blockTime")
+            if (isinstance(ordered_time, bool) or not isinstance(ordered_time, int)
+                    or ordered_time <= 0):
+                return incomplete("invalid_block_time")
+            if previous_block_time is not None and ordered_time > previous_block_time:
+                return incomplete("nonmonotonic_signature_page")
+            previous_block_time = ordered_time
 
         reached_waterline = False
         for ent in entries:
@@ -2601,6 +2797,8 @@ def scan_memos_since_timestamp(since_timestamp: int, max_signatures: int = 10000
                     client.get_transaction,
                     signature_obj,
                     encoding="jsonParsed",
+                    commitment="finalized",
+                    max_supported_transaction_version=0,
                     timeout=getattr(config, "SOLANA_TX_FETCH_TIMEOUT_SEC", 6),
                 )
             except Exception:
@@ -2697,6 +2895,12 @@ def scan_memos_since_timestamp(since_timestamp: int, max_signatures: int = 10000
                     )
                     if evidence is None:
                         return incomplete("missing_solana_disposition_transfer_evidence")
+                    try:
+                        evidence = _complete_solana_disposition_source_evidence(client, evidence)
+                    except Exception:
+                        return incomplete("solana_disposition_source_fetch_failed")
+                    if evidence is None:
+                        return incomplete("missing_solana_disposition_source_evidence")
                     identity = (kind, source_signature)
                     if any(
                         known_source == source_signature and known_kind != kind

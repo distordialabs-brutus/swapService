@@ -6,64 +6,16 @@ and treats every uncertain create result as accepted-until-proven-otherwise.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 from typing import Any
 
-from . import config, nexus_client, state_db
+from . import config, nexus_client, receipt_contract, state_db
 
-SCHEMA = "nexus-swap-receipt-v1"
-DISTORDIA_TYPE = "nexusSwapReceipt"
-REQUIRED_FIELDS = (
-    "distordiaType", "schema", "source_signature", "solana_mint", "solana_vault",
-    "nexus_token", "nexus_account", "output_txid", "output_contract_id",
-    "output_units", "reference",
-)
-
-
-def _required_text(value: object, field: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"swap receipt {field} must be a non-empty string")
-    return value
-
-
-def _required_nonnegative_int(value: object, field: str, *, positive: bool = False) -> int:
-    if type(value) is not int or value < (1 if positive else 0):
-        qualifier = "positive" if positive else "non-negative"
-        raise ValueError(f"swap receipt {field} must be a {qualifier} integer")
-    return value
-
-
-def build_receipt(
-    *, source_signature: str, solana_mint: str, solana_vault: str,
-    nexus_token: str, nexus_account: str, output_txid: str,
-    output_contract_id: int, output_units: int, reference: int,
-) -> dict[str, str]:
-    """Build the canonical all-string receipt payload from exact evidence."""
-    return {
-        "distordiaType": DISTORDIA_TYPE,
-        "schema": SCHEMA,
-        "source_signature": _required_text(source_signature, "source_signature"),
-        "solana_mint": _required_text(solana_mint, "solana_mint"),
-        "solana_vault": _required_text(solana_vault, "solana_vault"),
-        "nexus_token": _required_text(nexus_token, "nexus_token"),
-        "nexus_account": _required_text(nexus_account, "nexus_account"),
-        "output_txid": _required_text(output_txid, "output_txid"),
-        "output_contract_id": str(_required_nonnegative_int(output_contract_id, "output_contract_id")),
-        "output_units": str(_required_nonnegative_int(output_units, "output_units", positive=True)),
-        "reference": str(_required_nonnegative_int(reference, "reference")),
-    }
-
-
-def receipt_name(source_signature: str) -> str:
-    source = _required_text(source_signature, "source_signature")
-    return "swap-receipt-" + hashlib.sha256(source.encode("utf-8")).hexdigest()[:32]
-
-
-def expected_provider_owner() -> str | None:
-    """Return the owner only from a receipt-capable current provider registration."""
-    owner, _reason = receipt_provider_registration()
-    return owner
+SCHEMA = receipt_contract.SCHEMA
+DISTORDIA_TYPE = receipt_contract.DISTORDIA_TYPE
+REQUIRED_FIELDS = receipt_contract.REQUIRED_FIELDS
+build_receipt = receipt_contract.build_receipt
+receipt_name = receipt_contract.receipt_name
 
 
 def receipt_provider_registration() -> tuple[str | None, str]:
@@ -74,7 +26,10 @@ def receipt_provider_registration() -> tuple[str | None, str]:
     its provider record does not advertise. Compare immutable pair/custody fields as
     well as the receipt schema so a misnamed or unrelated asset cannot supply an owner.
     """
-    record = nexus_client.read_service_record()
+    try:
+        record = nexus_client.read_service_record()
+    except Exception:
+        return None, "configured provider registration is unavailable"
     if not isinstance(record, dict):
         return None, "configured provider registration is not readable"
     if record.get("receipt_schema") != SCHEMA:
@@ -189,29 +144,48 @@ def publish_pending_receipts(limit: int = 100) -> int:
     """Create each asset at most once and mark done only after exact owner readback."""
     if not getattr(config, "NEXUS_SWAP_RECEIPTS_ENABLED", False):
         return 0
-    published = 0
+
+    # Validate the entire selected batch before any create can spend NXS. A corrupted
+    # later row must become visible manual work even when an earlier row is publishable.
+    validated: list[tuple[dict, dict[str, str]]] = []
     for row in state_db.list_swap_receipts_for_publication(limit):
         try:
             payload = json.loads(row["payload_json"])
-            if not isinstance(payload, dict) or set(payload) != set(REQUIRED_FIELDS):
-                continue
-            # Rebuild from typed values to reject malformed/corrupted durable payloads.
-            canonical = build_receipt(
-                source_signature=payload.get("source_signature"),
-                solana_mint=payload.get("solana_mint"), solana_vault=payload.get("solana_vault"),
-                nexus_token=payload.get("nexus_token"), nexus_account=payload.get("nexus_account"),
-                output_txid=payload.get("output_txid"),
-                output_contract_id=int(payload["output_contract_id"]),
-                output_units=int(payload["output_units"]), reference=int(payload["reference"]),
-            )
-            if canonical != payload or receipt_name(payload["source_signature"]) != row["receipt_name"]:
-                continue
-        except (TypeError, ValueError, KeyError, json.JSONDecodeError):
+            canonical = receipt_contract.canonicalize_payload(payload)
+            if receipt_name(canonical["source_signature"]) != row["receipt_name"]:
+                raise ValueError("receipt name does not match canonical source identity")
+            if canonical["source_signature"] != row["source_signature"]:
+                raise ValueError("receipt row source does not match canonical payload")
+        except (TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+            reason = nexus_client.redact(f"{type(exc).__name__}: {exc}")
+            state_db.mark_swap_receipt_manual_review(row["source_signature"], reason)
             continue
+        validated.append((row, canonical))
+
+    needs_registration = any(
+        row["status"] in {"awaiting_owner", "pending"} for row, _payload in validated
+    )
+    authenticated_owner = None
+    if needs_registration:
+        # One authoritative registration snapshot governs the whole invocation. Re-reading
+        # per row can mix owners/configurations within a single publication batch.
+        authenticated_owner, _reason = receipt_provider_registration()
+
+    published = 0
+    for row, payload in validated:
+        if row["status"] == "awaiting_owner":
+            if not authenticated_owner or not state_db.bind_swap_receipt_owner(
+                row["source_signature"], authenticated_owner
+            ):
+                continue
+            row = state_db.get_swap_receipt(row["source_signature"])
+            if row is None:
+                continue
 
         if row["status"] == "pending":
-            # Re-read authoritative profile-derived owner before crossing create boundary.
-            if expected_provider_owner() != row["expected_owner"]:
+            # The current authenticated registration must retain the immutable owner
+            # before crossing the budgeted NXS-spending boundary.
+            if authenticated_owner != row["expected_owner"]:
                 continue
             if not state_db.claim_swap_receipt_with_nxs_budget(
                 row["source_signature"],

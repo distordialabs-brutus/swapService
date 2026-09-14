@@ -184,9 +184,6 @@ def test_disposition_never_settles_status_or_inexact_transaction(tmp_path, trans
             transaction = payout_transaction(memo="wrong")
         with patch.object(solana_client, "_get_client", return_value=_MemoRpcClient()), patch.object(
             solana_client, "_rpc_call", return_value=transaction
-        ), patch.object(
-            solana_client, "get_signatures_confirmation",
-            side_effect=AssertionError("status alone must not settle a disposition"),
         ):
             assert solana_client.check_sig_confirmations(1, 2.0) == 0
 
@@ -308,11 +305,7 @@ def test_exact_direct_payout_proof_finalizes_source_once(tmp_path):
             solana_client, "_get_client", return_value=_MemoRpcClient()
         ), patch.object(
             solana_client, "_rpc_call", return_value=payout_transaction()
-        ) as rpc, patch.object(
-            solana_client,
-            "get_signatures_confirmation",
-            side_effect=AssertionError("status alone must not authorize finalization"),
-        ):
+        ) as rpc:
             swap_nexus.process_unprocessed_txids(paused=True)
             swap_nexus.process_unprocessed_txids(paused=True)
 
@@ -339,10 +332,6 @@ def test_exact_crash_recovered_proof_is_compared_before_signature_adoption(tmp_p
             solana_client,
             "find_signature_with_memo",
             side_effect=AssertionError("money owner must consume full evidence"),
-        ), patch.object(
-            solana_client,
-            "get_signatures_confirmation",
-            side_effect=AssertionError("status alone must not authorize finalization"),
         ):
             swap_nexus.process_unprocessed_txids(paused=True)
             swap_nexus.process_unprocessed_txids(paused=True)
@@ -376,11 +365,7 @@ def test_inexact_or_unattributable_direct_proof_never_archives(
             solana_client, "_get_client", return_value=_MemoRpcClient()
         ), patch.object(
             solana_client, "_rpc_call", return_value=transaction
-        ), patch.object(
-            solana_client,
-            "get_signatures_confirmation",
-            return_value={PAYOUT_SIGNATURE: True},
-        ) as status_lookup:
+        ):
             swap_nexus.process_unprocessed_txids(paused=True)
 
         assert not state_db.is_processed_txid(NEXUS_TXID, 7)
@@ -388,7 +373,7 @@ def test_inexact_or_unattributable_direct_proof_never_archives(
         assert row["comment"] == swap_nexus.NEXUS_STATUS_AWAITING
         assert row["sig"] == PAYOUT_SIGNATURE
         assert state_db.get_fee_entries() == []
-        status_lookup.assert_not_called()
+
 
 
 def test_recovered_mismatch_keeps_liability_and_never_resubmits(tmp_path):

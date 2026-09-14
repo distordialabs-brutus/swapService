@@ -102,6 +102,11 @@ def production_pair_configuration_errors(environ=None) -> list[str]:
 
 # Solana
 RPC_URL = os.getenv("SOLANA_RPC_URL")
+# Optional explicit network binding for proxied/custom RPC URLs. Official Helius
+# hostnames are inferred when unset; an in-flight durable query is bound to this value.
+SOLANA_NETWORK = os.getenv("SOLANA_NETWORK", "").strip().lower()
+if SOLANA_NETWORK and SOLANA_NETWORK not in {"mainnet", "devnet"}:
+    raise ValueError("SOLANA_NETWORK must be mainnet or devnet")
 VAULT_KEYPAIR_PATH = os.getenv("VAULT_KEYPAIR")
 _vault_acct = _compat_env("SOLANA_VAULT_ACCOUNT", "VAULT_USDC_ACCOUNT")
 _sol_mint = _compat_env("SOLANA_TOKEN_MINT", "USDC_MINT")

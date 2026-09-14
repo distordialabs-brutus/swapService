@@ -133,7 +133,7 @@ The operator-intent CLI in [`nexus_transfer_operator.py`](nexus_transfer_operato
 
 | Key | Default | Notes |
 |---|---:|---|
-| `NEXUS_SWAP_RECEIPTS_ENABLED` | `false` | Strict boolean. When enabled, a confirmed Solana→Nexus payout atomically enqueues an immutable public `nexus-swap-receipt-v1` asset obligation. |
+| `NEXUS_SWAP_RECEIPTS_ENABLED` | `false` | Strict boolean. When enabled, exact confirmed Solana→Nexus payout evidence atomically creates an immutable public `nexus-swap-receipt-v1` obligation. Provider-owner lookup occurs later; unavailable ownership leaves an `awaiting_owner` outbox row. |
 | `NEXUS_SWAP_RECEIPT_TIMEOUT_SEC` | `20` | Positive integer timeout used by each receipt create/readback Nexus call and by the loop watchdog. It is not an NXS-spend cap. |
 | `NEXUS_SWAP_RECEIPT_EXPECTED_COST_NXS_UNITS` | `0` | Exact raw NXS base units reserved before one named-asset create. It must bound all expected creation/name costs; it is not scaled by `NEXUS_TOKEN_DECIMALS`. |
 | `NEXUS_SWAP_RECEIPT_BUDGET_NXS_UNITS` | `0` | Exact raw NXS base-unit lifetime allowance. Receipt creation requires this and the expected cost to be positive. An ambiguous create reservation remains charged. |
@@ -154,6 +154,12 @@ existing registration. Receipt-enabled startup requires a readable record with e
 `receipt_schema=nexus-swap-receipt-v1`, a non-empty on-chain owner, and immutable pair/custody
 fields matching the current configuration. Create and verify a new receipt-capable registration as
 part of a reviewed migration; do not assume the runtime heartbeat update changes the fixed field set.
+
+Payout finalization does not read the provider record. Canonical receipt evidence is retained in
+`swap_receipts` as `awaiting_owner`, atomically with payout completion. Publication validates the
+receipt-capable registration and freezes its owner before entering `pending`; a bound owner cannot
+be replaced. A later mismatch or outage holds publication without reopening the payout. This repairs
+the transient-owner-outage gap; target-node receipt acceptance remains outstanding.
 
 ## Polling, timeouts and state
 
@@ -180,7 +186,31 @@ part of a reviewed migration; do not assume the runtime heartbeat update changes
 | `STATE_DB_PATH` | `swap_service.db` | Authoritative SQLite database; read directly by `src/state_db.py`. |
 | `FEES_STATE_FILE` | `fees_state.json` | Legacy JSON fee accumulator. SQLite fee entries are authoritative on drift. |
 
-`HELIUS_RPC_URL` and `HELIUS_API_KEY` are read directly by `src/solana_client.py`. Full URL wins; otherwise the key is used to construct the Helius endpoint. If neither is set, core RPC is used. `POLL_HELIUS_LIMIT`, `NEXUS_MAX_PAGES` and `FEE_EVENTS_FILE` appear as Python `getattr()` compatibility hooks but are not loaded from environment by `src/config.py`; documenting them as `.env` options would be incorrect.
+### Trusted Helius history and network selection
+
+The live deposit scanner selects, in order:
+
+1. Explicit `HELIUS_RPC_URL`.
+2. A Helius-owned `SOLANA_RPC_URL`.
+3. `HELIUS_API_KEY`, constructing the current mainnet/devnet Helius endpoint for the identified network.
+4. Core RPC when Helius is not configured.
+
+`SOLANA_RPC_URL` remains required for standard RPC operations and recovery. Use the same Helius URL
+there for the simplest deployment. A separate Helius URL cannot contradict a recognized core network.
+`SOLANA_NETWORK` optionally binds custom/proxied endpoints to `mainnet` or `devnet`; official Helius
+and Solana hostnames must agree with that setting. API-key shorthand with an unidentified network
+fails closed instead of guessing mainnet. RPC credentials are never part of public provider records.
+
+Helius history uses full parsed transactions and a fixed bounded query. Each page's deposits, holds
+and continuation commit together. A saved provider cursor must resume under its original query;
+no automatic cross-provider fallback may reinterpret it. An old core cursor without identity fields
+is discarded only when its conservative lower checkpoint is unchanged, then history is re-enumerated.
+Durable holds pin the public recovery checkpoint and remain liabilities until resolved.
+
+`POLL_HELIUS_LIMIT`, `NEXUS_MAX_PAGES` and `FEE_EVENTS_FILE` remain Python `getattr()` compatibility
+hooks, not environment options loaded by `src/config.py`. The live default page size is 200;
+Helius full-history pages support at most 1,000 entries. Finality status requests are split into
+batches of at most 256 signatures.
 
 ### Solana finality
 

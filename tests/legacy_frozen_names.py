@@ -110,10 +110,28 @@ EXPECTED_SCHEMA = {
     # The finalized-history cursor is an additive, durable availability journal. Its
     # events prove page-before-cursor ordering; it does not rewrite financial rows.
     "solana_deposit_scan_cursor": ["vault_account", "mint", "lower_timestamp", "before_signature",
-                                    "upper_timestamp", "started_timestamp"],
+                                    "upper_timestamp", "started_timestamp", "network", "commitment",
+                                    "query_identity", "previous_timestamp"],
     "solana_deposit_scan_events": ["id", "vault_account", "mint", "lower_timestamp",
                                     "upper_timestamp", "request_before_signature", "next_before_signature",
                                     "signature_count", "admitted_count", "event", "timestamp"],
+    # Trusted Helius uses a provider-native token bound to one immutable bounded query.
+    # Seen-signature evidence and durable holds are additive safety journals; no frozen
+    # lifecycle row or key is renamed.
+    "helius_deposit_scan_cursor": ["vault_account", "network", "mint", "commitment",
+                                     "lower_timestamp", "upper_timestamp", "pagination_token",
+                                     "previous_timestamp", "query_identity", "started_timestamp"],
+    "helius_deposit_scan_events": ["id", "query_identity", "network", "vault_account",
+                                     "mint", "commitment", "lower_timestamp", "upper_timestamp",
+                                     "request_pagination_token", "next_pagination_token",
+                                     "signature_count", "admitted_count", "held_count", "event",
+                                     "timestamp"],
+    "solana_deposit_scan_seen": ["query_identity", "signature", "block_timestamp"],
+    "solana_deposit_holds": ["signature", "block_timestamp", "memo", "from_address",
+                              "amount_units", "reason", "evidence_json", "provider",
+                              "query_identity", "first_seen_timestamp", "updated_timestamp",
+                              "network", "vault_account", "mint", "observed_commitment",
+                              "finality_required", "replay_attempts", "last_replay_timestamp"],
     # These append-only fields are intentionally introduced by the E-004 durable
     # reconciliation migration. Existing rows retain their original columns and are
     # treated as incomplete evidence until a separately verified backfill exists.
@@ -137,7 +155,8 @@ EXPECTED_SCHEMA = {
                        "owner_from_address", "confirmations_credit", "status", "sig"],
     # Additive durable publication journal. It never authorizes or retries a payout.
     "swap_receipts": ["source_signature", "receipt_name", "expected_owner", "payload_json",
-                      "status", "asset_address", "created_timestamp", "updated_timestamp"],
+                      "status", "asset_address", "manual_review_error",
+                      "created_timestamp", "updated_timestamp"],
     # E-016 additive receipt NXS-spend journal. Unknown create outcomes retain their
     # reservation, so a restart cannot regain budget by treating timeout as failure.
     "receipt_nxs_budget_events": ["id", "source_signature", "receipt_name", "event",

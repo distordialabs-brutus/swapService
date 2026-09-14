@@ -25,7 +25,7 @@ def _advance_solana_waterline(current_wline, poll_start, fetch_ok: bool, deferre
     """Move `last_safe_timestamp_solana` forward only to a point proven safe.
 
     Invariant: the waterline must never pass a deposit that is not durably recorded,
-    because `_fetch_deposits_helius` stops at `ts <= since_ts` - anything left behind
+    because bounded provider scans exclude `ts < since_ts` - anything left behind
     the waterline is never seen again.
 
     - Enumeration failed this cycle -> update the heartbeat only, never the waterline.
@@ -59,6 +59,15 @@ def _advance_solana_waterline(current_wline, poll_start, fetch_ok: bool, deferre
         if deferred_floor < candidate:
             candidate = deferred_floor
             reason = "pinned_behind_deferred_unfinalized_deposit"
+
+    # Durable parser/finality holds are not guaranteed to survive total local DB loss.
+    # Keep the externally published recovery checkpoint behind their earliest source.
+    earliest_hold = state_db.get_earliest_solana_deposit_hold_timestamp()
+    if earliest_hold is not None:
+        hold_floor = int(earliest_hold) - safety - 1
+        if hold_floor < candidate:
+            candidate = hold_floor
+            reason = "pinned_behind_oldest_durable_deposit_hold"
 
     if candidate > int(current_wline):
         _log("WATERLINE_ADVANCED", old_ts=int(current_wline), new_ts=candidate, reason=reason)
@@ -128,14 +137,26 @@ def poll_solana_deposits(paused: bool = False):
             _log("SOLANA_INGEST_PAUSED", reason="backing deficit")
         else:
             try:
-                # Deposit admission uses a durable core-RPC `before` cursor.  Helius
-                # remains available for non-admission reads, but its provider cursor
-                # is not a durable coverage proof for a financial waterline.
+                # Promote previously held exact candidates independently of the public
+                # timestamp waterline.  A confirmed large deposit remains durable while
+                # waiting for finalization and therefore cannot be stranded when a later
+                # bounded range completes.
+                try:
+                    promoted_holds = solana_client.replay_solana_deposit_holds()
+                    if promoted_holds:
+                        _log("SOLANA_DEPOSIT_HOLDS_PROMOTED", count=promoted_holds)
+                except Exception as exc:
+                    _log("SOLANA_DEPOSIT_HOLD_REPLAY_FAILED", error=str(exc))
+
+                # Helius is the trusted primary when configured. Its full transaction
+                # pages and provider token are bound to this fixed poll range and committed
+                # atomically. Core RPC remains the no-Helius operational fallback; an
+                # in-flight cursor is always resumed by the provider that created it.
                 progress = solana_client.scan_incoming_deposits_with_durable_cursor(
                     str(config.VAULT_USDC_ACCOUNT),
                     since_ts=int(wline_sol),
-                    min_units=getattr(config, "MIN_DEPOSIT_SOLANA_UNITS", 0),
                     page_size=min(1000, max(1, int(getattr(config, "POLL_HELIUS_LIMIT", 200)))),
+                    upper_timestamp=int(poll_start),
                 )
                 unprocessed_deposits_added = progress.admitted_count
                 fetch_ok = progress.complete

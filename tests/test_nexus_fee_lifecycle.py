@@ -128,8 +128,7 @@ def test_failed_liquidity_read_cannot_submit_payout(tmp_path):
     with isolated_state(tmp_path):
         queue_ready()
         with patch.object(solana_client, "get_token_account_balance", side_effect=RuntimeError("RPC down")), \
-                patch.object(solana_client, "send_solana_token_to_account_with_sig", return_value=(True, "sig")) as send, \
-                patch.object(solana_client, "get_signatures_confirmation", return_value={}):
+                patch.object(solana_client, "send_solana_token_to_account_with_sig", return_value=(True, "sig")) as send:
             swap_nexus.process_unprocessed_txids()
         send.assert_not_called()
         assert state_db.get_unprocessed_txids_as_dicts()[0]["comment"] == swap_nexus.NEXUS_STATUS_READY

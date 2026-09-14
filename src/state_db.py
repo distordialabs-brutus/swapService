@@ -4,6 +4,8 @@ import sqlite3
 import time
 from typing import List, Optional, Tuple
 
+from . import receipt_contract
+
 DB_PATH = os.getenv("STATE_DB_PATH", "swap_service.db")
 
 
@@ -314,9 +316,23 @@ def init_db():
             lower_timestamp INTEGER NOT NULL,
             before_signature TEXT,
             upper_timestamp INTEGER NOT NULL,
-            started_timestamp INTEGER NOT NULL
+            started_timestamp INTEGER NOT NULL,
+            network TEXT,
+            commitment TEXT,
+            query_identity TEXT,
+            previous_timestamp INTEGER
         )
     """)
+    cursor.execute("PRAGMA table_info(solana_deposit_scan_cursor)")
+    _solana_scan_cursor_columns = {row[1] for row in cursor.fetchall()}
+    for _column, _definition in (
+        ("network", "TEXT"), ("commitment", "TEXT"),
+        ("query_identity", "TEXT"), ("previous_timestamp", "INTEGER"),
+    ):
+        if _column not in _solana_scan_cursor_columns:
+            cursor.execute(
+                f"ALTER TABLE solana_deposit_scan_cursor ADD COLUMN {_column} {_definition}"
+            )
     # Append-only evidence for each committed range page and completion.  It is
     # operational evidence, never a financial lifecycle replacement.
     cursor.execute("""
@@ -335,6 +351,95 @@ def init_db():
         )
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_solana_deposit_scan_events_vault ON solana_deposit_scan_events(vault_account, id)")
+
+    # Helius continuation tokens are meaningful only for the exact immutable query
+    # that produced them.  Keep this separate from the core-RPC `before` cursor so an
+    # operational provider switch can never reinterpret one provider's cursor as the
+    # other's.  Query identity includes network, vault, mint, commitment and both
+    # timestamp boundaries; pages, deposits and holds are committed atomically below.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS helius_deposit_scan_cursor (
+            vault_account TEXT PRIMARY KEY,
+            network TEXT NOT NULL,
+            mint TEXT NOT NULL,
+            commitment TEXT NOT NULL,
+            lower_timestamp INTEGER NOT NULL,
+            upper_timestamp INTEGER NOT NULL,
+            pagination_token TEXT,
+            previous_timestamp INTEGER,
+            query_identity TEXT NOT NULL UNIQUE,
+            started_timestamp INTEGER NOT NULL
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS helius_deposit_scan_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            query_identity TEXT NOT NULL,
+            network TEXT NOT NULL,
+            vault_account TEXT NOT NULL,
+            mint TEXT NOT NULL,
+            commitment TEXT NOT NULL,
+            lower_timestamp INTEGER NOT NULL,
+            upper_timestamp INTEGER NOT NULL,
+            request_pagination_token TEXT,
+            next_pagination_token TEXT,
+            signature_count INTEGER NOT NULL,
+            admitted_count INTEGER NOT NULL,
+            held_count INTEGER NOT NULL,
+            event TEXT NOT NULL CHECK (event IN ('page_committed', 'range_completed')),
+            timestamp INTEGER NOT NULL
+        )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_helius_deposit_scan_events_query "
+        "ON helius_deposit_scan_events(query_identity, id)"
+    )
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS solana_deposit_scan_seen (
+            query_identity TEXT NOT NULL,
+            signature TEXT NOT NULL,
+            block_timestamp INTEGER NOT NULL,
+            PRIMARY KEY (query_identity, signature)
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS solana_deposit_holds (
+            signature TEXT PRIMARY KEY,
+            block_timestamp INTEGER NOT NULL,
+            memo TEXT,
+            from_address TEXT,
+            amount_units INTEGER,
+            reason TEXT NOT NULL,
+            evidence_json TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            query_identity TEXT NOT NULL,
+            first_seen_timestamp INTEGER NOT NULL,
+            updated_timestamp INTEGER NOT NULL,
+            network TEXT,
+            vault_account TEXT,
+            mint TEXT,
+            observed_commitment TEXT,
+            finality_required INTEGER,
+            replay_attempts INTEGER NOT NULL DEFAULT 0,
+            last_replay_timestamp INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    cursor.execute("PRAGMA table_info(solana_deposit_holds)")
+    _solana_hold_columns = {row[1] for row in cursor.fetchall()}
+    for _column, _definition in (
+        ("network", "TEXT"), ("vault_account", "TEXT"), ("mint", "TEXT"),
+        ("observed_commitment", "TEXT"), ("finality_required", "INTEGER"),
+        ("replay_attempts", "INTEGER NOT NULL DEFAULT 0"),
+        ("last_replay_timestamp", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        if _column not in _solana_hold_columns:
+            cursor.execute(
+                f"ALTER TABLE solana_deposit_holds ADD COLUMN {_column} {_definition}"
+            )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_solana_deposit_holds_reason_ts "
+        "ON solana_deposit_holds(reason, block_timestamp)"
+    )
     
     # Fee tracking journal
     cursor.execute("""
@@ -393,10 +498,11 @@ def init_db():
         CREATE TABLE IF NOT EXISTS swap_receipts (
             source_signature TEXT PRIMARY KEY,
             receipt_name TEXT NOT NULL UNIQUE,
-            expected_owner TEXT NOT NULL,
+            expected_owner TEXT,
             payload_json TEXT NOT NULL,
             status TEXT NOT NULL,
             asset_address TEXT,
+            manual_review_error TEXT,
             created_timestamp INTEGER NOT NULL,
             updated_timestamp INTEGER NOT NULL
         )
@@ -464,6 +570,43 @@ def init_db():
     """)
 
     # --- Lightweight migrations for pre-existing databases ---
+    # Receipt obligations originally required provider ownership before insertion. Rebuild
+    # that small outbox table so new exact payout evidence can wait durably for later owner
+    # authentication without dropping already-bound obligations.
+    _receipt_info = list(cursor.execute("PRAGMA table_info(swap_receipts)"))
+    _receipt_owner = next((row for row in _receipt_info if row[1] == "expected_owner"), None)
+    if _receipt_owner is not None and _receipt_owner[3]:
+        cursor.execute("""
+            CREATE TABLE swap_receipts_owner_binding_v2 (
+                source_signature TEXT PRIMARY KEY,
+                receipt_name TEXT NOT NULL UNIQUE,
+                expected_owner TEXT,
+                payload_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                asset_address TEXT,
+                manual_review_error TEXT,
+                created_timestamp INTEGER NOT NULL,
+                updated_timestamp INTEGER NOT NULL
+            )
+        """)
+        cursor.execute("""
+            INSERT INTO swap_receipts_owner_binding_v2
+            SELECT source_signature, receipt_name, expected_owner, payload_json, status,
+                   asset_address, NULL, created_timestamp, updated_timestamp
+            FROM swap_receipts
+        """)
+        cursor.execute("DROP TABLE swap_receipts")
+        cursor.execute("ALTER TABLE swap_receipts_owner_binding_v2 RENAME TO swap_receipts")
+        cursor.execute(
+            "CREATE INDEX idx_swap_receipts_status "
+            "ON swap_receipts(status, created_timestamp)"
+        )
+    _receipt_columns = {
+        row[1] for row in cursor.execute("PRAGMA table_info(swap_receipts)")
+    }
+    if "manual_review_error" not in _receipt_columns:
+        cursor.execute("ALTER TABLE swap_receipts ADD COLUMN manual_review_error TEXT")
+
     # unprocessed_txids.sig persists the Solana send signature so Nexus->Solana
     # confirmation can use get_signature_statuses instead of scanning memos.
     cursor.execute("PRAGMA table_info(unprocessed_txids)")
@@ -1312,13 +1455,390 @@ def get_nexus_transfer_intents_by_status(statuses: tuple[str, ...], limit: int =
 
 ## Durable Solana deposit scan cursor
 
+_SOLANA_DEPOSIT_LIFECYCLE_TABLES = (
+    "unprocessed_sigs", "processed_sigs", "refunded_sigs", "quarantined_sigs",
+)
+
+
+def _solana_deposit_lifecycle_locations(conn, signature: str) -> int:
+    return sum(
+        conn.execute(f"SELECT 1 FROM {table} WHERE sig = ?", (signature,)).fetchone() is not None
+        for table in _SOLANA_DEPOSIT_LIFECYCLE_TABLES
+    )
+
+
+def _insert_solana_deposit(conn, deposit: tuple) -> bool:
+    if not isinstance(deposit, tuple) or len(deposit) != 5:
+        raise ValueError("invalid Solana deposit evidence")
+    sig, timestamp, memo, from_address, amount_units = deposit
+    if (not isinstance(sig, str) or not sig or type(timestamp) is not int or timestamp <= 0
+            or not isinstance(memo, (str, type(None)))
+            or not isinstance(from_address, (str, type(None)))
+            or type(amount_units) is not int or amount_units <= 0):
+        raise ValueError("invalid Solana deposit evidence")
+    locations = _solana_deposit_lifecycle_locations(conn, sig)
+    if locations > 1:
+        raise ValueError("conflicting existing Solana deposit lifecycle evidence")
+    if locations:
+        return False
+    held = conn.execute(
+        """SELECT block_timestamp, memo, from_address, amount_units
+             FROM solana_deposit_holds WHERE signature = ?""",
+        (sig,),
+    ).fetchone()
+    if held is not None and held != (timestamp, memo, from_address, amount_units):
+        raise ValueError("deposit conflicts with durable Solana hold evidence")
+    conn.execute(
+        """INSERT INTO unprocessed_sigs
+           (sig, timestamp, memo, from_address, amount_usdc_units, status, txid)
+           VALUES (?, ?, ?, ?, ?, 'ready for processing', NULL)""",
+        (sig, timestamp, memo or "", from_address, amount_units),
+    )
+    if held is not None:
+        conn.execute("DELETE FROM solana_deposit_holds WHERE signature = ?", (sig,))
+    return True
+
+
+def _insert_solana_deposit_hold(conn, hold: tuple) -> bool:
+    if not isinstance(hold, tuple) or len(hold) not in {9, 14}:
+        raise ValueError("invalid Solana deposit hold evidence")
+    (signature, block_timestamp, memo, from_address, amount_units, reason,
+     evidence_json, provider, query_identity) = hold[:9]
+    if len(hold) == 14:
+        network, vault_account, mint, observed_commitment, finality_required = hold[9:]
+    else:
+        network = vault_account = mint = observed_commitment = finality_required = None
+    if (not isinstance(signature, str) or not signature
+            or type(block_timestamp) is not int or block_timestamp <= 0
+            or not isinstance(memo, (str, type(None)))
+            or not isinstance(from_address, (str, type(None)))
+            or (amount_units is not None and (type(amount_units) is not int or amount_units <= 0))
+            or not isinstance(reason, str) or not reason
+            or not isinstance(evidence_json, str) or not evidence_json
+            or provider not in {"helius", "core"}
+            or not isinstance(query_identity, str) or not query_identity
+            or (network is not None and (not isinstance(network, str) or not network))
+            or (vault_account is not None and (not isinstance(vault_account, str) or not vault_account))
+            or (mint is not None and (not isinstance(mint, str) or not mint))
+            or observed_commitment not in {None, "confirmed", "finalized"}
+            or finality_required not in {None, 0, 1}):
+        raise ValueError("invalid Solana deposit hold evidence")
+    locations = _solana_deposit_lifecycle_locations(conn, signature)
+    if locations > 1:
+        raise ValueError("conflicting existing Solana deposit lifecycle evidence")
+    if locations:
+        return False
+    existing = conn.execute(
+        """SELECT block_timestamp, memo, from_address, amount_units, reason,
+                  evidence_json, provider, network, vault_account, mint,
+                  observed_commitment, finality_required
+             FROM solana_deposit_holds WHERE signature = ?""",
+        (signature,),
+    ).fetchone()
+    exact = (block_timestamp, memo, from_address, amount_units, reason,
+             evidence_json, provider, network, vault_account, mint,
+             observed_commitment, finality_required)
+    now = int(time.time())
+    if existing is None:
+        conn.execute(
+            """INSERT INTO solana_deposit_holds
+               (signature, block_timestamp, memo, from_address, amount_units, reason,
+                evidence_json, provider, query_identity, first_seen_timestamp,
+                updated_timestamp, network, vault_account, mint, observed_commitment,
+                finality_required)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (signature, block_timestamp, memo, from_address, amount_units, reason,
+             evidence_json, provider, query_identity, now, now, network, vault_account,
+             mint, observed_commitment, finality_required),
+        )
+        return True
+    if existing != exact:
+        raise ValueError("conflicting Solana deposit hold evidence")
+    conn.execute(
+        "UPDATE solana_deposit_holds SET updated_timestamp = ? WHERE signature = ?",
+        (now, signature),
+    )
+    return False
+
+
+def get_helius_deposit_scan_cursor(vault_account: str) -> dict | None:
+    """Return an incomplete Helius range, including its provider-issued token."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        row = conn.execute(
+            """SELECT vault_account, network, mint, commitment, lower_timestamp,
+                      upper_timestamp, pagination_token, previous_timestamp,
+                      query_identity, started_timestamp
+                 FROM helius_deposit_scan_cursor WHERE vault_account = ?""",
+            (vault_account,),
+        ).fetchone()
+        if row is None:
+            return None
+        keys = (
+            "vault_account", "network", "mint", "commitment", "lower_timestamp",
+            "upper_timestamp", "pagination_token", "previous_timestamp",
+            "query_identity", "started_timestamp",
+        )
+        return dict(zip(keys, row))
+    finally:
+        conn.close()
+
+
+def commit_helius_deposit_scan_page(
+    *, vault_account: str, network: str, mint: str, commitment: str,
+    lower_timestamp: int, upper_timestamp: int, query_identity: str,
+    request_pagination_token: str | None, next_pagination_token: str | None,
+    previous_timestamp: int | None, page_last_timestamp: int | None,
+    scanned_signatures: list[tuple[str, int]], deposits: list[tuple], holds: list[tuple],
+    complete: bool,
+) -> tuple[int, int]:
+    """Atomically admit one bounded Helius page and advance only its exact token."""
+    if (not all(isinstance(value, str) and value for value in
+                (vault_account, network, mint, commitment, query_identity))
+            or type(lower_timestamp) is not int or lower_timestamp < 0
+            or type(upper_timestamp) is not int or upper_timestamp <= lower_timestamp
+            or (request_pagination_token is not None
+                and (not isinstance(request_pagination_token, str) or not request_pagination_token))
+            or (next_pagination_token is not None
+                and (not isinstance(next_pagination_token, str) or not next_pagination_token))
+            or complete == (next_pagination_token is not None)):
+        raise ValueError("invalid Helius deposit scan page")
+    if previous_timestamp is not None and (
+            type(previous_timestamp) is not int or previous_timestamp <= 0):
+        raise ValueError("invalid Helius previous page timestamp")
+    if page_last_timestamp is not None and (
+            type(page_last_timestamp) is not int or page_last_timestamp <= 0):
+        raise ValueError("invalid Helius page timestamp")
+
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            """SELECT network, mint, commitment, lower_timestamp, upper_timestamp,
+                      pagination_token, previous_timestamp, query_identity
+                 FROM helius_deposit_scan_cursor WHERE vault_account = ?""",
+            (vault_account,),
+        ).fetchone()
+        identity = (network, mint, commitment, lower_timestamp, upper_timestamp,
+                    request_pagination_token, previous_timestamp, query_identity)
+        if existing is None:
+            if request_pagination_token is not None or previous_timestamp is not None:
+                raise ValueError("Helius cursor disappeared before page commit")
+            conn.execute(
+                """INSERT INTO helius_deposit_scan_cursor
+                   (vault_account, network, mint, commitment, lower_timestamp,
+                    upper_timestamp, pagination_token, previous_timestamp,
+                    query_identity, started_timestamp)
+                   VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)""",
+                (vault_account, network, mint, commitment, lower_timestamp,
+                 upper_timestamp, query_identity, int(time.time())),
+            )
+        elif existing != identity:
+            raise ValueError("Helius scan cursor/query conflict")
+
+        for signature, timestamp in scanned_signatures:
+            if (not isinstance(signature, str) or not signature
+                    or type(timestamp) is not int or timestamp <= 0):
+                raise ValueError("invalid Helius scanned signature evidence")
+            try:
+                conn.execute(
+                    """INSERT INTO solana_deposit_scan_seen
+                       (query_identity, signature, block_timestamp) VALUES (?, ?, ?)""",
+                    (query_identity, signature, timestamp),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("duplicate Helius signature inside bounded query") from exc
+
+        admitted = sum(_insert_solana_deposit(conn, deposit) for deposit in deposits)
+        held = sum(_insert_solana_deposit_hold(conn, hold) for hold in holds)
+        event = "range_completed" if complete else "page_committed"
+        conn.execute(
+            """INSERT INTO helius_deposit_scan_events
+               (query_identity, network, vault_account, mint, commitment,
+                lower_timestamp, upper_timestamp, request_pagination_token,
+                next_pagination_token, signature_count, admitted_count, held_count,
+                event, timestamp)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (query_identity, network, vault_account, mint, commitment,
+             lower_timestamp, upper_timestamp, request_pagination_token,
+             next_pagination_token, len(scanned_signatures), admitted, held,
+             event, int(time.time())),
+        )
+        if complete:
+            conn.execute(
+                "DELETE FROM solana_deposit_scan_seen WHERE query_identity = ?",
+                (query_identity,),
+            )
+            conn.execute(
+                "DELETE FROM helius_deposit_scan_cursor WHERE vault_account = ?",
+                (vault_account,),
+            )
+        else:
+            conn.execute(
+                """UPDATE helius_deposit_scan_cursor
+                      SET pagination_token = ?, previous_timestamp = ?
+                    WHERE vault_account = ?""",
+                (next_pagination_token, page_last_timestamp, vault_account),
+            )
+        conn.commit()
+        return admitted, held
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def get_solana_deposit_holds(limit: int = 1000) -> list[dict]:
+    if type(limit) is not int or limit <= 0:
+        raise ValueError("Solana deposit hold limit must be positive")
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        rows = conn.execute(
+            """SELECT signature, block_timestamp, memo, from_address, amount_units,
+                      reason, evidence_json, provider, query_identity,
+                      first_seen_timestamp, updated_timestamp, network, vault_account,
+                      mint, observed_commitment, finality_required, replay_attempts,
+                      last_replay_timestamp
+                 FROM solana_deposit_holds
+                ORDER BY replay_attempts ASC,
+                         CASE WHEN reason = 'awaiting_finalized' THEN 0 ELSE 1 END ASC,
+                         last_replay_timestamp ASC, block_timestamp ASC, signature ASC
+                LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        keys = (
+            "signature", "block_timestamp", "memo", "from_address", "amount_units",
+            "reason", "evidence_json", "provider", "query_identity",
+            "first_seen_timestamp", "updated_timestamp", "network", "vault_account",
+            "mint", "observed_commitment", "finality_required", "replay_attempts",
+            "last_replay_timestamp",
+        )
+        return [dict(zip(keys, row)) for row in rows]
+    finally:
+        conn.close()
+
+
+def record_solana_deposit_hold_replay_attempt(signature: str) -> None:
+    """Durably rotate attempted holds behind never-attempted rows."""
+    now = int(time.time())
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        changed = conn.execute(
+            """UPDATE solana_deposit_holds
+                  SET replay_attempts = replay_attempts + 1,
+                      last_replay_timestamp = ?, updated_timestamp = ?
+                WHERE signature = ?""",
+            (now, now, signature),
+        ).rowcount
+        if changed != 1:
+            raise ValueError("Solana deposit hold disappeared during replay")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_completed_helius_query_provenance(query_identity: str) -> dict | None:
+    """Recover legacy provenance only from a unique completed-query audit row."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        rows = conn.execute(
+            """SELECT DISTINCT network, vault_account, mint, commitment
+                 FROM helius_deposit_scan_events
+                WHERE query_identity = ? AND event = 'range_completed'""",
+            (query_identity,),
+        ).fetchall()
+        if len(rows) != 1:
+            return None
+        return dict(zip(("network", "vault_account", "mint", "observed_commitment"), rows[0]))
+    finally:
+        conn.close()
+
+
+def get_earliest_solana_deposit_hold_timestamp() -> int | None:
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        row = conn.execute("SELECT MIN(block_timestamp) FROM solana_deposit_holds").fetchone()
+        return int(row[0]) if row and row[0] is not None else None
+    finally:
+        conn.close()
+
+
+def discard_preupgrade_solana_deposit_scan_cursor(
+    vault_account: str, lower_timestamp: int,
+) -> bool:
+    """Discard only an identity-less legacy cursor so history is re-enumerated safely."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            """SELECT lower_timestamp, network, commitment, query_identity
+                 FROM solana_deposit_scan_cursor WHERE vault_account = ?""",
+            (vault_account,),
+        ).fetchone()
+        if row is None:
+            conn.rollback()
+            return False
+        if row[0] != lower_timestamp or any(value is not None for value in row[1:]):
+            conn.rollback()
+            return False
+        deleted = conn.execute(
+            """DELETE FROM solana_deposit_scan_cursor
+                WHERE vault_account = ? AND lower_timestamp = ?
+                  AND network IS NULL AND commitment IS NULL AND query_identity IS NULL""",
+            (vault_account, lower_timestamp),
+        ).rowcount
+        conn.commit()
+        return deleted == 1
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def promote_solana_deposit_hold(
+    signature: str, *, memo: str | None = None, from_address: str | None = None,
+    amount_units: int | None = None,
+) -> bool:
+    """Atomically move one revalidated held candidate into the ordinary queue."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            """SELECT block_timestamp, memo, from_address, amount_units
+                 FROM solana_deposit_holds WHERE signature = ?""",
+            (signature,),
+        ).fetchone()
+        if row is None:
+            conn.rollback()
+            return False
+        deposit = (
+            signature,
+            row[0],
+            row[1] if memo is None else memo,
+            row[2] if from_address is None else from_address,
+            row[3] if amount_units is None else amount_units,
+        )
+        conn.execute("DELETE FROM solana_deposit_holds WHERE signature = ?", (signature,))
+        inserted = _insert_solana_deposit(conn, deposit)
+        conn.commit()
+        return inserted
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def get_solana_deposit_scan_cursor(vault_account: str) -> dict | None:
     """Return the incomplete exact-cursor range for one configured vault."""
     conn = sqlite3.connect(DB_PATH)
     try:
         row = conn.execute(
             """SELECT vault_account, mint, lower_timestamp, before_signature,
-                      upper_timestamp, started_timestamp
+                      upper_timestamp, started_timestamp, network, commitment, query_identity,
+                      previous_timestamp
                  FROM solana_deposit_scan_cursor WHERE vault_account = ?""",
             (vault_account,),
         ).fetchone()
@@ -1327,16 +1847,21 @@ def get_solana_deposit_scan_cursor(vault_account: str) -> dict | None:
         return {
             "vault_account": row[0], "mint": row[1], "lower_timestamp": row[2],
             "before_signature": row[3], "upper_timestamp": row[4],
-            "started_timestamp": row[5],
+            "started_timestamp": row[5], "network": row[6], "commitment": row[7],
+            "query_identity": row[8], "previous_timestamp": row[9],
         }
     finally:
         conn.close()
 
 
 def commit_solana_deposit_scan_page(
-    *, vault_account: str, mint: str, lower_timestamp: int, request_before_signature: str | None,
-    next_before_signature: str | None, upper_timestamp: int, scanned_signature_count: int,
+    *, vault_account: str, mint: str, network: str, commitment: str, query_identity: str,
+    lower_timestamp: int, request_before_signature: str | None,
+    next_before_signature: str | None, upper_timestamp: int,
+    previous_timestamp: int | None, page_last_timestamp: int | None,
+    scanned_signature_count: int,
     deposits: list[tuple[str, int, str | None, str | None, int]], complete: bool,
+    holds: list[tuple] | None = None,
 ) -> int:
     """Atomically persist one validated history page and its exact resume cursor.
 
@@ -1345,6 +1870,9 @@ def commit_solana_deposit_scan_page(
     """
     if (not isinstance(vault_account, str) or not vault_account
             or not isinstance(mint, str) or not mint
+            or not isinstance(network, str) or not network
+            or not isinstance(commitment, str) or not commitment
+            or not isinstance(query_identity, str) or not query_identity
             or type(lower_timestamp) is not int or lower_timestamp < 0
             or type(upper_timestamp) is not int or upper_timestamp <= 0
             or type(scanned_signature_count) is not int or scanned_signature_count < 0):
@@ -1353,12 +1881,19 @@ def commit_solana_deposit_scan_page(
         raise ValueError("completed Solana scan cannot retain a pagination cursor")
     if not complete and (not isinstance(next_before_signature, str) or not next_before_signature):
         raise ValueError("incomplete Solana scan requires an exact cursor")
+    if previous_timestamp is not None and (
+            type(previous_timestamp) is not int or previous_timestamp <= 0):
+        raise ValueError("invalid Solana previous page timestamp")
+    if page_last_timestamp is not None and (
+            type(page_last_timestamp) is not int or page_last_timestamp <= 0):
+        raise ValueError("invalid Solana page timestamp")
 
     conn = sqlite3.connect(DB_PATH)
     try:
         conn.execute("BEGIN IMMEDIATE")
         existing = conn.execute(
-            """SELECT mint, lower_timestamp, before_signature, upper_timestamp
+            """SELECT mint, lower_timestamp, before_signature, upper_timestamp,
+                      network, commitment, query_identity, previous_timestamp
                  FROM solana_deposit_scan_cursor WHERE vault_account = ?""",
             (vault_account,),
         ).fetchone()
@@ -1367,42 +1902,25 @@ def commit_solana_deposit_scan_page(
                 raise ValueError("Solana scan cursor disappeared before page commit")
             conn.execute(
                 """INSERT INTO solana_deposit_scan_cursor
-                   (vault_account, mint, lower_timestamp, before_signature, upper_timestamp, started_timestamp)
-                   VALUES (?, ?, ?, NULL, ?, ?)""",
-                (vault_account, mint, lower_timestamp, upper_timestamp, int(time.time())),
+                   (vault_account, mint, lower_timestamp, before_signature, upper_timestamp,
+                    started_timestamp, network, commitment, query_identity, previous_timestamp)
+                   VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL)""",
+                (vault_account, mint, lower_timestamp, upper_timestamp, int(time.time()),
+                 network, commitment, query_identity),
             )
         else:
             if (existing[0] != mint or existing[1] != lower_timestamp
-                    or existing[2] != request_before_signature):
+                    or existing[2] != request_before_signature
+                    or existing[4] != network or existing[5] != commitment
+                    or existing[6] != query_identity or existing[7] != previous_timestamp):
                 raise ValueError("Solana scan cursor/configuration conflict")
             # A later page must not claim a newer range head.
             if existing[3] != upper_timestamp:
                 raise ValueError("Solana scan upper timestamp conflict")
 
-        admitted = 0
-        for deposit in deposits:
-            if not isinstance(deposit, tuple) or len(deposit) != 5:
-                raise ValueError("invalid Solana deposit evidence")
-            sig, timestamp, memo, from_address, amount_units = deposit
-            if (not isinstance(sig, str) or not sig or type(timestamp) is not int or timestamp <= 0
-                    or not isinstance(memo, (str, type(None)))
-                    or not isinstance(from_address, (str, type(None)))
-                    or type(amount_units) is not int or amount_units <= 0):
-                raise ValueError("invalid Solana deposit evidence")
-            locations = sum(
-                conn.execute(f"SELECT 1 FROM {table} WHERE sig = ?", (sig,)).fetchone() is not None
-                for table in ("unprocessed_sigs", "processed_sigs", "refunded_sigs", "quarantined_sigs")
-            )
-            if locations > 1:
-                raise ValueError("conflicting existing Solana deposit lifecycle evidence")
-            if locations == 0:
-                conn.execute(
-                    """INSERT INTO unprocessed_sigs
-                       (sig, timestamp, memo, from_address, amount_usdc_units, status, txid)
-                       VALUES (?, ?, ?, ?, ?, 'ready for processing', NULL)""",
-                    (sig, timestamp, memo or "", from_address, amount_units),
-                )
-                admitted += 1
+        admitted = sum(_insert_solana_deposit(conn, deposit) for deposit in deposits)
+        for hold in holds or ():
+            _insert_solana_deposit_hold(conn, hold)
 
         event = "range_completed" if complete else "page_committed"
         conn.execute(
@@ -1417,8 +1935,10 @@ def commit_solana_deposit_scan_page(
             conn.execute("DELETE FROM solana_deposit_scan_cursor WHERE vault_account = ?", (vault_account,))
         else:
             conn.execute(
-                "UPDATE solana_deposit_scan_cursor SET before_signature = ? WHERE vault_account = ?",
-                (next_before_signature, vault_account),
+                """UPDATE solana_deposit_scan_cursor
+                      SET before_signature = ?, previous_timestamp = ?
+                    WHERE vault_account = ?""",
+                (next_before_signature, page_last_timestamp, vault_account),
             )
         conn.commit()
         return admitted
@@ -1459,18 +1979,37 @@ def get_unprocessed_sigs() -> List[Tuple[str, int, str, str, float, str | None, 
 
 
 def get_unresolved_solana_liability_units() -> int:
-    """Gross Solana units tied to deposits whose lifecycle is not terminal.
+    """Gross quantified Solana units whose financial lifecycle is not terminal.
 
-    Every row in ``unprocessed_sigs`` is still owed a Nexus credit, refund, or
-    quarantine handling. Gross subtraction is conservative: it can defer fee
-    realization, but cannot classify user funds as spendable surplus.
+    Positive durable holds are liabilities just like queued deposits. An unquantified
+    legacy hold disables surplus/backing authorization rather than contributing zero.
     """
     conn = sqlite3.connect(DB_PATH)
     try:
-        row = conn.execute(
+        # Hold promotion moves principal between tables atomically. All liability reads
+        # must observe one snapshot rather than omit it between the two sums.
+        conn.execute("BEGIN")
+        unknown = conn.execute(
+            "SELECT COUNT(*) FROM solana_deposit_holds WHERE amount_units IS NULL OR amount_units <= 0"
+        ).fetchone()[0]
+        if unknown:
+            raise RuntimeError("unquantified Solana deposit hold makes liability unhealthy")
+        overlap = conn.execute(
+            """SELECT COUNT(*) FROM solana_deposit_holds h
+               WHERE EXISTS (SELECT 1 FROM unprocessed_sigs u WHERE u.sig = h.signature)
+                  OR EXISTS (SELECT 1 FROM processed_sigs p WHERE p.sig = h.signature)
+                  OR EXISTS (SELECT 1 FROM refunded_sigs r WHERE r.sig = h.signature)
+                  OR EXISTS (SELECT 1 FROM quarantined_sigs q WHERE q.sig = h.signature)"""
+        ).fetchone()[0]
+        if overlap:
+            raise RuntimeError("Solana deposit hold overlaps lifecycle evidence")
+        pending = conn.execute(
             "SELECT COALESCE(SUM(amount_usdc_units), 0) FROM unprocessed_sigs"
-        ).fetchone()
-        return max(0, int((row or (0,))[0] or 0))
+        ).fetchone()[0]
+        held = conn.execute(
+            "SELECT COALESCE(SUM(amount_units), 0) FROM solana_deposit_holds"
+        ).fetchone()[0]
+        return max(0, int(pending or 0) + int(held or 0))
     finally:
         conn.close()
 
@@ -1737,26 +2276,26 @@ def remove_unprocessed_sig(sig: str):
 
 _SWAP_RECEIPT_COLUMNS = (
     "source_signature", "receipt_name", "expected_owner", "payload_json", "status",
-    "asset_address", "created_timestamp", "updated_timestamp",
+    "asset_address", "manual_review_error", "created_timestamp", "updated_timestamp",
 )
 
 
 def _canonical_receipt_payload(payload: dict) -> tuple[str, str]:
     import json
-    if not isinstance(payload, dict):
-        raise ValueError("swap receipt payload must be an object")
-    source = payload.get("source_signature")
-    if not isinstance(source, str) or not source:
-        raise ValueError("swap receipt requires a full source signature")
-    return source, json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    canonical = receipt_contract.canonicalize_payload(payload)
+    return canonical["source_signature"], json.dumps(
+        canonical, sort_keys=True, separators=(",", ":")
+    )
 
 
-def enqueue_swap_receipt(payload: dict, expected_owner: str, receipt_name: str, *, conn=None) -> dict:
-    """Persist one immutable publication obligation; exact replay is idempotent."""
+def enqueue_swap_receipt(
+    payload: dict, receipt_name: str, *, conn=None,
+) -> dict:
+    """Persist one ownerless obligation; authenticated binding is a later transition."""
     source, encoded = _canonical_receipt_payload(payload)
-    owner, name = str(expected_owner or "").strip(), str(receipt_name or "").strip()
-    if not owner or not name:
-        raise ValueError("swap receipt owner and deterministic name are required")
+    name = str(receipt_name or "").strip()
+    if not name:
+        raise ValueError("swap receipt deterministic name is required")
     owns = conn is None
     db = conn or sqlite3.connect(DB_PATH)
     now = int(time.time())
@@ -1767,15 +2306,15 @@ def enqueue_swap_receipt(payload: dict, expected_owner: str, receipt_name: str, 
         ).fetchone()
         if existing is not None:
             row = dict(zip(_SWAP_RECEIPT_COLUMNS, existing))
-            if (row["receipt_name"], row["expected_owner"], row["payload_json"]) != (name, owner, encoded):
+            if row["receipt_name"] != name or row["payload_json"] != encoded:
                 raise ValueError("existing swap receipt obligation conflicts with exact payout evidence")
             return row
         db.execute(
             """INSERT INTO swap_receipts
                (source_signature, receipt_name, expected_owner, payload_json, status,
                 created_timestamp, updated_timestamp)
-               VALUES (?, ?, ?, ?, 'pending', ?, ?)""",
-            (source, name, owner, encoded, now, now),
+               VALUES (?, ?, NULL, ?, 'awaiting_owner', ?, ?)""",
+            (source, name, encoded, now, now),
         )
         if owns:
             db.commit()
@@ -1790,6 +2329,68 @@ def enqueue_swap_receipt(payload: dict, expected_owner: str, receipt_name: str, 
     finally:
         if owns:
             db.close()
+
+
+def _manual_receipt_evidence_json(evidence: dict) -> tuple[str, str]:
+    import json
+    if not isinstance(evidence, dict) or set(evidence) != set(receipt_contract.EVIDENCE_FIELDS):
+        raise ValueError("manual-review receipt evidence fields are incomplete")
+    source = evidence.get("source_signature")
+    if not isinstance(source, str) or not source:
+        raise ValueError("manual-review receipt evidence requires a source signature")
+    return source, json.dumps(evidence, sort_keys=True, separators=(",", ":"))
+
+
+def _enqueue_manual_review_receipt(
+    evidence: dict, receipt_name: str, error: str, *, conn,
+) -> dict:
+    source, encoded = _manual_receipt_evidence_json(evidence)
+    name = str(receipt_name or "")
+    if name != receipt_contract.receipt_name(source):
+        raise ValueError("manual-review receipt does not match deterministic name")
+    if not isinstance(error, str) or not error.strip():
+        raise ValueError("manual-review receipt requires an explicit error")
+    review_error = error.strip()[:1000]
+    existing = conn.execute(
+        "SELECT " + ", ".join(_SWAP_RECEIPT_COLUMNS)
+        + " FROM swap_receipts WHERE source_signature = ?", (source,),
+    ).fetchone()
+    if existing is not None:
+        row = dict(zip(_SWAP_RECEIPT_COLUMNS, existing))
+        if (row["receipt_name"] != name or row["payload_json"] != encoded
+                or row["status"] != "manual_review"
+                or row["manual_review_error"] != review_error):
+            raise ValueError("existing manual-review receipt conflicts with exact payout evidence")
+        return row
+    now = int(time.time())
+    conn.execute(
+        """INSERT INTO swap_receipts
+           (source_signature, receipt_name, expected_owner, payload_json, status,
+            asset_address, manual_review_error, created_timestamp, updated_timestamp)
+           VALUES (?, ?, NULL, ?, 'manual_review', NULL, ?, ?, ?)""",
+        (source, name, encoded, review_error, now, now),
+    )
+    row = get_swap_receipt(source, conn=conn)
+    if row is None:
+        raise RuntimeError("could not read persisted manual-review receipt obligation")
+    return row
+
+
+def mark_swap_receipt_manual_review(source_signature: str, error: str) -> bool:
+    """Quarantine a malformed durable payload without releasing any NXS reservation."""
+    source = _require_receipt_budget_text(source_signature, "source signature")
+    if not isinstance(error, str) or not error.strip():
+        raise ValueError("manual-review receipt requires an explicit error")
+    review_error = error.strip()[:1000]
+    with sqlite3.connect(DB_PATH) as conn:
+        changed = conn.execute(
+            """UPDATE swap_receipts
+               SET status='manual_review', manual_review_error=?, updated_timestamp=?
+               WHERE source_signature=?
+                 AND status IN ('awaiting_owner','pending','creating','verifying')""",
+            (review_error, int(time.time()), source),
+        ).rowcount
+        return changed == 1
 
 
 def get_swap_receipt(source_signature: str, *, conn=None) -> dict | None:
@@ -1810,21 +2411,45 @@ def list_swap_receipts_for_publication(limit: int = 100) -> list[dict]:
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute(
             "SELECT " + ", ".join(_SWAP_RECEIPT_COLUMNS)
-            + " FROM swap_receipts WHERE status IN ('pending','creating','verifying') "
+            + " FROM swap_receipts "
+              "WHERE status IN ('awaiting_owner','pending','creating','verifying') "
               "ORDER BY created_timestamp ASC LIMIT ?", (int(limit),),
         ).fetchall()
     return [dict(zip(_SWAP_RECEIPT_COLUMNS, row)) for row in rows]
 
 
-def claim_swap_receipt(source_signature: str) -> bool:
-    """Cross the legacy no-blind-recreate boundary before invoking assets/create."""
-    with sqlite3.connect(DB_PATH) as conn:
+def bind_swap_receipt_owner(source_signature: str, expected_owner: str) -> bool:
+    """Freeze the first authenticated provider owner; never replace it on mismatch."""
+    source = _require_receipt_budget_text(source_signature, "source signature")
+    owner = _require_receipt_budget_text(expected_owner, "provider owner")
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT expected_owner, status FROM swap_receipts WHERE source_signature=?",
+            (source,),
+        ).fetchone()
+        if row is None:
+            conn.commit()
+            return False
+        if row[0] is not None:
+            conn.commit()
+            return row[0] == owner
         changed = conn.execute(
-            """UPDATE swap_receipts SET status='creating', updated_timestamp=?
-               WHERE source_signature=? AND status='pending'""",
-            (int(time.time()), source_signature),
+            """UPDATE swap_receipts
+               SET expected_owner=?, status='pending', updated_timestamp=?
+               WHERE source_signature=? AND expected_owner IS NULL
+                     AND status='awaiting_owner'""",
+            (owner, int(time.time()), source),
         ).rowcount
+        conn.commit()
         return changed == 1
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _require_receipt_budget_text(value: str, field: str, max_length: int = 500) -> str:
@@ -1982,8 +2607,9 @@ def finalize_confirmed_solana_payout(
     *, sig: str, timestamp: int, amount_solana_units: int, output_txid: str,
     output_units: int, nexus_destination: str, memo: str, reference: int,
     output_contract_id: int, fee_solana_units: int,
-    receipt_payload: dict | None = None, expected_owner: str | None = None,
-    receipt_name: str | None = None, nexus_decimals: int = 6,
+    receipt_payload: dict | None = None, receipt_name: str | None = None,
+    receipt_evidence: dict | None = None, receipt_error: str | None = None,
+    nexus_decimals: int = 6,
 ) -> bool:
     """Atomically archive exact confirmed payout, fee and optional receipt obligation."""
     ints = (timestamp, amount_solana_units, output_units, reference, output_contract_id,
@@ -1991,15 +2617,14 @@ def finalize_confirmed_solana_payout(
     if (any(type(value) is not int for value in ints) or output_units <= 0
             or output_contract_id < 0 or fee_solana_units < 0 or nexus_decimals < 0):
         raise ValueError("confirmed payout requires exact integer evidence")
+    manual_review_requested = receipt_evidence is not None or receipt_error is not None
+    if receipt_payload is not None and manual_review_requested:
+        raise ValueError("receipt obligation cannot be both canonical and manual review")
+    if manual_review_requested and (receipt_evidence is None or receipt_error is None):
+        raise ValueError("manual-review receipt requires evidence and error")
     if receipt_payload is not None:
-        required_fields = {
-            "distordiaType", "schema", "source_signature", "solana_mint", "solana_vault",
-            "nexus_token", "nexus_account", "output_txid", "output_contract_id",
-            "output_units", "reference",
-        }
+        canonical_receipt = receipt_contract.canonicalize_payload(receipt_payload)
         expected_receipt_evidence = {
-            "distordiaType": "nexusSwapReceipt",
-            "schema": "nexus-swap-receipt-v1",
             "source_signature": sig,
             "nexus_account": nexus_destination,
             "output_txid": output_txid,
@@ -2007,16 +2632,35 @@ def finalize_confirmed_solana_payout(
             "output_units": str(output_units),
             "reference": str(reference),
         }
-        if (not isinstance(receipt_payload, dict)
-                or set(receipt_payload) != required_fields
-                or any(not isinstance(value, str) or not value for value in receipt_payload.values())
-                or any(receipt_payload.get(key) != value
-                       for key, value in expected_receipt_evidence.items())):
+        if any(
+            canonical_receipt.get(key) != value
+            for key, value in expected_receipt_evidence.items()
+        ):
             raise ValueError("swap receipt does not match exact confirmed payout evidence")
-        expected_name = "swap-receipt-" + hashlib.sha256(sig.encode("utf-8")).hexdigest()[:32]
-        if (not str(expected_owner or "").strip()
-                or str(receipt_name or "") != expected_name):
-            raise ValueError("swap receipt does not match provider owner or deterministic name")
+    elif receipt_evidence is not None:
+        _manual_receipt_evidence_json(receipt_evidence)
+        exact_manual_financial_evidence = {
+            "source_signature": sig,
+            "nexus_account": nexus_destination,
+            "output_txid": output_txid,
+            "output_contract_id": output_contract_id,
+            "output_units": output_units,
+            "reference": reference,
+        }
+        if (any(
+                receipt_evidence.get(key) != value
+                for key, value in exact_manual_financial_evidence.items()
+            ) or any(
+                type(receipt_evidence.get(key)) is not int
+                for key in ("output_contract_id", "output_units", "reference")
+            ) or any(
+                not isinstance(receipt_evidence.get(key), str)
+                for key in ("solana_mint", "solana_vault", "nexus_token")
+            )):
+            raise ValueError("manual-review receipt does not match exact confirmed payout evidence")
+    if receipt_payload is not None or receipt_evidence is not None:
+        if str(receipt_name or "") != receipt_contract.receipt_name(sig):
+            raise ValueError("swap receipt does not match deterministic name")
     conn = sqlite3.connect(DB_PATH)
     try:
         conn.execute("PRAGMA busy_timeout=5000")
@@ -2040,16 +2684,22 @@ def finalize_confirmed_solana_payout(
             if terminal != expected_terminal:
                 conn.commit()
                 return False
-            if receipt_payload is not None:
+            if receipt_payload is not None or receipt_evidence is not None:
                 # A terminal row created before receipts were enabled lacks a frozen
                 # provider/pair snapshot. Never invent that historical context. Only an
                 # already-durable obligation may be validated as an idempotent replay.
                 if get_swap_receipt(sig, conn=conn) is None:
                     conn.commit()
                     return False
-                enqueue_swap_receipt(
-                    receipt_payload, expected_owner or "", receipt_name or "", conn=conn
-                )
+                if receipt_payload is not None:
+                    enqueue_swap_receipt(
+                        receipt_payload, receipt_name or "", conn=conn
+                    )
+                else:
+                    assert receipt_evidence is not None
+                    _enqueue_manual_review_receipt(
+                        receipt_evidence, receipt_name or "", receipt_error or "", conn=conn
+                    )
             conn.commit()
             return True
         if source != expected_source:
@@ -2081,7 +2731,11 @@ def finalize_confirmed_solana_payout(
              nexus_destination, memo, reference, output_contract_id),
         )
         if receipt_payload is not None:
-            enqueue_swap_receipt(receipt_payload, expected_owner or "", receipt_name or "", conn=conn)
+            enqueue_swap_receipt(receipt_payload, receipt_name or "", conn=conn)
+        elif receipt_evidence is not None:
+            _enqueue_manual_review_receipt(
+                receipt_evidence, receipt_name or "", receipt_error or "", conn=conn
+            )
         if conn.execute("DELETE FROM unprocessed_sigs WHERE sig=?", (sig,)).rowcount != 1:
             raise RuntimeError("exact pending Solana deposit changed during finalization")
         conn.commit()
@@ -2607,70 +3261,89 @@ def payout_budget_used(seconds: int = 86400) -> int:
         conn.close()
 
 
+def _reconstruct_confirmed_solana_payout_budget_in_transaction(
+    conn, *, obligation_id: str, kind: str, signature: str,
+    amount_usdc_units: int, chain_timestamp: int,
+) -> bool:
+    """Restore authoritative confirmed spend while the caller owns the write lock."""
+    expected = {
+        "reserved": (kind, amount_usdc_units, None),
+        "submitted": (kind, amount_usdc_units, signature),
+        "confirmed": (kind, amount_usdc_units, signature),
+    }
+    conflicting_signature = conn.execute(
+        """SELECT 1 FROM solana_payout_budget_events
+           WHERE obligation_id != ? AND event IN ('submitted', 'confirmed')
+             AND signature = ? LIMIT 1""",
+        (obligation_id, signature),
+    ).fetchone()
+    if conflicting_signature is not None:
+        return False
+    rows = conn.execute(
+        """SELECT event, kind, amount_usdc_units, signature, evidence, timestamp
+           FROM solana_payout_budget_events
+           WHERE obligation_id = ? ORDER BY id""",
+        (obligation_id,),
+    ).fetchall()
+    observed: dict[str, tuple[str, int, str | None]] = {}
+    for event, observed_kind, amount, event_signature, evidence, timestamp in rows:
+        if (event not in expected or event in observed
+                or (observed_kind, amount, event_signature) != expected[event]
+                or evidence not in (None, "recovered_finalized_solana_payout")
+                or type(timestamp) is not int or timestamp <= 0):
+            return False
+        observed[event] = (observed_kind, amount, event_signature)
+    for event in ("reserved", "submitted", "confirmed"):
+        if event in observed:
+            continue
+        event_kind, amount, event_signature = expected[event]
+        conn.execute(
+            """INSERT INTO solana_payout_budget_events
+               (obligation_id, kind, event, amount_usdc_units, signature, evidence, timestamp)
+               VALUES (?, ?, ?, ?, ?, 'recovered_finalized_solana_payout', ?)""",
+            (obligation_id, event_kind, event, amount, event_signature, chain_timestamp),
+        )
+    # Only confirmed spend ages out of the cap. Replace a local confirmation-clock value
+    # with the finalized block time; reserved/submitted timestamps remain intent history.
+    conn.execute(
+        """UPDATE solana_payout_budget_events
+           SET timestamp = ?, evidence = 'recovered_finalized_solana_payout'
+           WHERE obligation_id = ? AND event = 'confirmed'""",
+        (chain_timestamp, obligation_id),
+    )
+    return True
+
+
 def reconstruct_confirmed_solana_payout_budget(
     *, obligation_id: str, signature: str, amount_usdc_units: int, chain_timestamp: int,
+    kind: str = "nexus_payout",
 ) -> bool:
     """Restore one exact finalized payout's rolling-cap evidence after database loss.
 
-    The timestamp comes from the finalized Solana signature page, never the recovery
-    clock.  Existing durable events must already describe this exact payout; a conflict
-    is an incomplete recovery, not permission to rewrite financial history.
+    The finalized block timestamp is authoritative for the rolling window. Existing
+    exact partial ledgers are completed (including a missing reservation); contradictory
+    amounts, kinds, identities, signatures or evidence remain an incomplete recovery.
     """
     obligation_id = _require_solana_payout_budget_text(obligation_id, "obligation id")
+    kind = _require_solana_payout_budget_text(kind, "kind", 100)
     signature = _require_solana_payout_budget_text(signature, "signature")
     amount_usdc_units = _require_solana_payout_budget_units(amount_usdc_units, "amount")
     if type(chain_timestamp) is not int or chain_timestamp <= 0 or chain_timestamp > int(time.time()):
         raise ValueError("reconstructed Solana payout timestamp must be a non-future exact integer")
 
-    expected = {
-        "reserved": ("nexus_payout", amount_usdc_units, None),
-        "submitted": ("nexus_payout", amount_usdc_units, signature),
-        "confirmed": ("nexus_payout", amount_usdc_units, signature),
-    }
     conn = sqlite3.connect(DB_PATH)
     try:
         conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("BEGIN IMMEDIATE")
-        rows = conn.execute(
-            """SELECT event, kind, amount_usdc_units, signature
-               FROM solana_payout_budget_events
-               WHERE obligation_id = ? ORDER BY id""",
-            (obligation_id,),
-        ).fetchall()
-        if not rows:
-            for event in ("reserved", "submitted", "confirmed"):
-                kind, amount, event_signature = expected[event]
-                conn.execute(
-                    """INSERT INTO solana_payout_budget_events
-                       (obligation_id, kind, event, amount_usdc_units, signature, evidence, timestamp)
-                       VALUES (?, ?, ?, ?, ?, 'recovered_finalized_solana_payout', ?)""",
-                    (obligation_id, kind, event, amount, event_signature, chain_timestamp),
-                )
+        restored = _reconstruct_confirmed_solana_payout_budget_in_transaction(
+            conn, obligation_id=obligation_id, kind=kind, signature=signature,
+            amount_usdc_units=amount_usdc_units, chain_timestamp=chain_timestamp,
+        )
+        if restored:
             conn.commit()
-            return True
-
-        observed: dict[str, tuple[str, int, str | None]] = {}
-        for event, kind, amount, event_signature in rows:
-            if event not in expected or event in observed:
-                conn.commit()
-                return False
-            observed[event] = (kind, amount, event_signature)
-        if "reserved" not in observed or any(
-            observed[event] != expected[event] for event in observed
-        ):
-            conn.commit()
-            return False
-        for event in ("submitted", "confirmed"):
-            if event not in observed:
-                kind, amount, event_signature = expected[event]
-                conn.execute(
-                    """INSERT INTO solana_payout_budget_events
-                       (obligation_id, kind, event, amount_usdc_units, signature, evidence, timestamp)
-                       VALUES (?, ?, ?, ?, ?, 'recovered_finalized_solana_payout', ?)""",
-                    (obligation_id, kind, event, amount, event_signature, chain_timestamp),
-                )
-        conn.commit()
-        return True
+        else:
+            conn.rollback()
+        return restored
     except Exception:
         conn.rollback()
         raise
@@ -2714,6 +3387,203 @@ def _solana_sig_disposition_obligation_id(kind: str, source_sig: str) -> str:
     # The exact incoming Solana signature is immutable and already the primary key of
     # unprocessed_sigs.  A deterministic ID makes a restart see the same capacity claim.
     return f"{kind}:{source_sig}"
+
+
+def _canonical_solana_source_memo(value: str | None) -> str:
+    """Canonicalize only the optional deposit memo; identifiers remain byte-exact."""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError("reconstructed Solana source memo must be text or null")
+    return value
+
+
+def reconstruct_confirmed_solana_sig_disposition(
+    *, kind: str, source_signature: str, source_timestamp: int,
+    source_token_account: str, source_amount_solana_units: int,
+    source_memo: str | None, payout_signature: str,
+    destination_token_account: str, payout_amount_solana_units: int,
+    chain_timestamp: int, payout_memo: str,
+) -> bool:
+    """Atomically restore one current refund/quarantine and its confirmed cap spend."""
+    source_signature, details = _solana_sig_disposition(source_signature, kind)
+    source_timestamp = _require_solana_payout_budget_units(source_timestamp, "source timestamp")
+    source_token_account = _require_solana_payout_budget_text(
+        source_token_account, "source token account"
+    )
+    source_amount_solana_units = _require_solana_payout_budget_units(
+        source_amount_solana_units, "source amount"
+    )
+    payout_signature = _require_solana_payout_budget_text(payout_signature, "signature")
+    destination_token_account = _require_solana_payout_budget_text(
+        destination_token_account, "destination token account"
+    )
+    payout_amount_solana_units = _require_solana_payout_budget_units(
+        payout_amount_solana_units, "amount"
+    )
+    payout_memo = _require_solana_payout_budget_text(payout_memo, "payout memo", 1024)
+    source_memo = _canonical_solana_source_memo(source_memo)
+    if (type(chain_timestamp) is not int or chain_timestamp <= 0
+            or chain_timestamp > int(time.time()) or source_timestamp > chain_timestamp
+            or payout_amount_solana_units > source_amount_solana_units):
+        raise ValueError("reconstructed Solana disposition chronology or amount is invalid")
+
+    obligation_id = _solana_sig_disposition_obligation_id(kind, source_signature)
+    signature_column = details["signature_column"]
+    units_column = details["units_column"]
+    expected_terminal = (
+        source_signature, source_timestamp, source_token_account,
+        destination_token_account, source_amount_solana_units, source_memo,
+        payout_memo, payout_signature, payout_amount_solana_units,
+    )
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute(
+            "SELECT 1 FROM processed_sigs WHERE sig = ?", (source_signature,)
+        ).fetchone() is not None:
+            conn.rollback()
+            return False
+        opposing_table = (
+            "quarantined_sigs" if kind == "refund" else "refunded_sigs"
+        )
+        if conn.execute(
+            f"SELECT 1 FROM {opposing_table} WHERE sig = ?", (source_signature,)
+        ).fetchone() is not None:
+            conn.rollback()
+            return False
+
+        pending = conn.execute(
+            """SELECT timestamp, memo, from_address, amount_usdc_units, status, txid,
+                      reference, amount_usdd_units
+               FROM unprocessed_sigs WHERE sig = ?""",
+            (source_signature,),
+        ).fetchone()
+        if pending is not None:
+            pending_source = (
+                pending[0], _canonical_solana_source_memo(pending[1]), pending[2], pending[3]
+            )
+            expected_pending_source = (
+                source_timestamp, source_memo, source_token_account,
+                source_amount_solana_units,
+            )
+            permitted_statuses = {
+                *details["ready_statuses"], details["held_status"], details["awaiting_status"],
+            }
+            # Any frozen Nexus mint term is a separate active obligation. Positive
+            # refund/quarantine chain evidence must not erase or release it.
+            has_active_nexus_intent = any(value is not None for value in pending[5:8])
+            if (pending_source != expected_pending_source
+                    or pending[4] not in permitted_statuses
+                    or has_active_nexus_intent):
+                conn.rollback()
+                return False
+
+        terminal = conn.execute(
+            f"""SELECT sig, timestamp, from_address, destination_address,
+                       amount_usdc_units, memo, payout_memo,
+                       {signature_column}, {units_column}, status
+                FROM {details['table']} WHERE sig = ?""",
+            (source_signature,),
+        ).fetchone()
+        if terminal is not None:
+            terminal_immutable = (
+                terminal[0], terminal[1], terminal[2], terminal[3], terminal[4],
+                _canonical_solana_source_memo(terminal[5]), terminal[6], terminal[7],
+                terminal[8],
+            )
+            immutable_match = (
+                terminal_immutable[:7] == expected_terminal[:7]
+                and terminal_immutable[8] == expected_terminal[8]
+            )
+            signature_match = (
+                terminal[7] == payout_signature
+                or (terminal[7] is None and terminal[9] == "submitting")
+            )
+            lifecycle_match = pending is None or (
+                (terminal[9] == "submitting" and pending[4] == details["held_status"])
+                or (
+                    terminal[9] == "awaiting confirmation"
+                    and pending[4] == details["awaiting_status"]
+                )
+            )
+            if (not immutable_match or not signature_match or not lifecycle_match
+                    or terminal[9] not in {
+                        "submitting", "awaiting confirmation", details["terminal_status"],
+                    }):
+                conn.rollback()
+                return False
+        else:
+            conn.execute(
+                f"""INSERT INTO {details['table']}
+                   (sig, timestamp, from_address, destination_address,
+                    amount_usdc_units, memo, payout_memo,
+                    {signature_column}, {units_column}, status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (*expected_terminal, details["terminal_status"]),
+            )
+
+        if not _reconstruct_confirmed_solana_payout_budget_in_transaction(
+            conn, obligation_id=obligation_id, kind=details["budget_kind"],
+            signature=payout_signature, amount_usdc_units=payout_amount_solana_units,
+            chain_timestamp=chain_timestamp,
+        ):
+            conn.rollback()
+            return False
+
+        fee_units = source_amount_solana_units - payout_amount_solana_units
+        fee_kind = f"{kind}_flat_fee"
+        fees = conn.execute(
+            """SELECT amount_usdc_units, timestamp FROM fee_entries
+               WHERE sig = ? AND txid IS NULL AND kind = ?""",
+            (source_signature, fee_kind),
+        ).fetchall()
+        if fees:
+            if (fee_units <= 0 or len(fees) != 1 or fees[0][0] != fee_units
+                    or type(fees[0][1]) is not int or fees[0][1] <= 0
+                    or fees[0][1] > int(time.time())):
+                conn.rollback()
+                return False
+            conn.execute(
+                """UPDATE fee_entries SET timestamp = ?
+                   WHERE sig = ? AND txid IS NULL AND kind = ?""",
+                (chain_timestamp, source_signature, fee_kind),
+            )
+        elif fee_units:
+            conn.execute(
+                """INSERT INTO fee_entries
+                   (sig, txid, kind, amount_usdc_units, amount_usdd_units,
+                    contract_id, timestamp)
+                   VALUES (?, NULL, ?, ?, NULL, -1, ?)""",
+                (source_signature, fee_kind, fee_units, chain_timestamp),
+            )
+
+        conn.execute(
+            f"""UPDATE {details['table']}
+                SET {signature_column} = ?, status = ? WHERE sig = ?""",
+            (payout_signature, details["terminal_status"], source_signature),
+        )
+        if pending is not None:
+            deleted = conn.execute(
+                """DELETE FROM unprocessed_sigs
+                   WHERE sig = ? AND timestamp = ? AND COALESCE(memo, '') = ?
+                     AND from_address = ? AND amount_usdc_units = ? AND status = ?
+                     AND txid IS NULL AND reference IS NULL AND amount_usdd_units IS NULL""",
+                (
+                    source_signature, source_timestamp, source_memo, source_token_account,
+                    source_amount_solana_units, pending[4],
+                ),
+            ).rowcount
+            if deleted != 1:
+                raise RuntimeError("exact Solana disposition source changed during reconstruction")
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def get_solana_sig_disposition_evidence(
@@ -2767,8 +3637,7 @@ def prepare_solana_sig_disposition(
     amount_usdc_units = _require_solana_payout_budget_units(amount_usdc_units, "source amount")
     payout_units = _require_solana_payout_budget_units(payout_units, "amount")
     cap_units = _require_solana_payout_budget_units(cap_units, "cap", positive=False)
-    if memo is not None and not isinstance(memo, str):
-        raise ValueError("Solana disposition memo must be text or null")
+    memo = _canonical_solana_source_memo(memo)
     obligation_id = _solana_sig_disposition_obligation_id(kind, source_sig)
 
     conn = sqlite3.connect(DB_PATH)
@@ -2779,7 +3648,9 @@ def prepare_solana_sig_disposition(
             """SELECT timestamp, memo, from_address, amount_usdc_units, status
                FROM unprocessed_sigs WHERE sig = ?""", (source_sig,)
         ).fetchone()
-        if (row is None or row[0] != timestamp or row[1] != memo or row[2] != from_address
+        if (row is None or row[0] != timestamp
+                or _canonical_solana_source_memo(row[1]) != memo
+                or row[2] != from_address
                 or type(row[3]) is not int or row[3] != amount_usdc_units
                 or row[4] not in details["ready_statuses"]):
             conn.commit()
