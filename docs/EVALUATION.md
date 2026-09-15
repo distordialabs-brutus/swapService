@@ -168,3 +168,40 @@ See the [planned standard](../ASSET_STANDARD.md#provider-swapservice-asset-stand
 [configuration reference](../CONFIG.md), [state machines](STATE_MACHINES.md), and
 [token-literal inventory](TOKEN_PAIR_LITERAL_INVENTORY.md). Provider-v2 is not a prerequisite to
 correctly repairing the existing single-pair bridge, and is not implemented by this batch.
+
+## 2026-09-15 architecture and development review addendum
+
+This dated addendum does not rewrite the September 13 candidate evidence. The independent
+[2026-09-15 review](DEVELOPMENT_REVIEW_2026-09-15.md) inspected committed
+`d0acd721..6b1f052` and the separate dirty provider-v2 candidate.
+
+### Current local status corrections
+
+- Helius durable ingestion, current disposition discovery, receipt-outbox retention and their
+  isolation suites remain verified locally. Helius is trusted; a second attestor is not required.
+- **P0 recovery intent gap:** wipeout reconstruction accepts any positive current-v1 disposition
+  output not exceeding source principal, then books the difference as a fee. Because the memo binds
+  no frozen output, fee or terms revision, chain-only evidence must count actual cap spend but retain
+  the source as unresolved instead of terminalizing it.
+- **P1 Solana policy gap:** removing unsafe ingestion-time minimum filtering was correct, but no
+  processing classifier replaced it. A positive-net deposit below `MIN_DEPOSIT_SOLANA_UNITS`
+  currently reaches the Nexus debit boundary. Implement one shared live/recovery classifier rather
+  than filtering history.
+- **P1 operational gap retained:** refund/quarantine cap refusal remains generic and log-only. Persist
+  typed capacity evidence and alert it separately from lifecycle/evidence conflicts.
+
+### Dirty provider-v2 candidate status
+
+`src/service_record.py` and `tests/test_service_record_v2.py` are untracked, with related unstaged
+configuration additions. They are new work and remain **library-only / not merge-ready**:
+
+- no live registration, heartbeat, startup-recovery or waterline caller imports the module;
+- the claimed default-v2/legacy-fallback configuration is therefore not a runtime migration;
+- published micro percentages are parsed settings that current money paths do not enforce;
+- exact-secret equality checks do not prevent a credential embedded in a public URL;
+- zero/non-monotonic terms revisions and target Nexus address-based create/update/readback remain
+  unimplemented.
+
+Do not mark provider-v2 implemented or default until every published field maps to an enforced
+runtime/recovery policy and the address-selected Nexus migration passes multi-asset target-node
+acceptance. Production and real funds remain hard-blocked.

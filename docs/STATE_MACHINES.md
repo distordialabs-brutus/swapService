@@ -192,3 +192,29 @@ For settings/timeouts see [CONFIG.md](../CONFIG.md); for operator procedures see
 [SETUP.md](../SETUP.md) and [SECURITY.md](SECURITY.md). The runtime entrypoints are
 `poll_solana_deposits`, `poll_nexus_deposits`, `process_unprocessed_txids`,
 `check_unconfirmed_debits`, and `perform_startup_recovery` in their respective `src/` modules.
+
+## 2026-09-15 safety-architecture addendum
+
+The state diagrams above remain the committed intended architecture, with these reviewed
+qualifications:
+
+1. **Disposition recovery is not yet intent-complete.** Current-v1 refund/quarantine memos bind kind
+   and source signature but not frozen output, fee or terms revision. After database loss, exact
+   finalized transfer evidence may restore actual rolling-cap spend, but must not by itself authorize
+   terminal source removal or classify `source - payout` as fee. Retain a manual-review liability
+   until frozen intent survives or a new versioned on-chain identity proves it.
+2. **Solana minimum classification is missing after ingestion.** Durable ingestion must continue to
+   admit every positive custody delta. Before the `debit in flight` transition, a shared
+   live/recovery classifier must apply `MIN_DEPOSIT_SOLANA_UNITS` and the published micro policy.
+   Current positive-net below-minimum deposits can reach the Nexus debit boundary.
+3. **Disposition cap refusal needs a state.** Capacity exhaustion must persist a distinct retryable
+   cap-held state and exact needed/used/cap evidence. Evidence conflicts require a different manual
+   hold. A generic ready state plus a log is not an operational safety control.
+4. **Provider-v2 remains outside this runtime state machine.** The dirty builder has no registration,
+   heartbeat, startup-recovery or waterline caller. Until address-based read/update, exact owner and
+   immutable-record validation, monotonic terms updates, secret-safe publication and explicit v1
+   fallback are integrated and target-tested, v1 remains the actual runtime contract and v2 remains
+   a non-deployable candidate.
+
+See [the full 2026-09-15 review](DEVELOPMENT_REVIEW_2026-09-15.md) for probes, hashes and executable
+repair exits. Production and real-fund admission remain hard-blocked.
