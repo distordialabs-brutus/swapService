@@ -1,7 +1,10 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
-**Repair baseline:** `b91401a907eb5955f2ebebe767ca5dc94058a8f9` plus local changes.
-**Status:** reviewed code blockers corrected and offline verification passed; **not approved for real funds**.
+**Current tracked HEAD:** `57b2de021fdc67dd83b2fbcf9ac774eb0f5befab`.
+**Runtime baseline:** `6b1f052a2018f0315603e64a440d71cb612e8212`; the only later tracked
+commit is documentation. The separate unstaged/untracked provider-v2 proposal is not deployable code.
+**Status:** the configured offline gate passes, but reviewed financial-safety blockers remain;
+**not approved for real funds**.
 
 This is the current issue register. The complete earlier evaluation and state-machine notes,
 including pre-existing staged documentation, are preserved in the
@@ -39,7 +42,7 @@ lost with the database.
 | Trusted Helius ingestion | Full parsed pages, fixed query identity and atomic provider-token persistence are integrated. Endpoint precedence, known-network conflict rejection and unambiguous API-key network selection are regression-tested. The final review exposed an already-finalized replay bypass; replay now validates the actual provider endpoint before every promotion. Independent closure review passed. |
 | Finality and unsupported evidence | Holds freeze provenance and retain principal as a liability; unknown amounts fail accounting closed. Public recovery waterlines remain behind holds. Replay uses ≤256-signature status batches, validates all batches before promotion and fairly reaches beyond 1,000 holds. Liability reads use one SQLite snapshot during concurrent promotion. |
 | Classic SPL parsing | Exact vault deltas support ordinary classic-SPL transfers. A matching outer ATA-create/inner-initialization bundle is recognized as one creation; ambiguous sources, duplicate or conflicting evidence remain held. |
-| Refund/quarantine recovery — E-015, E-018 | Current versioned dispositions reconstruct exact source/terminal evidence, fees and rolling-cap spend. Recovery rejects active Nexus mint conflicts and normalizes missing memos consistently. Focused recovery and installed-SDK gates pass. |
+| Refund/quarantine recovery — E-015, E-018 | Source/outbound matching, active-Nexus-mint conflict rejection, missing-memo normalization and actual rolling-cap spend reconstruction are present. **Open P0:** a current-v1 memo does not bind frozen output, fee or terms; chain-only wipeout recovery can still terminalize an arbitrary shortfall as operator fee. Count proven spend, but retain the liability unless surviving frozen intent or a new evidence version proves the terminal terms. |
 | Receipt outbox — E-016 | Settlement atomically retains an owner-independent obligation. Builder/payload failures enter explicit manual review. The shared all-string schema rejects overflowing JSON numbers before coercion; publication continues to valid later rows. Authenticated owner binding and budgeted one-shot creation remain separate. Focused independent receipt review/testing passed; its optional hash audit was incomplete. |
 | Simplification — E-010 | Shared receipt contract, one authoritative durable ingestion/admission path, one registration lookup per publication batch and completed-query seen-row cleanup reduce duplicate policy and work. Non-durable scanner helpers and the budget-bypassing receipt claim were retired; database compatibility remains supported. |
 | Test isolation — E-005, E-017 | Shared offline defaults support standalone modules, real installed-SDK checks and deposit/critical-safety collection in both orders. These gates pass on the current candidate. |
@@ -103,15 +106,17 @@ during that review and the final full-suite verification. See the [repair report
 
 ## Remaining release gates
 
-### Local candidate gate — completed for this working tree
+### Local execution gate — green; safety review remains open
 
 - Full suite, focused financial regressions and installed-SDK/config-order shards passed.
 - Dependency consistency, byte compilation, local Markdown links and whitespace passed.
 - Token-literal inventory passed against the actual candidate in a disposable index; real staged
   entries were unchanged. The working candidate has not been staged or committed.
-- Independent reviews identified concrete blockers, each corrected and regression-tested; the last
-  closure review passed with no logic/security findings. Runtime was frozen for that in-place review.
-  The earlier optional receipt hash audit did not complete; no signed/full hash attestation is claimed.
+- The September 15 review identified three committed-runtime blockers that are not repaired: v1
+  disposition recovery lacks frozen intent, Solana input processing lacks the post-ingestion minimum
+  classifier, and disposition cap refusal has no typed durable state/alert. Runtime was unchanged
+  through the September 16 rerun, and focused probes still reproduce all three unsafe behaviors.
+- The earlier optional receipt hash audit did not complete; no signed/full hash attestation is claimed.
 
 Any subsequent runtime edit requires renewed affected-path review and test verification.
 
@@ -145,10 +150,17 @@ held, not silently rewritten or released by an upgrade.
 
 ## Prioritized development plan
 
-1. **Completed:** repair and independently review this local candidate; preserve safety controls and compatibility.
-2. Execute the target-chain matrix and operator rehearsals with recorded authoritative evidence.
-3. Enable optional receipts only after their separate cost/schema gate; otherwise leave them disabled.
-4. Pursue provider-v2 and remaining configuration consolidation as a separate versioned migration.
+1. **P0:** stop chain-only current-v1 disposition evidence from terminalizing unproven output/fee
+   intent; retain the unresolved liability while accounting for actual proven spend.
+2. **P1:** add one shared Solana minimum/micro classifier used by live processing and recovery, without
+   restoring lossy history filtering.
+3. **P1:** persist typed, dashboard-visible and alerted disposition cap-refusal evidence separately
+   from lifecycle/evidence conflicts.
+4. Repair and independently review those boundaries, then execute the target-chain matrix and operator
+   rehearsals with recorded authoritative evidence.
+5. Enable optional receipts only after their separate cost/schema gate; otherwise leave them disabled.
+6. Pursue provider-v2 and remaining configuration consolidation as a separate versioned migration,
+   after its published fields map to enforced runtime policy and its secret/publication controls pass.
 
 ### Batch 7 — Complete configurability and provider asset v2 **(in progress; provider v2 remains documentation only)**
 
@@ -205,3 +217,25 @@ configuration additions. They are new work and remain **library-only / not merge
 Do not mark provider-v2 implemented or default until every published field maps to an enforced
 runtime/recovery policy and the address-selected Nexus migration passes multi-asset target-node
 acceptance. Production and real funds remain hard-blocked.
+
+## 2026-09-16 no-runtime-delta verification
+
+The [September 16 review](DEVELOPMENT_REVIEW_2026-09-16.md) found no tracked runtime,
+dependency or workflow change after the September 15 source baseline. All ten paths in the prior
+runtime manifest still match byte-for-byte. The real index equals the tracked HEAD tree and excludes
+the unstaged `src/config.py` additions plus untracked provider-v2 implementation/test.
+
+Fresh execution in an isolated Python 3.11 environment with the pinned requirements produced:
+
+- full shared-tree suite: **434 passed, 71 subtests passed**;
+- recovery: **33 passed, 46 subtests passed**; recovery plus installed SDK: **34 passed,
+  46 subtests passed**;
+- receipt/payout/Nexus-fee/SDK shard: **85 passed**;
+- dependency consistency, literal CI compilation, Markdown links, CI/shared/index whitespace and the
+  real-index token inventory: passed; inventory remains **274 active lines**;
+- focused blocker probes: **3 committed-runtime reproductions passed** and **2 dirty provider-v2
+  reproductions passed**. Passing means the probes still observed the documented unsafe behavior.
+
+The full suite necessarily covered the shared working tree, including the unchanged dirty v2 proposal.
+An isolated exact-HEAD materialization was denied by unattended approval policy and was not rerouted,
+so this is not represented as a clean-checkout or exact-HEAD CI result. No live-chain operation ran.

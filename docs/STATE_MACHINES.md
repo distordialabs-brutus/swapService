@@ -1,7 +1,8 @@
 # Swap Service State Machines
 
 **Scope:** one configured classic SPL token ↔ Nexus token pair. This describes the current
-working candidate; offline gates and independent ingestion closure review passed.
+tracked runtime plus explicitly identified local proposal boundaries. The offline execution gate
+passes, but the financial-safety exits below remain open.
 See [EVALUATION.md](EVALUATION.md) for current approval status. Historical dated notes and the full
 previous diagrams are preserved in the [pre-repair snapshot](POST_CHANGE_REVIEW_2026-09-13_PRE_REPAIR_DOCUMENTATION.md).
 
@@ -133,8 +134,13 @@ mint, amount, memo and authoritative chronology. A conflicting active Nexus mint
 reconstruction instead of erasing a possible mint-and-refund conflict. Missing source memos use the
 same representation as normal persisted deposits.
 
-Reconstruction restores terminal disposition, fee and cap events atomically and idempotently.
-Confirmed cap consumption uses chain time, including refunds/quarantine before a newer heartbeat.
+**Required repair, not current behavior:** the current-v1 implementation still terminalizes an
+unproven shortfall as fee. For current-v1 chain-only disposition evidence, the corrected reconstruction
+may restore actual cap spend but must not infer the intended output or fee. The v1 memo binds only kind and source signature; without
+surviving frozen terms, the source remains an unresolved/manual-review liability. Terminal disposition
+and fee reconstruction is safe only when frozen intent survives or a new evidence version binds exact
+output, fee and terms. Confirmed cap consumption uses chain time, including refunds/quarantine before
+a newer heartbeat.
 The whole rolling window must be covered even when the recovery checkpoint is newer. Known primary
 payout identities preserve paid Nexus siblings; unpaid siblings remain independently recoverable.
 Unknown, malformed, encoded, legacy or unattributed vault spending keeps recovery incomplete.
@@ -218,3 +224,16 @@ qualifications:
 
 See [the full 2026-09-15 review](DEVELOPMENT_REVIEW_2026-09-15.md) for probes, hashes and executable
 repair exits. Production and real-fund admission remain hard-blocked.
+
+## 2026-09-16 verification note
+
+Tracked runtime did not change after the September 15 source baseline. The real index still excludes
+the dirty provider-v2 proposal, and all paths in the September 15 runtime manifest match. Fresh focused
+execution continues to reproduce each qualification above: arbitrary-shortfall v1 recovery can
+terminalize a fee, a below-minimum Solana source can reach the Nexus debit boundary, and disposition
+cap refusal retains only its generic source state. The isolated v2 library still publishes unenforced
+micro percentages and permits a configured secret as a public URL substring.
+
+The full shared-tree suite and configured focused shards remain green; that verifies execution and
+isolation, not these architectural exits. See the
+[full 2026-09-16 review](DEVELOPMENT_REVIEW_2026-09-16.md). No live-chain acceptance ran.
