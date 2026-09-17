@@ -237,3 +237,30 @@ micro percentages and permits a configured secret as a public URL substring.
 The full shared-tree suite and configured focused shards remain green; that verifies execution and
 isolation, not these architectural exits. See the
 [full 2026-09-16 review](DEVELOPMENT_REVIEW_2026-09-16.md). No live-chain acceptance ran.
+
+## 2026-09-17 unresolved-transition clarification
+
+No tracked runtime changed after the preceding note. The following are required transition contracts,
+not descriptions of current behavior:
+
+1. **Chain-only current-v1 disposition recovery must not enter a terminal state.** Positive transfer
+   evidence may append actual rolling-cap spend, but without frozen intent the source transitions to a
+   quantified `manual_review`/unresolved-liability state. It must not enter `refund_confirmed` or
+   `quarantine_confirmed`, delete the source obligation or derive a fee from an unexplained shortfall.
+   Exact surviving frozen intent or a new pre-submission evidence version is the only automatic path
+   from recovered chain evidence to a terminal disposition.
+2. **Durable ingestion and economic admission are separate transitions.** Every positive custody delta
+   still enters durable state. Before `debit in flight`, one shared classifier must produce an explicit
+   below-minimum, boundary or payable outcome using exact integer terms. Live processing and recovery
+   consume the same result; ingestion never filters history to enforce economic policy.
+3. **Capacity refusal is a state, not a failed claim.** Refund and quarantine preparation must
+   atomically persist a typed retryable cap hold containing obligation identity and exact
+   needed/used/cap units. Capacity release may return that same obligation to preparation after
+   restart. Evidence conflict and lifecycle conflict remain separate manual-review states, and every
+   hold transition occurs before any transport send.
+
+The currently collected recovery and cap tests accept the old terminal-fee and generic-state
+behaviors, while no collected real-worker test enforces the input threshold matrix. Those tests must
+be replaced or extended with the transition contracts above. See the
+[full 2026-09-17 review](DEVELOPMENT_REVIEW_2026-09-17.md). Production and real-fund admission remain
+hard-blocked.

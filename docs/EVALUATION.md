@@ -1,8 +1,9 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
-**Current tracked HEAD:** `57b2de021fdc67dd83b2fbcf9ac774eb0f5befab`.
-**Runtime baseline:** `6b1f052a2018f0315603e64a440d71cb612e8212`; the only later tracked
-commit is documentation. The separate unstaged/untracked provider-v2 proposal is not deployable code.
+**Reviewed tracked source HEAD:** `91ce0b866a4e155bd690f70b6533124467c7318f`.
+**Runtime baseline:** `6b1f052a2018f0315603e64a440d71cb612e8212`; every later tracked
+commit through the reviewed source is documentation-only. The separate unstaged/untracked provider-v2
+proposal is not deployable code.
 **Status:** the configured offline gate passes, but reviewed financial-safety blockers remain;
 **not approved for real funds**.
 
@@ -239,3 +240,47 @@ Fresh execution in an isolated Python 3.11 environment with the pinned requireme
 The full suite necessarily covered the shared working tree, including the unchanged dirty v2 proposal.
 An isolated exact-HEAD materialization was denied by unattended approval policy and was not rerouted,
 so this is not represented as a clean-checkout or exact-HEAD CI result. No live-chain operation ran.
+
+## 2026-09-17 review and next coding batches
+
+The [September 17 review](DEVELOPMENT_REVIEW_2026-09-17.md) found no tracked implementation,
+dependency or workflow delta after the September 16 report. The committed runtime manifest and the
+three concurrent provider-v2 worktree hashes are unchanged. This is a source-identity result, not a
+new implementation claim.
+
+Deeper inspection of default-collected tests makes the remaining exits more specific:
+
+- Current recovery tests positively expect chain-only current-v1 disposition evidence to archive the
+  source and derive a fee as `source principal - observed output`. Those assertions codify the P0
+  unsafe inference; a green suite cannot close it.
+- The collected ingestion test correctly proves that a positive below-minimum deposit enters durable
+  state, but no collected worker test requires below/boundary/above-minimum behavior. The real worker
+  checks only whether output after fees is positive before reaching the cross-chain debit boundary.
+- The disposition-cap test proves only that capacity refusal leaves the generic source state unchanged.
+  It does not require a durable typed reason, exact capacity evidence, dashboard visibility or alert.
+
+Implement and review these batches in order:
+
+1. **P0 — intent-safe disposition recovery.** For current-v1 chain-only evidence, record positively
+   proven spend for cap accounting but retain a quantified unresolved liability and do not create a
+   terminal fee. Permit automatic terminal reconstruction only from surviving exact frozen intent or
+   a new pre-submission evidence version binding source, kind, recipient, output, fee and terms.
+2. **P1 — shared Solana-input admission policy.** Classify every positive durable input before the
+   cross-chain debit in both live processing and reconstruction. Define exact below/boundary/above
+   behavior, integer rounding and any micro percentage once; make public terms derive from the same
+   executable policy without restoring ingestion-time filtering.
+3. **P1 — typed disposition-cap hold.** Atomically distinguish capacity refusal from lifecycle or
+   evidence conflict, retain needed/used/cap units, expose it to operators, alert it and support a
+   restart-safe retry when capacity becomes available. No remote send may occur while held.
+4. **P1 after those repairs — provider-v2 integration.** Keep the current dirty library outside the
+   deployable runtime until address-selected create/read/update, exact owner/type/schema/service and
+   custody validation, monotonic terms, explicit v1 fallback, secret-safe public fields and actual
+   caller integration pass target-node tests.
+
+Each batch must add default-collected acceptance tests through the real worker/finalizer/recovery
+caller, not helper-only probes. Required cases include wipeout and backup/WAL restore, policy change,
+duplicate and conflicting evidence, crash boundaries, below/exact/above thresholds with equal and
+unequal decimals, both disposition kinds, cap exhaustion and later release, restart, operator
+surfaces and proof that transport send helpers remain uncalled on every hold. The exact publication
+and live-acceptance gates are enumerated in the dated review. Production and real-fund admission
+remain hard-blocked.
