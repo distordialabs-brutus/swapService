@@ -504,8 +504,8 @@ class SolanaMemoLookupTests(unittest.TestCase):
 
 
 class StartupReconstructionTests(unittest.TestCase):
-    def test_state_reconstructs_wipeout_and_backup_dispositions_atomically_idempotently(self):
-        """Chain evidence restores terminal source state even when its reservation is absent."""
+    def test_state_reconstructs_only_frozen_disposition_terms_and_holds_chain_only_wipeout(self):
+        """Current-v1 chain evidence restores proven spend but never infers terminal terms."""
         for kind in ("refund", "quarantine"):
             for backup in (False, True):
                 with self.subTest(kind=kind, backup=backup), tempfile.TemporaryDirectory() as tmpdir:
@@ -575,18 +575,25 @@ class StartupReconstructionTests(unittest.TestCase):
                                 """SELECT kind, amount_usdc_units, timestamp FROM fee_entries"""
                             ).fetchall()
                             pending = conn.execute(
-                                "SELECT 1 FROM unprocessed_sigs"
+                                """SELECT sig, timestamp, memo, from_address, amount_usdc_units, status
+                                   FROM unprocessed_sigs"""
                             ).fetchall()
                             opposing = conn.execute(
                                 f"SELECT 1 FROM {'quarantined_sigs' if kind == 'refund' else 'refunded_sigs'}"
                             ).fetchall()
 
-                    self.assertEqual(terminal, [(
+                    expected_terminal = [(
                         SOLANA_DEPOSIT_SIGNATURE, 800, "recipient-token-account",
                         "recipient-token-account", 3_100_000, "nexus:recipient",
                         payout_memo, SOLANA_PAYOUT_SIGNATURE, 3_000_000,
                         f"{kind}_confirmed",
-                    )])
+                    )] if backup else []
+                    expected_fees = [(f"{kind}_flat_fee", 100_000, 900)] if backup else []
+                    expected_pending = [] if backup else [(
+                        SOLANA_DEPOSIT_SIGNATURE, 800, "nexus:recipient",
+                        "recipient-token-account", 3_100_000, f"{kind} evidence held",
+                    )]
+                    self.assertEqual(terminal, expected_terminal)
                     self.assertEqual(events, [
                         ("reserved", f"solana_{kind}", 3_000_000, None, 900),
                         ("submitted", f"solana_{kind}", 3_000_000,
@@ -594,8 +601,8 @@ class StartupReconstructionTests(unittest.TestCase):
                         ("confirmed", f"solana_{kind}", 3_000_000,
                          SOLANA_PAYOUT_SIGNATURE, 900),
                     ])
-                    self.assertEqual(fees, [(f"{kind}_flat_fee", 100_000, 900)])
-                    self.assertEqual(pending, [])
+                    self.assertEqual(fees, expected_fees)
+                    self.assertEqual(pending, expected_pending)
                     self.assertEqual(opposing, [])
 
     def test_disposition_reconstruction_refuses_active_nexus_mint_source_and_preserves_cap(self):
@@ -729,7 +736,10 @@ class StartupReconstructionTests(unittest.TestCase):
                             ).fetchone()
 
                     self.assertTrue(restored)
-                    self.assertEqual(saved, ("", details["terminal_status"]))
+                    self.assertEqual(
+                        saved,
+                        ("", details["terminal_status"]) if backup else None,
+                    )
 
     def test_missing_source_memo_is_canonical_during_normal_disposition_preparation(self):
         for kind in ("refund", "quarantine"):
@@ -838,8 +848,8 @@ class StartupReconstructionTests(unittest.TestCase):
         self.assertEqual(confirmed_timestamp, 900)
         self.assertEqual(fee_timestamp, 900)
 
-    def test_disposition_before_newer_heartbeat_rebuilds_terminal_state_and_budget(self):
-        """The rolling-window scan recovers spends older than the latest safe waterline."""
+    def test_disposition_before_newer_heartbeat_rebuilds_cap_and_holds_current_v1_terms(self):
+        """A rolling-window scan preserves spend without inventing terminal disposition terms."""
         for kind in ("refund", "quarantine"):
             for existing_budget in (0, 12345):
                 with self.subTest(kind=kind, existing_budget=existing_budget), tempfile.TemporaryDirectory() as tmpdir:
@@ -892,11 +902,14 @@ class StartupReconstructionTests(unittest.TestCase):
                                 conn.execute(
                                     f"SELECT status FROM {'refunded_sigs' if kind == 'refund' else 'quarantined_sigs'}"
                                 ).fetchall(),
-                                [(f"{kind}_confirmed",)],
+                                [],
                             )
-                            self.assertEqual(conn.execute(
-                                "SELECT COUNT(*) FROM unprocessed_sigs"
-                            ).fetchone()[0], 0)
+                            self.assertEqual(
+                                conn.execute(
+                                    "SELECT status FROM unprocessed_sigs"
+                                ).fetchall(),
+                                [(f"{kind} evidence held",)],
+                            )
 
     def test_incomplete_solana_enumeration_writes_no_recovery_markers(self):
         scan = {
@@ -1061,6 +1074,9 @@ class StartupReconstructionTests(unittest.TestCase):
                     """SELECT sig, quarantine_sig, quarantined_units, status
                        FROM quarantined_sigs"""
                 ).fetchall()
+                held_solana = conn.execute(
+                    """SELECT sig, amount_usdc_units, status FROM unprocessed_sigs"""
+                ).fetchall()
                 conn.close()
 
         self.assertTrue(result["recovery_complete"], result)
@@ -1072,14 +1088,12 @@ class StartupReconstructionTests(unittest.TestCase):
             [(NEXUS_TXID, 1, 4_000_000, "sender-b", SOLANA_PAYOUT_SIGNATURE)],
         )
         self.assertEqual(queued, [(NEXUS_TXID, 0, 3_000_000, "sender-a")])
-        self.assertEqual(refund, [(
-            SOLANA_REFUND_SOURCE_SIGNATURE, SOLANA_REFUND_PAYOUT_SIGNATURE,
-            100, "refund_confirmed",
-        )])
-        self.assertEqual(quarantine, [(
-            SOLANA_QUARANTINE_SOURCE_SIGNATURE, SOLANA_QUARANTINE_PAYOUT_SIGNATURE,
-            200, "quarantine_confirmed",
-        )])
+        self.assertEqual(refund, [])
+        self.assertEqual(quarantine, [])
+        self.assertCountEqual(held_solana, [
+            (SOLANA_REFUND_SOURCE_SIGNATURE, 110, "refund evidence held"),
+            (SOLANA_QUARANTINE_SOURCE_SIGNATURE, 210, "quarantine evidence held"),
+        ])
 
 
 class _AlreadyStoppedEvent:

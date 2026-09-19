@@ -49,8 +49,8 @@ except Exception:
 # raw state-machine label into an instruction that is safe for the operator to follow.
 SIG_ISSUE_STATUSES = (
     "debit unverified", "debit in flight", "debited, awaiting confirmation",
-    "to be refunded", "refund submission held", "refund sent, awaiting confirmation",
-    "to be quarantined", "quarantine submission held", "quarantine sent, awaiting confirmation",
+    "to be refunded", "refund submission held", "refund evidence held", "refund sent, awaiting confirmation",
+    "to be quarantined", "quarantine submission held", "quarantine evidence held", "quarantine sent, awaiting confirmation",
     "quarantine failed", "refund pending",
 )
 TXID_ISSUE_STATUSES = (
@@ -63,9 +63,11 @@ SIG_OPERATOR_ACTIONS = {
     "debited, awaiting confirmation": "verify Nexus debit before any disposition",
     "to be refunded": "automatic Solana refund pending; inspect if stale",
     "refund submission held": "verify the ambiguous Solana refund before any disposition",
+    "refund evidence held": "chain spend is proven but current-v1 terms are unresolved; do not terminalize or retry",
     "refund sent, awaiting confirmation": "verify Solana refund before any disposition",
     "to be quarantined": "automatic Solana quarantine pending; inspect if stale",
     "quarantine submission held": "verify the ambiguous Solana quarantine before any disposition",
+    "quarantine evidence held": "chain spend is proven but current-v1 terms are unresolved; do not terminalize or retry",
     "quarantine sent, awaiting confirmation": "verify Solana quarantine before any disposition",
     "quarantine failed": "inspect failed Solana quarantine before retrying",
     "refund pending": "inspect refund evidence before retrying",

@@ -70,7 +70,7 @@ Excluded surfaces are explicit:
 | `quarantine_viewer.py` | Display metadata + Frozen compatibility state | Present canonical symbols while retaining existing state labels until migrated. |
 <!-- token-pair-inventory: src/config.py:12,13,15,27,31,33,39,84,85,86,88,89,90,91,92,93,111,112,114,116,117,118,120,121,124,128,129,130,131,137,166,171,181,187,188,190,199,200,201,203,205,206,208,219,220,260,304,305,306,308,311,312,314,320,322,324,325,346,350,352,355,360,364,378,379,381,383,394,395,397,402,405,406,408,413,421,432,433,435,495,496,497,498,501,502,511,514,516 -->
 | `src/config.py` | Runtime semantics + Migration alias + Frozen compatibility state | The immutable `SwapPairConfig` exists. Extend remaining consumer coverage without renaming frozen state; preserve the exact conflict/precedence behavior of each supported legacy input. |
-<!-- token-pair-inventory: src/dashboard.py:43,44,45,46,471 -->
+<!-- token-pair-inventory: src/dashboard.py:43,44,45,46,473 -->
 | `src/dashboard.py` | Display metadata | Dashboard labels/fallbacks must consume canonical display symbols and never control custody or routing. |
 <!-- token-pair-inventory: src/main.py:96,98,100,108,109,110,111,337,338,351,354,393,394,396,400,463,478,520 -->
 | `src/main.py` | Runtime semantics + Display metadata | Production admission and output must use canonical identities/terms, preserving only compatibility names where migration requires them. |
@@ -80,7 +80,7 @@ Excluded surfaces are explicit:
 | `src/solana_client.py` | Runtime semantics + Frozen compatibility state | Route transfers, payout caps and persisted labels through the canonical pair object without renaming live state prematurely. |
 
 | `src/startup_recovery.py` | Runtime semantics | Recovery must preserve the validated pair/custody identity and exact integer amounts. |
-<!-- token-pair-inventory: src/state_db.py:16,4896 -->
+<!-- token-pair-inventory: src/state_db.py:16,4929 -->
 | `src/state_db.py` | Frozen compatibility state + Display metadata | Existing SQLite names stay stable until a separately tested append-only migration; new labels derive from canonical metadata. |
 <!-- token-pair-inventory: src/swap_nexus.py:92,328,467,866 -->
 | `src/swap_nexus.py` | Runtime semantics | Nexus-to-Solana processing must use canonical token/custody/fee configuration and durable intent rules. |

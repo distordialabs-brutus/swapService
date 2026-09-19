@@ -3358,6 +3358,7 @@ _SOLANA_SIG_DISPOSITION = {
         "units_column": "refunded_units",
         "ready_statuses": ("to be refunded",),
         "held_status": "refund submission held",
+        "evidence_held_status": "refund evidence held",
         "awaiting_status": "refund sent, awaiting confirmation",
         "terminal_status": "refund_confirmed",
         "budget_kind": "solana_refund",
@@ -3368,6 +3369,7 @@ _SOLANA_SIG_DISPOSITION = {
         "units_column": "quarantined_units",
         "ready_statuses": ("to be quarantined", "quarantine failed"),
         "held_status": "quarantine submission held",
+        "evidence_held_status": "quarantine evidence held",
         "awaiting_status": "quarantine sent, awaiting confirmation",
         "terminal_status": "quarantine_confirmed",
         "budget_kind": "solana_quarantine",
@@ -3469,7 +3471,8 @@ def reconstruct_confirmed_solana_sig_disposition(
                 source_amount_solana_units,
             )
             permitted_statuses = {
-                *details["ready_statuses"], details["held_status"], details["awaiting_status"],
+                *details["ready_statuses"], details["held_status"], details["evidence_held_status"],
+                details["awaiting_status"],
             }
             # Any frozen Nexus mint term is a separate active obligation. Positive
             # refund/quarantine chain evidence must not erase or release it.
@@ -3487,42 +3490,72 @@ def reconstruct_confirmed_solana_sig_disposition(
                 FROM {details['table']} WHERE sig = ?""",
             (source_signature,),
         ).fetchone()
-        if terminal is not None:
-            terminal_immutable = (
-                terminal[0], terminal[1], terminal[2], terminal[3], terminal[4],
-                _canonical_solana_source_memo(terminal[5]), terminal[6], terminal[7],
-                terminal[8],
-            )
-            immutable_match = (
-                terminal_immutable[:7] == expected_terminal[:7]
-                and terminal_immutable[8] == expected_terminal[8]
-            )
-            signature_match = (
-                terminal[7] == payout_signature
-                or (terminal[7] is None and terminal[9] == "submitting")
-            )
-            lifecycle_match = pending is None or (
-                (terminal[9] == "submitting" and pending[4] == details["held_status"])
-                or (
-                    terminal[9] == "awaiting confirmation"
-                    and pending[4] == details["awaiting_status"]
-                )
-            )
-            if (not immutable_match or not signature_match or not lifecycle_match
-                    or terminal[9] not in {
-                        "submitting", "awaiting confirmation", details["terminal_status"],
-                    }):
+        if terminal is None:
+            # A current-v1 memo proves only the outgoing transfer's source/kind, not
+            # the frozen recipient, net output, fee, or terms. Rebuild its proven cap
+            # spend, but retain the whole incoming principal in an operator hold rather
+            # than manufacture a terminal disposition or fee from the shortfall.
+            if not _reconstruct_confirmed_solana_payout_budget_in_transaction(
+                conn, obligation_id=obligation_id, kind=details["budget_kind"],
+                signature=payout_signature, amount_usdc_units=payout_amount_solana_units,
+                chain_timestamp=chain_timestamp,
+            ):
                 conn.rollback()
                 return False
-        else:
-            conn.execute(
-                f"""INSERT INTO {details['table']}
-                   (sig, timestamp, from_address, destination_address,
-                    amount_usdc_units, memo, payout_memo,
-                    {signature_column}, {units_column}, status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (*expected_terminal, details["terminal_status"]),
+            if pending is None:
+                conn.execute(
+                    """INSERT INTO unprocessed_sigs
+                       (sig, timestamp, memo, from_address, amount_usdc_units, status)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        source_signature, source_timestamp, source_memo,
+                        source_token_account, source_amount_solana_units,
+                        details["evidence_held_status"],
+                    ),
+                )
+            elif pending[4] != details["evidence_held_status"]:
+                updated = conn.execute(
+                    """UPDATE unprocessed_sigs SET status = ?
+                       WHERE sig = ? AND timestamp = ? AND COALESCE(memo, '') = ?
+                         AND from_address = ? AND amount_usdc_units = ? AND status = ?
+                         AND txid IS NULL AND reference IS NULL AND amount_usdd_units IS NULL""",
+                    (
+                        details["evidence_held_status"], source_signature,
+                        source_timestamp, source_memo, source_token_account,
+                        source_amount_solana_units, pending[4],
+                    ),
+                ).rowcount
+                if updated != 1:
+                    raise RuntimeError("Solana disposition source changed during evidence hold")
+            conn.commit()
+            return True
+
+        terminal_immutable = (
+            terminal[0], terminal[1], terminal[2], terminal[3], terminal[4],
+            _canonical_solana_source_memo(terminal[5]), terminal[6], terminal[7],
+            terminal[8],
+        )
+        immutable_match = (
+            terminal_immutable[:7] == expected_terminal[:7]
+            and terminal_immutable[8] == expected_terminal[8]
+        )
+        signature_match = (
+            terminal[7] == payout_signature
+            or (terminal[7] is None and terminal[9] == "submitting")
+        )
+        lifecycle_match = pending is None or (
+            (terminal[9] == "submitting" and pending[4] == details["held_status"])
+            or (
+                terminal[9] == "awaiting confirmation"
+                and pending[4] == details["awaiting_status"]
             )
+        )
+        if (not immutable_match or not signature_match or not lifecycle_match
+                or terminal[9] not in {
+                    "submitting", "awaiting confirmation", details["terminal_status"],
+                }):
+            conn.rollback()
+            return False
 
         if not _reconstruct_confirmed_solana_payout_budget_in_transaction(
             conn, obligation_id=obligation_id, kind=details["budget_kind"],

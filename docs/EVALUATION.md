@@ -43,7 +43,7 @@ lost with the database.
 | Trusted Helius ingestion | Full parsed pages, fixed query identity and atomic provider-token persistence are integrated. Endpoint precedence, known-network conflict rejection and unambiguous API-key network selection are regression-tested. The final review exposed an already-finalized replay bypass; replay now validates the actual provider endpoint before every promotion. Independent closure review passed. |
 | Finality and unsupported evidence | Holds freeze provenance and retain principal as a liability; unknown amounts fail accounting closed. Public recovery waterlines remain behind holds. Replay uses ≤256-signature status batches, validates all batches before promotion and fairly reaches beyond 1,000 holds. Liability reads use one SQLite snapshot during concurrent promotion. |
 | Classic SPL parsing | Exact vault deltas support ordinary classic-SPL transfers. A matching outer ATA-create/inner-initialization bundle is recognized as one creation; ambiguous sources, duplicate or conflicting evidence remain held. |
-| Refund/quarantine recovery — E-015, E-018 | Source/outbound matching, active-Nexus-mint conflict rejection, missing-memo normalization and actual rolling-cap spend reconstruction are present. **Open P0:** a current-v1 memo does not bind frozen output, fee or terms; chain-only wipeout recovery can still terminalize an arbitrary shortfall as operator fee. Count proven spend, but retain the liability unless surviving frozen intent or a new evidence version proves the terminal terms. |
+| Refund/quarantine recovery — E-015, E-018 | Source/outbound matching, active-Nexus-mint conflict rejection, missing-memo normalization and actual rolling-cap spend reconstruction are present. Current-v1 chain-only evidence counts exact proven cap spend but retains the complete source principal in a dashboard-visible evidence hold; it cannot infer a terminal fee or disposition. Automatic terminal reconstruction requires surviving exact frozen terms. |
 | Receipt outbox — E-016 | Settlement atomically retains an owner-independent obligation. Builder/payload failures enter explicit manual review. The shared all-string schema rejects overflowing JSON numbers before coercion; publication continues to valid later rows. Authenticated owner binding and budgeted one-shot creation remain separate. Focused independent receipt review/testing passed; its optional hash audit was incomplete. |
 | Simplification — E-010 | Shared receipt contract, one authoritative durable ingestion/admission path, one registration lookup per publication batch and completed-query seen-row cleanup reduce duplicate policy and work. Non-durable scanner helpers and the budget-bypassing receipt claim were retired; database compatibility remains supported. |
 | Test isolation — E-005, E-017 | Shared offline defaults support standalone modules, real installed-SDK checks and deposit/critical-safety collection in both orders. These gates pass on the current candidate. |
@@ -113,10 +113,7 @@ during that review and the final full-suite verification. See the [repair report
 - Dependency consistency, byte compilation, local Markdown links and whitespace passed.
 - Token-literal inventory passed against the actual candidate in a disposable index; real staged
   entries were unchanged. The working candidate has not been staged or committed.
-- The September 15 review identified three committed-runtime blockers that are not repaired: v1
-  disposition recovery lacks frozen intent, Solana input processing lacks the post-ingestion minimum
-  classifier, and disposition cap refusal has no typed durable state/alert. Runtime was unchanged
-  through the September 16 rerun, and focused probes still reproduce all three unsafe behaviors.
+- The September 15 review identified three committed-runtime blockers. Current-v1 disposition recovery is repaired: chain-only evidence reconstructs proven spend while preserving the full source liability as an operator hold. The remaining blockers are Solana input processing lacking the post-ingestion minimum classifier, and disposition cap refusal lacking typed durable state/alert. Focused probes must be renewed after each runtime change.
 - The earlier optional receipt hash audit did not complete; no signed/full hash attestation is claimed.
 
 Any subsequent runtime edit requires renewed affected-path review and test verification.
@@ -151,8 +148,7 @@ held, not silently rewritten or released by an upgrade.
 
 ## Prioritized development plan
 
-1. **P0:** stop chain-only current-v1 disposition evidence from terminalizing unproven output/fee
-   intent; retain the unresolved liability while accounting for actual proven spend.
+1. **Completed P0:** current-v1 chain-only disposition evidence now reconstructs exact proven cap spend while retaining the full source liability in an operator-visible hold; it cannot create a terminal fee or disposition without surviving frozen terms.
 2. **P1:** add one shared Solana minimum/micro classifier used by live processing and recovery, without
    restoring lossy history filtering.
 3. **P1:** persist typed, dashboard-visible and alerted disposition cap-refusal evidence separately
