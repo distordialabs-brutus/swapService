@@ -134,13 +134,22 @@ mint, amount, memo and authoritative chronology. A conflicting active Nexus mint
 reconstruction instead of erasing a possible mint-and-refund conflict. Missing source memos use the
 same representation as normal persisted deposits.
 
-**Required repair, not current behavior:** the current-v1 implementation still terminalizes an
-unproven shortfall as fee. For current-v1 chain-only disposition evidence, the corrected reconstruction
-may restore actual cap spend but must not infer the intended output or fee. The v1 memo binds only kind and source signature; without
-surviving frozen terms, the source remains an unresolved/manual-review liability. Terminal disposition
-and fee reconstruction is safe only when frozen intent survives or a new evidence version binds exact
-output, fee and terms. Confirmed cap consumption uses chain time, including refunds/quarantine before
-a newer heartbeat.
+**Current `814c0ae` containment:** when no disposition row survives, current-v1 chain-only evidence
+restores actual cap spend and a full-principal `refund evidence held` / `quarantine evidence held`
+source. It creates no terminal row or fee, remains in unresolved-liability accounting, appears on the
+dashboard and is selected by neither send worker. Current-v1 still binds only kind and source signature;
+without surviving pre-submission terms, operator review is required.
+
+**Open migration bypass:** the pre-`814c0ae` recovery could manufacture a terminal disposition row and
+fee from the same chain-only evidence. The current branch treats any matching existing terminal row as
+surviving frozen intent, but the schema has no provenance field proving that the row existed before the
+send. Consequently in-place upgrades and backups containing those legacy manufactured terminal rows
+retain the inferred fee and no unresolved source liability. Unknown provenance must be migrated to the
+same evidence-held state before this transition is safe. Genuine automatic terminal reconstruction
+requires durable pre-submission provenance plus exact source, kind, recipient, output, fee/terms and
+chain proof.
+
+Confirmed cap consumption uses chain time, including refunds/quarantine before a newer heartbeat.
 The whole rolling window must be covered even when the recovery checkpoint is newer. Known primary
 payout identities preserve paid Nexus siblings; unpaid siblings remain independently recoverable.
 Unknown, malformed, encoded, legacy or unattributed vault spending keeps recovery incomplete.
@@ -176,7 +185,7 @@ records cannot gain a receipt schema through a heartbeat update.
 
 | Store | Authority |
 |---|---|
-| Four `*_sigs` lifecycle tables | Solana source obligations and terminal evidence |
+| Four `*_sigs` lifecycle tables | Solana source obligations and terminal evidence; evidence-held current-v1 rows remain in `unprocessed_sigs` |
 | Four `*_txids` lifecycle tables | Composite Nexus source obligations and terminal evidence |
 | Provider cursor/event tables | Bound page continuation and completion evidence |
 | `solana_deposit_holds` | Unresolved principal, evidence, provenance and replay state |
@@ -264,3 +273,30 @@ behaviors, while no collected real-worker test enforces the input threshold matr
 be replaced or extended with the transition contracts above. See the
 [full 2026-09-17 review](DEVELOPMENT_REVIEW_2026-09-17.md). Production and real-fund admission remain
 hard-blocked.
+
+## 2026-09-21 transition update
+
+`814c0ae` implements the evidence-held transition for a fresh database reconstruction, so the first
+September 17 contract is now partly current behavior. Its safe branch is:
+
+```text
+current-v1 chain evidence + no surviving disposition row
+  → exact observed cap spend
+  → full-principal evidence hold
+  → no fee, no terminal row, no automatic send
+```
+
+The transition is not upgrade-complete. A matching existing terminal disposition row follows the
+frozen-intent path regardless of whether it was written before submission or manufactured by the
+pre-repair recovery. Add immutable intent provenance and an in-place/backup migration:
+
+```text
+existing terminal row + proven pre-submission provenance + exact chain match
+  → terminal confirmation
+existing terminal row + missing/legacy/recovery-only provenance
+  → exact observed cap spend + evidence hold + no inferred fee
+```
+
+After that P0 migration, retain the other two September 17 contracts unchanged: shared exact input
+classification before Nexus transport, then typed durable cap holds before any refund/quarantine
+transport. The [full 2026-09-21 review](DEVELOPMENT_REVIEW_2026-09-21.md) specifies executable exits.

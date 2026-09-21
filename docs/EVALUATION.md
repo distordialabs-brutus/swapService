@@ -1,11 +1,11 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
-**Reviewed tracked source HEAD:** `91ce0b866a4e155bd690f70b6533124467c7318f`.
-**Runtime baseline:** `6b1f052a2018f0315603e64a440d71cb612e8212`; every later tracked
-commit through the reviewed source is documentation-only. The separate unstaged/untracked provider-v2
-proposal is not deployable code.
-**Status:** the configured offline gate passes, but reviewed financial-safety blockers remain;
-**not approved for real funds**.
+**Reviewed runtime source HEAD:** `814c0ae8cbe0e65036a3b01d1eb8028e4dcb8ad3`.
+**Delta since the September 17 source:** `3da29ba` published review documentation and `814c0ae`
+changed `src/state_db.py`, `src/dashboard.py` and recovery tests. The separate unstaged/untracked
+provider-v2 proposal remains outside the deployable runtime.
+**Status:** fresh chain-only disposition recovery is contained, but an upgrade/back-up migration bypass
+and two previously identified financial-state blockers remain; **not approved for real funds**.
 
 This is the current issue register. The complete earlier evaluation and state-machine notes,
 including pre-existing staged documentation, are preserved in the
@@ -43,7 +43,7 @@ lost with the database.
 | Trusted Helius ingestion | Full parsed pages, fixed query identity and atomic provider-token persistence are integrated. Endpoint precedence, known-network conflict rejection and unambiguous API-key network selection are regression-tested. The final review exposed an already-finalized replay bypass; replay now validates the actual provider endpoint before every promotion. Independent closure review passed. |
 | Finality and unsupported evidence | Holds freeze provenance and retain principal as a liability; unknown amounts fail accounting closed. Public recovery waterlines remain behind holds. Replay uses ≤256-signature status batches, validates all batches before promotion and fairly reaches beyond 1,000 holds. Liability reads use one SQLite snapshot during concurrent promotion. |
 | Classic SPL parsing | Exact vault deltas support ordinary classic-SPL transfers. A matching outer ATA-create/inner-initialization bundle is recognized as one creation; ambiguous sources, duplicate or conflicting evidence remain held. |
-| Refund/quarantine recovery — E-015, E-018 | Source/outbound matching, active-Nexus-mint conflict rejection, missing-memo normalization and actual rolling-cap spend reconstruction are present. Current-v1 chain-only evidence counts exact proven cap spend but retains the complete source principal in a dashboard-visible evidence hold; it cannot infer a terminal fee or disposition. Automatic terminal reconstruction requires surviving exact frozen terms. |
+| Refund/quarantine recovery — E-015, E-018 | `814c0ae` contains fresh current-v1 chain-only evidence: it records exact proven cap spend, creates no terminal row/fee, retains the complete source principal in an evidence hold and exposes that hold on the dashboard. **Open P0 migration bypass:** a terminal row manufactured by the pre-`814c0ae` recovery is accepted as if it proved pre-submission frozen intent; replay can preserve the old inferred fee and missing liability. Existing terminal rows/backups require provenance-aware migration or conservative hold before this exit closes. |
 | Receipt outbox — E-016 | Settlement atomically retains an owner-independent obligation. Builder/payload failures enter explicit manual review. The shared all-string schema rejects overflowing JSON numbers before coercion; publication continues to valid later rows. Authenticated owner binding and budgeted one-shot creation remain separate. Focused independent receipt review/testing passed; its optional hash audit was incomplete. |
 | Simplification — E-010 | Shared receipt contract, one authoritative durable ingestion/admission path, one registration lookup per publication batch and completed-query seen-row cleanup reduce duplicate policy and work. Non-durable scanner helpers and the budget-bypassing receipt claim were retired; database compatibility remains supported. |
 | Test isolation — E-005, E-017 | Shared offline defaults support standalone modules, real installed-SDK checks and deposit/critical-safety collection in both orders. These gates pass on the current candidate. |
@@ -113,7 +113,12 @@ during that review and the final full-suite verification. See the [repair report
 - Dependency consistency, byte compilation, local Markdown links and whitespace passed.
 - Token-literal inventory passed against the actual candidate in a disposable index; real staged
   entries were unchanged. The working candidate has not been staged or committed.
-- The September 15 review identified three committed-runtime blockers. Current-v1 disposition recovery is repaired: chain-only evidence reconstructs proven spend while preserving the full source liability as an operator hold. The remaining blockers are Solana input processing lacking the post-ingestion minimum classifier, and disposition cap refusal lacking typed durable state/alert. Focused probes must be renewed after each runtime change.
+- The September 15 review identified three committed-runtime blockers. `814c0ae` closes the fresh-wipeout
+  unsafe branch but not the upgrade/back-up branch: terminal rows created by the earlier lossy recovery
+  have no provenance marker and are still accepted as frozen intent. Solana input processing still lacks
+  the post-ingestion minimum classifier, and disposition cap refusal still lacks typed durable state/alert.
+  The September 21 exact-HEAD bypass probes reproduce both remaining behaviors and the legacy-terminal
+  migration bypass while proving the new evidence hold itself is non-sendable and liability-counted.
 - The earlier optional receipt hash audit did not complete; no signed/full hash attestation is claimed.
 
 Any subsequent runtime edit requires renewed affected-path review and test verification.
@@ -148,11 +153,15 @@ held, not silently rewritten or released by an upgrade.
 
 ## Prioritized development plan
 
-1. **Completed P0:** current-v1 chain-only disposition evidence now reconstructs exact proven cap spend while retaining the full source liability in an operator-visible hold; it cannot create a terminal fee or disposition without surviving frozen terms.
-2. **P1:** add one shared Solana minimum/micro classifier used by live processing and recovery, without
-   restoring lossy history filtering.
-3. **P1:** persist typed, dashboard-visible and alerted disposition cap-refusal evidence separately
-   from lifecycle/evidence conflicts.
+1. **P0 — finish disposition-recovery migration safety.** Keep the `814c0ae` fresh-chain hold. Add
+   durable provenance that distinguishes an intent frozen before submission from a terminal row created
+   by legacy chain-only reconstruction; migrate every existing/refetched `refund_confirmed` and
+   `quarantine_confirmed` row conservatively. Unknown provenance must restore proven cap spend but move
+   the source into a quantified operator hold with no inferred fee. Audit backup/WAL and in-place upgrades.
+2. **P1 — shared Solana-input admission policy.** Add one exact minimum/micro classifier used by live
+   processing and recovery without restoring lossy history filtering.
+3. **P1 — typed disposition-cap hold.** Persist dashboard-visible and alerted disposition cap-refusal
+   evidence separately from lifecycle/evidence conflicts.
 4. Repair and independently review those boundaries, then execute the target-chain matrix and operator
    rehearsals with recorded authoritative evidence.
 5. Enable optional receipts only after their separate cost/schema gate; otherwise leave them disabled.
@@ -280,3 +289,26 @@ unequal decimals, both disposition kinds, cap exhaustion and later release, rest
 surfaces and proof that transport send helpers remain uncalled on every hold. The exact publication
 and live-acceptance gates are enumerated in the dated review. Production and real-fund admission
 remain hard-blocked.
+
+## 2026-09-21 recovery-repair assessment
+
+The [September 21 review](DEVELOPMENT_REVIEW_2026-09-21.md) executes the `814c0ae` repair from an
+exact archived HEAD and separates it from the unchanged dirty provider-v2 proposal. Seven targeted
+cases establish both the repaired branch and the remaining bypasses:
+
+- Fresh wipeout evidence for both dispositions creates an evidence hold, counts only the one-unit
+  observed spend against the cap, books no fee, preserves the full quantified source liability,
+  appears in the dashboard and is selected by neither send worker.
+- A terminal row in the exact shape emitted by the pre-repair chain-only recovery bypasses the new
+  `terminal is None` hold branch. For both refund and quarantine, replay accepts that row, retains no
+  pending liability and books `source - observed output` as fee. The schema has no provenance that
+  distinguishes this manufactured row from a genuine pre-submission frozen intent.
+- The real Solana-input worker still sends a positive-net input one unit below a patched processing
+  minimum to the mocked Nexus transport boundary.
+- Refund and quarantine cap refusal still leave the original generic status and persist no typed
+  per-obligation capacity record.
+
+Therefore `814c0ae` is a valid containment improvement, not a complete P0 closure. Implement Batch 1
+above before the shared classifier and typed-cap batches. Then rerun exact-HEAD probes, the complete
+configured gate and the non-mutating target-chain acceptance matrix. No live financial operation was
+performed by this review.
