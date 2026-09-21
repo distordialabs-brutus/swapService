@@ -107,6 +107,11 @@ EXPECTED_SCHEMA = {
     # payout row; its append-only events retain capacity across unknown outcomes.
     "solana_payout_budget_events": ["id", "obligation_id", "kind", "event",
                                     "amount_usdc_units", "signature", "evidence", "timestamp"],
+    # Provenance migrations append a durable audit record before converting a
+    # pre-schema terminal disposition into an evidence hold.
+    "solana_disposition_provenance_migrations": ["id", "kind", "source_signature",
+                                                   "payout_signature", "payout_units",
+                                                   "reversed_fee_units", "timestamp"],
     # The finalized-history cursor is an additive, durable availability journal. Its
     # events prove page-before-cursor ordering; it does not rewrite financial rows.
     "solana_deposit_scan_cursor": ["vault_account", "mint", "lower_timestamp", "before_signature",
@@ -142,15 +147,16 @@ EXPECTED_SCHEMA = {
                         "owner", "sig", "status", "payout_solana_units", "payout_fee_nexus_units",
                         "payout_receival_account"],
     # E-015 settlement-proof fields freeze the actual token-account recipient and
-    # versioned output memo before RPC; old rows retain NULL and remain manual holds.
+    # versioned output memo before RPC. E-018 provenance/evidence fields distinguish
+    # those pre-submission rows from legacy chain-only recovery output.
     "quarantined_sigs": ["sig", "timestamp", "from_address", "destination_address",
                          "amount_usdc_units", "memo", "payout_memo", "quarantine_sig",
-                         "quarantined_units", "status"],
+                         "quarantined_units", "status", "intent_provenance", "intent_evidence"],
     "quarantined_txids": ["txid", "contract_id", "timestamp", "amount_usdd", "from_address", "to_address",
                           "owner", "sig", "status"],
     "refunded_sigs": ["sig", "timestamp", "from_address", "destination_address",
                       "amount_usdc_units", "memo", "payout_memo", "refund_sig",
-                      "refunded_units", "status"],
+                      "refunded_units", "status", "intent_provenance", "intent_evidence"],
     "refunded_txids": ["txid", "contract_id", "timestamp", "amount_usdd", "from_address", "to_address",
                        "owner_from_address", "confirmations_credit", "status", "sig"],
     # Additive durable publication journal. It never authorizes or retries a payout.

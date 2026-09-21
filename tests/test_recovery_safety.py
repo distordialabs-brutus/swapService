@@ -521,24 +521,17 @@ class StartupReconstructionTests(unittest.TestCase):
                             state_db.add_unprocessed_sig(
                                 SOLANA_DEPOSIT_SIGNATURE, 800, "nexus:recipient",
                                 "recipient-token-account", 3_100_000,
-                                "refund submission held" if kind == "refund"
-                                else "quarantine submission held", None,
+                                "to be refunded" if kind == "refund"
+                                else "to be quarantined", None,
                             )
-                            details = state_db._SOLANA_SIG_DISPOSITION[kind]
-                            with sqlite3.connect(db_path) as conn:
-                                conn.execute(
-                                    f"""INSERT INTO {details['table']}
-                                       (sig, timestamp, from_address, destination_address,
-                                        amount_usdc_units, memo, payout_memo,
-                                        {details['signature_column']}, {details['units_column']}, status)
-                                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitting')""",
-                                    (
-                                        SOLANA_DEPOSIT_SIGNATURE, 800,
-                                        "recipient-token-account", "recipient-token-account",
-                                        3_100_000, "nexus:recipient", payout_memo,
-                                        None, 3_000_000,
-                                    ),
-                                )
+                            self.assertTrue(state_db.prepare_solana_sig_disposition(
+                                source_sig=SOLANA_DEPOSIT_SIGNATURE, kind=kind, timestamp=800,
+                                from_address="recipient-token-account",
+                                destination_address="recipient-token-account",
+                                amount_usdc_units=3_100_000, memo="nexus:recipient",
+                                payout_memo=payout_memo, payout_units=3_000_000,
+                                cap_units=3_100_000,
+                            ))
                         kwargs = {
                             "kind": kind,
                             "source_signature": SOLANA_DEPOSIT_SIGNATURE,
@@ -595,7 +588,8 @@ class StartupReconstructionTests(unittest.TestCase):
                     )]
                     self.assertEqual(terminal, expected_terminal)
                     self.assertEqual(events, [
-                        ("reserved", f"solana_{kind}", 3_000_000, None, 900),
+                        ("reserved", f"solana_{kind}", 3_000_000, None,
+                         1_000 if backup else 900),
                         ("submitted", f"solana_{kind}", 3_000_000,
                          SOLANA_PAYOUT_SIGNATURE, 900),
                         ("confirmed", f"solana_{kind}", 3_000_000,
@@ -604,6 +598,155 @@ class StartupReconstructionTests(unittest.TestCase):
                     self.assertEqual(fees, expected_fees)
                     self.assertEqual(pending, expected_pending)
                     self.assertEqual(opposing, [])
+
+    def test_legacy_chain_only_terminal_is_migrated_to_evidence_hold_idempotently(self):
+        """An upgrade must not treat old recovery output as pre-submission intent."""
+        for kind in ("refund", "quarantine"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmpdir:
+                db_path = os.path.join(tmpdir, "state.db")
+                details = state_db._SOLANA_SIG_DISPOSITION[kind]
+                payout_memo = solana_client._solana_sig_disposition_memo(
+                    kind, SOLANA_DEPOSIT_SIGNATURE
+                )
+                with patch.object(state_db, "DB_PATH", db_path), patch.object(
+                    state_db.time, "time", return_value=1_000
+                ):
+                    state_db.init_db()
+                    # This is the exact old chain-only shape: source deletion, a
+                    # terminal row and a fee inferred from a one-unit transfer.
+                    with sqlite3.connect(db_path) as conn:
+                        conn.execute(
+                            f"""INSERT INTO {details['table']}
+                               (sig, timestamp, from_address, destination_address,
+                                amount_usdc_units, memo, payout_memo,
+                                {details['signature_column']}, {details['units_column']}, status)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            (
+                                SOLANA_DEPOSIT_SIGNATURE, 800,
+                                "recipient-token-account", "recipient-token-account",
+                                10_000_000, "nexus:recipient", payout_memo,
+                                SOLANA_PAYOUT_SIGNATURE, 1, details["terminal_status"],
+                            ),
+                        )
+                        conn.execute(
+                            """INSERT INTO fee_entries
+                               (sig, txid, kind, amount_usdc_units, amount_usdd_units,
+                                contract_id, timestamp)
+                               VALUES (?, NULL, ?, ?, NULL, -1, ?)""",
+                            (SOLANA_DEPOSIT_SIGNATURE, f"{kind}_flat_fee", 9_999_999, 900),
+                        )
+                    # Re-open as an in-place upgrade: NULL provenance is made
+                    # explicitly legacy before startup replays the chain evidence.
+                    state_db.init_db()
+                    kwargs = {
+                        "kind": kind,
+                        "source_signature": SOLANA_DEPOSIT_SIGNATURE,
+                        "source_timestamp": 800,
+                        "source_token_account": "recipient-token-account",
+                        "source_amount_solana_units": 10_000_000,
+                        "source_memo": "nexus:recipient",
+                        "payout_signature": SOLANA_PAYOUT_SIGNATURE,
+                        "destination_token_account": "recipient-token-account",
+                        "payout_amount_solana_units": 1,
+                        "chain_timestamp": 900,
+                        "payout_memo": payout_memo,
+                    }
+                    self.assertTrue(state_db.reconstruct_confirmed_solana_sig_disposition(**kwargs))
+                    self.assertTrue(state_db.reconstruct_confirmed_solana_sig_disposition(**kwargs))
+                    used = state_db.payout_budget_used(86400)
+                    with sqlite3.connect(db_path) as conn:
+                        terminal = conn.execute(
+                            f"SELECT 1 FROM {details['table']} WHERE sig = ?",
+                            (SOLANA_DEPOSIT_SIGNATURE,),
+                        ).fetchone()
+                        fees = conn.execute(
+                            "SELECT 1 FROM fee_entries WHERE sig = ?",
+                            (SOLANA_DEPOSIT_SIGNATURE,),
+                        ).fetchall()
+                        held = conn.execute(
+                            """SELECT amount_usdc_units, status FROM unprocessed_sigs
+                               WHERE sig = ?""",
+                            (SOLANA_DEPOSIT_SIGNATURE,),
+                        ).fetchone()
+                        migration = conn.execute(
+                            """SELECT payout_signature, payout_units, reversed_fee_units
+                               FROM solana_disposition_provenance_migrations
+                               WHERE kind = ? AND source_signature = ?""",
+                            (kind, SOLANA_DEPOSIT_SIGNATURE),
+                        ).fetchall()
+
+                self.assertIsNone(terminal)
+                self.assertEqual(fees, [])
+                self.assertEqual(held, (10_000_000, details["evidence_held_status"]))
+                self.assertEqual(migration, [(SOLANA_PAYOUT_SIGNATURE, 1, 9_999_999)])
+                self.assertEqual(used, 1)
+
+    def test_upgrade_preserves_provable_legacy_pre_submission_dispositions(self):
+        """Old in-flight rows remain recoverable only with matching durable journals."""
+        for kind in ("refund", "quarantine"):
+            for lifecycle in ("submitting", "awaiting confirmation"):
+                with self.subTest(kind=kind, lifecycle=lifecycle), tempfile.TemporaryDirectory() as tmpdir:
+                    db_path = os.path.join(tmpdir, "state.db")
+                    details = state_db._SOLANA_SIG_DISPOSITION[kind]
+                    payout_memo = solana_client._solana_sig_disposition_memo(
+                        kind, SOLANA_DEPOSIT_SIGNATURE
+                    )
+                    with patch.object(state_db, "DB_PATH", db_path), patch.object(
+                        state_db.time, "time", return_value=1_000
+                    ):
+                        state_db.init_db()
+                        state_db.add_unprocessed_sig(
+                            SOLANA_DEPOSIT_SIGNATURE, 800, "nexus:recipient",
+                            "recipient-token-account", 110,
+                            details["ready_statuses"][0], None,
+                        )
+                        self.assertTrue(state_db.prepare_solana_sig_disposition(
+                            source_sig=SOLANA_DEPOSIT_SIGNATURE, kind=kind, timestamp=800,
+                            from_address="recipient-token-account",
+                            destination_address="recipient-token-account",
+                            amount_usdc_units=110, memo="nexus:recipient",
+                            payout_memo=payout_memo, payout_units=100, cap_units=110,
+                        ))
+                        if lifecycle == "awaiting confirmation":
+                            self.assertTrue(state_db.record_solana_sig_disposition_submission(
+                                source_sig=SOLANA_DEPOSIT_SIGNATURE, kind=kind,
+                                payout_signature=SOLANA_PAYOUT_SIGNATURE,
+                            ))
+                        # Simulate an immediately-pre-schema database: it has the
+                        # durable old intent/journals but no provenance columns.
+                        with sqlite3.connect(db_path) as conn:
+                            conn.execute(
+                                f"""UPDATE {details['table']}
+                                   SET intent_provenance = NULL, intent_evidence = NULL
+                                   WHERE sig = ?""",
+                                (SOLANA_DEPOSIT_SIGNATURE,),
+                            )
+                        state_db.init_db()
+                        self.assertTrue(state_db.reconstruct_confirmed_solana_sig_disposition(
+                            kind=kind, source_signature=SOLANA_DEPOSIT_SIGNATURE,
+                            source_timestamp=800,
+                            source_token_account="recipient-token-account",
+                            source_amount_solana_units=110, source_memo="nexus:recipient",
+                            payout_signature=SOLANA_PAYOUT_SIGNATURE,
+                            destination_token_account="recipient-token-account",
+                            payout_amount_solana_units=100, chain_timestamp=900,
+                            payout_memo=payout_memo,
+                        ))
+                        with sqlite3.connect(db_path) as conn:
+                            terminal = conn.execute(
+                                f"""SELECT status, intent_provenance FROM {details['table']}
+                                   WHERE sig = ?""",
+                                (SOLANA_DEPOSIT_SIGNATURE,),
+                            ).fetchone()
+                            pending = conn.execute(
+                                "SELECT 1 FROM unprocessed_sigs WHERE sig = ?",
+                                (SOLANA_DEPOSIT_SIGNATURE,),
+                            ).fetchone()
+
+                    self.assertEqual(
+                        terminal, (details["terminal_status"], "legacy_pre_submission_v0")
+                    )
+                    self.assertIsNone(pending)
 
     def test_disposition_reconstruction_refuses_active_nexus_mint_source_and_preserves_cap(self):
         """A confirmed refund cannot erase an unresolved Nexus mint obligation."""
@@ -704,21 +847,15 @@ class StartupReconstructionTests(unittest.TestCase):
                             state_db.add_unprocessed_sig(
                                 SOLANA_DEPOSIT_SIGNATURE, 800, "",
                                 "recipient-token-account", 110,
-                                details["held_status"], None,
+                                details["ready_statuses"][0], None,
                             )
-                            with sqlite3.connect(db_path) as conn:
-                                conn.execute(
-                                    f"""INSERT INTO {details['table']}
-                                       (sig, timestamp, from_address, destination_address,
-                                        amount_usdc_units, memo, payout_memo,
-                                        {details['signature_column']}, {details['units_column']}, status)
-                                       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, 'submitting')""",
-                                    (
-                                        SOLANA_DEPOSIT_SIGNATURE, 800,
-                                        "recipient-token-account", "recipient-token-account",
-                                        110, "", payout_memo, 100,
-                                    ),
-                                )
+                            self.assertTrue(state_db.prepare_solana_sig_disposition(
+                                source_sig=SOLANA_DEPOSIT_SIGNATURE, kind=kind, timestamp=800,
+                                from_address="recipient-token-account",
+                                destination_address="recipient-token-account",
+                                amount_usdc_units=110, memo=None, payout_memo=payout_memo,
+                                payout_units=100, cap_units=110,
+                            ))
                         restored = state_db.reconstruct_confirmed_solana_sig_disposition(
                             kind=kind, source_signature=SOLANA_DEPOSIT_SIGNATURE,
                             source_timestamp=800,

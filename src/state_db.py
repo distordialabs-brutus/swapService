@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import sqlite3
 import time
@@ -127,7 +128,9 @@ def init_db():
             payout_memo TEXT,
             quarantine_sig TEXT,
             quarantined_units INTEGER,
-            status TEXT
+            status TEXT,
+            intent_provenance TEXT,
+            intent_evidence TEXT
         )
     """)
     cursor.execute("""
@@ -141,7 +144,9 @@ def init_db():
             payout_memo TEXT,
             refund_sig TEXT,
             refunded_units INTEGER,
-            status TEXT
+            status TEXT,
+            intent_provenance TEXT,
+            intent_evidence TEXT
         )
     """)
     cursor.execute("""
@@ -491,6 +496,21 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_solana_payout_budget_events_event_ts "
         "ON solana_payout_budget_events(event, timestamp)"
     )
+    # An in-place upgrade can contain terminal rows fabricated by the old
+    # chain-only recovery.  Record each conservative conversion separately so
+    # removing the unsafe terminal/fee rows does not erase the migration audit.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS solana_disposition_provenance_migrations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            source_signature TEXT NOT NULL,
+            payout_signature TEXT NOT NULL,
+            payout_units INTEGER NOT NULL,
+            reversed_fee_units INTEGER NOT NULL,
+            timestamp INTEGER NOT NULL,
+            UNIQUE(kind, source_signature)
+        )
+    """)
 
     # Receipt publication spends operator NXS. Its frozen payload is committed with
     # payout finalization so a crash cannot lose the obligation.
@@ -641,12 +661,118 @@ def init_db():
     # the send.  ``from_address`` can be a wallet owner, whose ATA is resolved before
     # submission, so it is not itself sufficient transaction evidence.  Existing
     # rows deliberately remain NULL and cannot be auto-terminalized.
-    for _table in ("refunded_sigs", "quarantined_sigs"):
+    for _table, _signature_column, _units_column, _held_status, _awaiting_status, _budget_kind in (
+        ("refunded_sigs", "refund_sig", "refunded_units", "refund submission held",
+         "refund sent, awaiting confirmation", "solana_refund"),
+        ("quarantined_sigs", "quarantine_sig", "quarantined_units", "quarantine submission held",
+         "quarantine sent, awaiting confirmation", "solana_quarantine"),
+    ):
         _columns = {row[1] for row in cursor.execute(f"PRAGMA table_info({_table})")}
         if "destination_address" not in _columns:
             cursor.execute(f"ALTER TABLE {_table} ADD COLUMN destination_address TEXT")
         if "payout_memo" not in _columns:
             cursor.execute(f"ALTER TABLE {_table} ADD COLUMN payout_memo TEXT")
+        if "intent_provenance" not in _columns:
+            cursor.execute(f"ALTER TABLE {_table} ADD COLUMN intent_provenance TEXT")
+        if "intent_evidence" not in _columns:
+            cursor.execute(f"ALTER TABLE {_table} ADD COLUMN intent_evidence TEXT")
+        # No pre-submission proof was stored before this schema.  A distinct
+        # value makes the migration durable and prevents a later NULL/default
+        # interpretation from silently treating the row as a current intent.
+        cursor.execute(
+            f"UPDATE {_table} SET intent_provenance = 'legacy_unknown' "
+            "WHERE intent_provenance IS NULL"
+        )
+        # Rows that were durably prepared before this schema can be distinguished
+        # from chain-only reconstruction: they still have the exact held source and
+        # matching reservation (and, once a signature was returned, matching
+        # submission event). Preserve that real pre-RPC intent as v0 evidence;
+        # terminal legacy rows deliberately remain `legacy_unknown`.
+        _obligation_prefix = f"{_budget_kind.split('_', 1)[1]}:"
+        cursor.execute(
+            f"""UPDATE {_table} AS disposition
+               SET intent_provenance = 'legacy_pre_submission_v0'
+               WHERE intent_provenance = 'legacy_unknown'
+                 AND status = 'submitting' AND {_signature_column} IS NULL
+                 AND disposition.timestamp > 0
+                 AND disposition.from_address IS NOT NULL AND disposition.from_address != ''
+                 AND disposition.destination_address IS NOT NULL AND disposition.destination_address != ''
+                 AND disposition.payout_memo IS NOT NULL AND disposition.payout_memo != ''
+                 AND disposition.amount_usdc_units > 0
+                 AND disposition.{_units_column} > 0
+                 AND disposition.{_units_column} <= disposition.amount_usdc_units
+                 AND EXISTS (
+                     SELECT 1 FROM unprocessed_sigs AS source
+                     WHERE source.sig = disposition.sig
+                       AND source.timestamp = disposition.timestamp
+                       AND COALESCE(source.memo, '') = COALESCE(disposition.memo, '')
+                       AND source.from_address = disposition.from_address
+                       AND source.amount_usdc_units = disposition.amount_usdc_units
+                       AND source.status = ?
+                       AND source.txid IS NULL AND source.reference IS NULL
+                       AND source.amount_usdd_units IS NULL
+                 )
+                 AND EXISTS (
+                     SELECT 1 FROM solana_payout_budget_events AS reserved
+                     WHERE reserved.obligation_id = ? || disposition.sig
+                       AND reserved.kind = ? AND reserved.event = 'reserved'
+                       AND reserved.amount_usdc_units = disposition.{_units_column}
+                       AND reserved.signature IS NULL AND reserved.evidence IS NULL
+                       AND reserved.timestamp > 0
+                 )
+                 AND NOT EXISTS (
+                     SELECT 1 FROM solana_payout_budget_events AS terminal
+                     WHERE terminal.obligation_id = ? || disposition.sig
+                       AND terminal.event IN ('submitted', 'confirmed', 'released')
+                 )""",
+            (_held_status, _obligation_prefix, _budget_kind, _obligation_prefix),
+        )
+        cursor.execute(
+            f"""UPDATE {_table} AS disposition
+               SET intent_provenance = 'legacy_pre_submission_v0'
+               WHERE intent_provenance = 'legacy_unknown'
+                 AND status = 'awaiting confirmation' AND {_signature_column} IS NOT NULL
+                 AND disposition.timestamp > 0
+                 AND disposition.from_address IS NOT NULL AND disposition.from_address != ''
+                 AND disposition.destination_address IS NOT NULL AND disposition.destination_address != ''
+                 AND disposition.payout_memo IS NOT NULL AND disposition.payout_memo != ''
+                 AND disposition.amount_usdc_units > 0
+                 AND disposition.{_units_column} > 0
+                 AND disposition.{_units_column} <= disposition.amount_usdc_units
+                 AND EXISTS (
+                     SELECT 1 FROM unprocessed_sigs AS source
+                     WHERE source.sig = disposition.sig
+                       AND source.timestamp = disposition.timestamp
+                       AND COALESCE(source.memo, '') = COALESCE(disposition.memo, '')
+                       AND source.from_address = disposition.from_address
+                       AND source.amount_usdc_units = disposition.amount_usdc_units
+                       AND source.status = ?
+                       AND source.txid IS NULL AND source.reference IS NULL
+                       AND source.amount_usdd_units IS NULL
+                 )
+                 AND EXISTS (
+                     SELECT 1 FROM solana_payout_budget_events AS reserved
+                     WHERE reserved.obligation_id = ? || disposition.sig
+                       AND reserved.kind = ? AND reserved.event = 'reserved'
+                       AND reserved.amount_usdc_units = disposition.{_units_column}
+                       AND reserved.signature IS NULL AND reserved.evidence IS NULL
+                       AND reserved.timestamp > 0
+                 )
+                 AND EXISTS (
+                     SELECT 1 FROM solana_payout_budget_events AS submitted
+                     WHERE submitted.obligation_id = ? || disposition.sig
+                       AND submitted.event = 'submitted'
+                       AND submitted.signature = disposition.{_signature_column}
+                       AND submitted.evidence IS NULL AND submitted.timestamp > 0
+                 )
+                 AND NOT EXISTS (
+                     SELECT 1 FROM solana_payout_budget_events AS terminal
+                     WHERE terminal.obligation_id = ? || disposition.sig
+                       AND terminal.event IN ('confirmed', 'released')
+                 )""",
+            (_awaiting_status, _obligation_prefix, _budget_kind, _obligation_prefix,
+             _obligation_prefix),
+        )
 
     # Transfer intents written before contract-level source admission only identify a
     # transaction. Preserve every immutable id/reference/remote result and mark the
@@ -3376,6 +3502,94 @@ _SOLANA_SIG_DISPOSITION = {
     },
 }
 
+_SOLANA_SIG_DISPOSITION_PROVENANCE_V1 = "pre_submission_v1"
+
+
+def _solana_sig_disposition_intent_evidence(
+    *, kind: str, source_sig: str, timestamp: int, from_address: str,
+    destination_address: str, amount_usdc_units: int, memo: str,
+    payout_memo: str, payout_units: int,
+) -> str:
+    """Encode immutable pre-RPC disposition terms without reading mutable config later."""
+    from . import config
+
+    terms_version = getattr(config, "SERVICE_TERMS_VERSION", 0)
+    refund_fee_units = getattr(config.SWAP_PAIR.fees, "refund_solana_units", None)
+    if (type(terms_version) is not int or terms_version < 0
+            or type(refund_fee_units) is not int or refund_fee_units < 0):
+        raise RuntimeError("Solana disposition terms are not exact immutable integers")
+    evidence = {
+        "version": 1,
+        "kind": kind,
+        "source_signature": source_sig,
+        "source_timestamp": timestamp,
+        "source_token_account": from_address,
+        "destination_token_account": destination_address,
+        "source_amount_solana_units": amount_usdc_units,
+        "source_memo": memo,
+        "payout_memo": payout_memo,
+        "payout_amount_solana_units": payout_units,
+        "fee_solana_units": amount_usdc_units - payout_units,
+        "service_terms_version": terms_version,
+        "refund_solana_fee_units": refund_fee_units,
+    }
+    return json.dumps(evidence, sort_keys=True, separators=(",", ":"))
+
+
+def _has_valid_solana_sig_disposition_provenance(
+    *, provenance: object, evidence: object, kind: str, source_sig: str,
+    timestamp: int, from_address: str, destination_address: str,
+    amount_usdc_units: int, memo: str, payout_memo: str, payout_units: int,
+) -> bool:
+    """Accept only a current pre-submission record whose frozen fields all match."""
+    if (
+        not isinstance(source_sig, str) or not source_sig
+        or type(timestamp) is not int or timestamp <= 0
+        or not isinstance(from_address, str) or not from_address
+        or not isinstance(destination_address, str) or not destination_address
+        or type(amount_usdc_units) is not int or amount_usdc_units <= 0
+        or not isinstance(memo, str)
+        or not isinstance(payout_memo, str) or not payout_memo
+        or type(payout_units) is not int or payout_units <= 0
+        or payout_units > amount_usdc_units
+    ):
+        return False
+    # v0 is admitted only by the startup migration above, which proves its
+    # nonterminal lifecycle against the source and cap journals. It has no
+    # retrospective terms blob, so a terminal row can never be promoted to v0.
+    if provenance == "legacy_pre_submission_v0":
+        return evidence is None
+    if provenance != _SOLANA_SIG_DISPOSITION_PROVENANCE_V1 or not isinstance(evidence, str):
+        return False
+    try:
+        parsed = json.loads(evidence)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(parsed, dict):
+        return False
+    expected = {
+        "version": 1,
+        "kind": kind,
+        "source_signature": source_sig,
+        "source_timestamp": timestamp,
+        "source_token_account": from_address,
+        "destination_token_account": destination_address,
+        "source_amount_solana_units": amount_usdc_units,
+        "source_memo": memo,
+        "payout_memo": payout_memo,
+        "payout_amount_solana_units": payout_units,
+        "fee_solana_units": amount_usdc_units - payout_units,
+    }
+    if any(parsed.get(field) != value for field, value in expected.items()):
+        return False
+    return (
+        set(parsed) == {*expected, "service_terms_version", "refund_solana_fee_units"}
+        and type(parsed["service_terms_version"]) is int
+        and parsed["service_terms_version"] >= 0
+        and type(parsed["refund_solana_fee_units"]) is int
+        and parsed["refund_solana_fee_units"] >= 0
+    )
+
 
 def _solana_sig_disposition(source_sig: str, kind: str) -> tuple[str, dict]:
     source_sig = _require_solana_payout_budget_text(source_sig, "source signature")
@@ -3486,7 +3700,8 @@ def reconstruct_confirmed_solana_sig_disposition(
         terminal = conn.execute(
             f"""SELECT sig, timestamp, from_address, destination_address,
                        amount_usdc_units, memo, payout_memo,
-                       {signature_column}, {units_column}, status
+                       {signature_column}, {units_column}, status,
+                       intent_provenance, intent_evidence
                 FROM {details['table']} WHERE sig = ?""",
             (source_signature,),
         ).fetchone()
@@ -3535,6 +3750,13 @@ def reconstruct_confirmed_solana_sig_disposition(
             _canonical_solana_source_memo(terminal[5]), terminal[6], terminal[7],
             terminal[8],
         )
+        has_provenance = _has_valid_solana_sig_disposition_provenance(
+            provenance=terminal[10], evidence=terminal[11], kind=kind,
+            source_sig=terminal[0], timestamp=terminal[1], from_address=terminal[2],
+            destination_address=terminal[3], amount_usdc_units=terminal[4],
+            memo=_canonical_solana_source_memo(terminal[5]), payout_memo=terminal[6],
+            payout_units=terminal[8],
+        )
         immutable_match = (
             terminal_immutable[:7] == expected_terminal[:7]
             and terminal_immutable[8] == expected_terminal[8]
@@ -3552,10 +3774,78 @@ def reconstruct_confirmed_solana_sig_disposition(
         )
         if (not immutable_match or not signature_match or not lifecycle_match
                 or terminal[9] not in {
-                    "submitting", "awaiting confirmation", details["terminal_status"],
+                        "submitting", "awaiting confirmation", details["terminal_status"],
                 }):
             conn.rollback()
             return False
+
+        if not has_provenance:
+            # A pre-schema terminal could have been constructed only after observing
+            # current-v1 chain data. It must never inherit the current frozen-intent
+            # path: retain the actual spend, undo its inferred fee, and restore the
+            # entire source as an operator-visible evidence hold.
+            if terminal[7] != payout_signature or terminal[9] != details["terminal_status"]:
+                conn.rollback()
+                return False
+            if not _reconstruct_confirmed_solana_payout_budget_in_transaction(
+                conn, obligation_id=obligation_id, kind=details["budget_kind"],
+                signature=payout_signature, amount_usdc_units=payout_amount_solana_units,
+                chain_timestamp=chain_timestamp,
+            ):
+                conn.rollback()
+                return False
+            fee_kind = f"{kind}_flat_fee"
+            fee_rows = conn.execute(
+                """SELECT amount_usdc_units FROM fee_entries
+                   WHERE sig = ? AND txid IS NULL AND kind = ?""",
+                (source_signature, fee_kind),
+            ).fetchall()
+            reversed_fee_units = sum(
+                row[0] for row in fee_rows if type(row[0]) is int
+            )
+            if any(type(row[0]) is not int or row[0] < 0 for row in fee_rows):
+                conn.rollback()
+                return False
+            conn.execute(
+                """INSERT INTO solana_disposition_provenance_migrations
+                   (kind, source_signature, payout_signature, payout_units,
+                    reversed_fee_units, timestamp)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (kind, source_signature, payout_signature, payout_amount_solana_units,
+                 reversed_fee_units, chain_timestamp),
+            )
+            conn.execute(
+                "DELETE FROM fee_entries WHERE sig = ? AND txid IS NULL AND kind = ?",
+                (source_signature, fee_kind),
+            )
+            deleted_terminal = conn.execute(
+                f"""DELETE FROM {details['table']}
+                   WHERE sig = ? AND COALESCE(intent_provenance, 'legacy_unknown') != ?""",
+                (source_signature, _SOLANA_SIG_DISPOSITION_PROVENANCE_V1),
+            ).rowcount
+            if deleted_terminal != 1:
+                raise RuntimeError("legacy Solana disposition changed during migration")
+            if pending is None:
+                conn.execute(
+                    """INSERT INTO unprocessed_sigs
+                       (sig, timestamp, memo, from_address, amount_usdc_units, status)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (source_signature, source_timestamp, source_memo, source_token_account,
+                     source_amount_solana_units, details["evidence_held_status"]),
+                )
+            elif pending[4] != details["evidence_held_status"]:
+                updated = conn.execute(
+                    """UPDATE unprocessed_sigs SET status = ?
+                       WHERE sig = ? AND timestamp = ? AND COALESCE(memo, '') = ?
+                         AND from_address = ? AND amount_usdc_units = ? AND status = ?
+                         AND txid IS NULL AND reference IS NULL AND amount_usdd_units IS NULL""",
+                    (details["evidence_held_status"], source_signature, source_timestamp,
+                     source_memo, source_token_account, source_amount_solana_units, pending[4]),
+                ).rowcount
+                if updated != 1:
+                    raise RuntimeError("Solana disposition source changed during legacy migration")
+            conn.commit()
+            return True
 
         if not _reconstruct_confirmed_solana_payout_budget_in_transaction(
             conn, obligation_id=obligation_id, kind=details["budget_kind"],
@@ -3672,6 +3962,11 @@ def prepare_solana_sig_disposition(
     cap_units = _require_solana_payout_budget_units(cap_units, "cap", positive=False)
     memo = _canonical_solana_source_memo(memo)
     obligation_id = _solana_sig_disposition_obligation_id(kind, source_sig)
+    intent_evidence = _solana_sig_disposition_intent_evidence(
+        kind=kind, source_sig=source_sig, timestamp=timestamp, from_address=from_address,
+        destination_address=destination_address, amount_usdc_units=amount_usdc_units,
+        memo=memo, payout_memo=payout_memo, payout_units=payout_units,
+    )
 
     conn = sqlite3.connect(DB_PATH)
     try:
@@ -3705,10 +4000,12 @@ def prepare_solana_sig_disposition(
         conn.execute(
             f"""INSERT INTO {details['table']}
                (sig, timestamp, from_address, destination_address, amount_usdc_units, memo,
-                payout_memo, {signature_column}, {units_column}, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, 'submitting')""",
+                payout_memo, {signature_column}, {units_column}, status,
+                intent_provenance, intent_evidence)
+               VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, 'submitting', ?, ?)""",
             (source_sig, timestamp, from_address, destination_address, amount_usdc_units,
-             memo, payout_memo, payout_units),
+             memo, payout_memo, payout_units, _SOLANA_SIG_DISPOSITION_PROVENANCE_V1,
+             intent_evidence),
         )
         updated = conn.execute(
             """UPDATE unprocessed_sigs SET status = ?
@@ -3808,13 +4105,20 @@ def confirm_solana_sig_disposition(
         signature_column = details["signature_column"]
         units_column = details["units_column"]
         row = conn.execute(
-            f"""SELECT {signature_column}, {units_column}, amount_usdc_units, status
+            f"""SELECT sig, timestamp, from_address, destination_address,
+                       amount_usdc_units, memo, payout_memo,
+                       {signature_column}, {units_column}, status,
+                       intent_provenance, intent_evidence
                FROM {details['table']} WHERE sig = ?""", (source_sig,),
         ).fetchone()
         if row is None:
             conn.commit()
             return None
-        recorded_signature, payout_units, source_units, status = row
+        (
+            recorded_source_sig, timestamp, from_address, destination_address,
+            source_units, memo, payout_memo, recorded_signature, payout_units, status,
+            provenance, intent_evidence,
+        ) = row
         has_reservation = conn.execute(
             """SELECT 1 FROM solana_payout_budget_events
                WHERE obligation_id = ? AND event = 'reserved'""", (obligation_id,)
@@ -3825,6 +4129,15 @@ def confirm_solana_sig_disposition(
         if (recorded_signature != payout_signature or type(payout_units) is not int
                 or payout_units <= 0 or type(source_units) is not int
                 or source_units < payout_units):
+            conn.commit()
+            return False
+        if not _has_valid_solana_sig_disposition_provenance(
+            provenance=provenance, evidence=intent_evidence, kind=kind,
+            source_sig=recorded_source_sig, timestamp=timestamp, from_address=from_address,
+            destination_address=destination_address, amount_usdc_units=source_units,
+            memo=_canonical_solana_source_memo(memo), payout_memo=payout_memo,
+            payout_units=payout_units,
+        ):
             conn.commit()
             return False
         if status == details["terminal_status"]:
