@@ -2,7 +2,7 @@
 
 Reviewed runtime source: `814c0ae8cbe0e65036a3b01d1eb8028e4dcb8ad3`
 Previous reviewed source: `91ce0b866a4e155bd690f70b6533124467c7318f`
-Remote repository: https://github.com/AkstonCap/swapService
+Publication repository (origin): https://github.com/distordialabs-brutus/swapService
 Release verdict: HARD BLOCKED for production and real funds
 
 ## Finding F-1 — P0 migration bypass in the recovery repair

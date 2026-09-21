@@ -1,7 +1,7 @@
 swapService review verification — 2026-09-21
 Reviewed runtime source: 814c0ae8cbe0e65036a3b01d1eb8028e4dcb8ad3
 Previous reviewed source: 91ce0b866a4e155bd690f70b6533124467c7318f
-Remote repository: https://github.com/AkstonCap/swapService
+Publication repository (origin): https://github.com/distordialabs-brutus/swapService
 Local interpreter: Python 3.11.15
 CI interpreter: Python 3.12
 External mutation policy: no live chain/profile/financial mutation
