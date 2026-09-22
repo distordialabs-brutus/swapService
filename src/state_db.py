@@ -3,6 +3,8 @@ import json
 import os
 import sqlite3
 import time
+from dataclasses import dataclass
+from enum import Enum
 from typing import List, Optional, Tuple
 
 from . import receipt_contract
@@ -82,12 +84,9 @@ def nexus_collect_refund_attempt_key(txid: str) -> str:
     """Retry-budget key for collecting funds back before a Nexus refund."""
     return f"usdd_collect_refund:{txid}"
 
-def init_db():
-    """Initialize DB tables if not exist."""
-    conn = sqlite3.connect(DB_PATH)
+def _init_db_with_connection(conn: sqlite3.Connection) -> None:
+    """Build/migrate the schema using a caller-owned transactional connection."""
     cursor = conn.cursor()
-    # WAL is persistent per database file and improves concurrent read/write safety.
-    cursor.execute("PRAGMA journal_mode=WAL")
 
     # Core tables
     cursor.execute("""
@@ -114,7 +113,9 @@ def init_db():
             amount_usdc_units INTEGER,
             amount_usdd_units INTEGER,
             status TEXT,
-            txid TEXT
+            txid TEXT,
+            policy_decision TEXT,
+            policy_evidence TEXT
         )
     """)
     cursor.execute("""
@@ -496,6 +497,28 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_solana_payout_budget_events_event_ts "
         "ON solana_payout_budget_events(event, timestamp)"
     )
+    # A cap refusal is a durable, retryable financial state rather than a boolean
+    # miss.  Freeze the exact proposed intent so later configuration/address drift
+    # cannot silently change what is sent when rolling capacity becomes available.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS solana_payout_capacity_holds (
+            source_signature TEXT PRIMARY KEY,
+            kind TEXT NOT NULL CHECK (kind IN ('refund', 'quarantine')),
+            obligation_id TEXT NOT NULL UNIQUE,
+            needed_units INTEGER NOT NULL CHECK (needed_units > 0),
+            used_units INTEGER NOT NULL CHECK (used_units >= 0),
+            cap_units INTEGER NOT NULL CHECK (cap_units > 0),
+            first_held_timestamp INTEGER NOT NULL,
+            updated_timestamp INTEGER NOT NULL,
+            reason TEXT NOT NULL,
+            intent_evidence TEXT NOT NULL,
+            attempt_count INTEGER NOT NULL DEFAULT 1 CHECK (attempt_count > 0)
+        )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_solana_payout_capacity_holds_retry "
+        "ON solana_payout_capacity_holds(first_held_timestamp, source_signature)"
+    )
     # An in-place upgrade can contain terminal rows fabricated by the old
     # chain-only recovery.  Record each conservative conversion separately so
     # removing the unsafe terminal/fee rows does not erase the migration audit.
@@ -656,16 +679,25 @@ def init_db():
         cursor.execute("ALTER TABLE unprocessed_sigs ADD COLUMN reference INTEGER")
     if "amount_usdd_units" not in _usig_cols:
         cursor.execute("ALTER TABLE unprocessed_sigs ADD COLUMN amount_usdd_units INTEGER")
+    if "policy_decision" not in _usig_cols:
+        cursor.execute("ALTER TABLE unprocessed_sigs ADD COLUMN policy_decision TEXT")
+    if "policy_evidence" not in _usig_cols:
+        cursor.execute("ALTER TABLE unprocessed_sigs ADD COLUMN policy_evidence TEXT")
 
     # A refund/quarantine proof must match the exact token-account recipient used for
     # the send.  ``from_address`` can be a wallet owner, whose ATA is resolved before
     # submission, so it is not itself sufficient transaction evidence.  Existing
     # rows deliberately remain NULL and cannot be auto-terminalized.
-    for _table, _signature_column, _units_column, _held_status, _awaiting_status, _budget_kind in (
-        ("refunded_sigs", "refund_sig", "refunded_units", "refund submission held",
-         "refund sent, awaiting confirmation", "solana_refund"),
-        ("quarantined_sigs", "quarantine_sig", "quarantined_units", "quarantine submission held",
-         "quarantine sent, awaiting confirmation", "solana_quarantine"),
+    for (
+        _kind, _table, _signature_column, _units_column, _held_status,
+        _evidence_held_status, _awaiting_status, _terminal_status, _budget_kind,
+    ) in (
+        ("refund", "refunded_sigs", "refund_sig", "refunded_units",
+         "refund submission held", "refund evidence held",
+         "refund sent, awaiting confirmation", "refund_confirmed", "solana_refund"),
+        ("quarantine", "quarantined_sigs", "quarantine_sig", "quarantined_units",
+         "quarantine submission held", "quarantine evidence held",
+         "quarantine sent, awaiting confirmation", "quarantine_confirmed", "solana_quarantine"),
     ):
         _columns = {row[1] for row in cursor.execute(f"PRAGMA table_info({_table})")}
         if "destination_address" not in _columns:
@@ -774,6 +806,108 @@ def init_db():
              _obligation_prefix),
         )
 
+        # A terminal row without valid pre-submission provenance is not an
+        # authorization.  Older recovery code could create exactly this row after
+        # observing a chain transfer and infer the difference as fee.  Waiting for a
+        # bounded startup scan to rediscover it leaves old principals outside that
+        # range invisible to backing and the dashboard, so convert it immediately to
+        # a quantified, non-sendable evidence hold.  Current rows are retained only
+        # when their immutable evidence validates byte-for-byte.
+        _terminal_rows = cursor.execute(
+            f"""SELECT sig, timestamp, from_address, destination_address,
+                       amount_usdc_units, memo, payout_memo,
+                       {_signature_column}, {_units_column}, status,
+                       intent_provenance, intent_evidence
+                FROM {_table} WHERE status = ?""",
+            (_terminal_status,),
+        ).fetchall()
+        for _terminal in _terminal_rows:
+            (
+                _source_sig, _source_timestamp, _source_account, _destination_account,
+                _source_units, _source_memo, _payout_memo, _payout_signature,
+                _payout_units, _status, _provenance, _intent_evidence,
+            ) = _terminal
+            if _has_valid_solana_sig_disposition_provenance(
+                provenance=_provenance,
+                evidence=_intent_evidence,
+                kind=_kind,
+                source_sig=_source_sig,
+                timestamp=_source_timestamp,
+                from_address=_source_account,
+                destination_address=_destination_account,
+                amount_usdc_units=_source_units,
+                memo=_canonical_solana_source_memo(_source_memo),
+                payout_memo=_payout_memo,
+                payout_units=_payout_units,
+            ):
+                continue
+            if (not isinstance(_source_sig, str) or not _source_sig
+                    or type(_source_timestamp) is not int or _source_timestamp <= 0
+                    or not isinstance(_source_account, str) or not _source_account
+                    or type(_source_units) is not int or _source_units <= 0
+                    or not isinstance(_payout_signature, str) or not _payout_signature
+                    or type(_payout_units) is not int or _payout_units <= 0
+                    or _payout_units > _source_units):
+                raise RuntimeError(
+                    f"unsafe {_kind} terminal has unquantifiable legacy provenance"
+                )
+            _canonical_memo = _canonical_solana_source_memo(_source_memo)
+            _pending = cursor.execute(
+                """SELECT timestamp, COALESCE(memo, ''), from_address,
+                          amount_usdc_units, status, txid, reference, amount_usdd_units
+                   FROM unprocessed_sigs WHERE sig = ?""",
+                (_source_sig,),
+            ).fetchone()
+            if _pending is not None and (
+                _pending[:4] != (
+                    _source_timestamp, _canonical_memo, _source_account, _source_units
+                )
+                or _pending[4] != _evidence_held_status
+                or any(value is not None for value in _pending[5:])
+            ):
+                raise RuntimeError(
+                    f"unsafe {_kind} terminal conflicts with its retained source liability"
+                )
+            _fee_kind = f"{_kind}_flat_fee"
+            _fee_rows = cursor.execute(
+                """SELECT amount_usdc_units FROM fee_entries
+                   WHERE sig = ? AND txid IS NULL AND kind = ?""",
+                (_source_sig, _fee_kind),
+            ).fetchall()
+            if any(type(row[0]) is not int or row[0] < 0 for row in _fee_rows):
+                raise RuntimeError(
+                    f"unsafe {_kind} terminal has malformed inferred fee evidence"
+                )
+            _reversed_fee_units = sum(row[0] for row in _fee_rows)
+            cursor.execute(
+                """INSERT INTO solana_disposition_provenance_migrations
+                   (kind, source_signature, payout_signature, payout_units,
+                    reversed_fee_units, timestamp)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (_kind, _source_sig, _payout_signature, _payout_units,
+                 _reversed_fee_units, int(time.time())),
+            )
+            if _pending is None:
+                cursor.execute(
+                    """INSERT INTO unprocessed_sigs
+                       (sig, timestamp, memo, from_address, amount_usdc_units, status)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (_source_sig, _source_timestamp, _canonical_memo,
+                     _source_account, _source_units, _evidence_held_status),
+                )
+            cursor.execute(
+                "DELETE FROM fee_entries WHERE sig = ? AND txid IS NULL AND kind = ?",
+                (_source_sig, _fee_kind),
+            )
+            deleted = cursor.execute(
+                f"DELETE FROM {_table} WHERE sig = ? AND status = ?",
+                (_source_sig, _terminal_status),
+            ).rowcount
+            if deleted != 1:
+                raise RuntimeError(
+                    f"unsafe {_kind} terminal changed during provenance migration"
+                )
+
     # Transfer intents written before contract-level source admission only identify a
     # transaction. Preserve every immutable id/reference/remote result and mark the
     # missing source contract explicitly as legacy. The rebuilt table deliberately has
@@ -833,7 +967,6 @@ def init_db():
                WHERE source_contract_id >= 0"""
         )
     except sqlite3.IntegrityError as exc:
-        conn.close()
         raise RuntimeError(
             "unsafe duplicate Nexus transfer intents share an exact source identity; "
             "resolve them manually before starting the service"
@@ -857,7 +990,6 @@ def init_db():
                      AND amount_usdd_units IS NOT NULL"""
         )
     except sqlite3.IntegrityError as exc:
-        conn.close()
         raise RuntimeError(
             "conflicting Nexus fee evidence shares an exact source identity; "
             "resolve it manually before starting the service"
@@ -949,8 +1081,22 @@ def init_db():
         "status TEXT, PRIMARY KEY (txid, contract_id)",
     )
 
-    conn.commit()
-    conn.close()
+
+def init_db() -> None:
+    """Initialize or migrate the database atomically and always release its lock."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        # Journal mode persists per database file and SQLite cannot change it from
+        # inside the migration transaction.
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("BEGIN IMMEDIATE")
+        _init_db_with_connection(conn)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 # Nexus transfer intents -------------------------------------------------------
@@ -1606,6 +1752,15 @@ def _insert_solana_deposit(conn, deposit: tuple) -> bool:
     if locations > 1:
         raise ValueError("conflicting existing Solana deposit lifecycle evidence")
     if locations:
+        retained = conn.execute(
+            """SELECT timestamp, COALESCE(memo, ''), from_address, amount_usdc_units
+                 FROM unprocessed_sigs WHERE sig = ?""",
+            (sig,),
+        ).fetchone()
+        if retained is not None and retained != (
+            timestamp, memo or "", from_address, amount_units,
+        ):
+            raise ValueError("deposit conflicts with retained Solana source evidence")
         return False
     held = conn.execute(
         """SELECT block_timestamp, memo, from_address, amount_units
@@ -2147,6 +2302,83 @@ def get_unprocessed_sig_status(sig: str) -> str | None:
     conn.close()
     return result[0] if result else None
 
+
+def freeze_solana_deposit_policy_decision(sig: str, proposed_evidence: str) -> dict:
+    """Freeze one exact admission decision or return its already-frozen value.
+
+    Current configuration is consulted only before this call. Once evidence exists,
+    restart/configuration drift cannot reclassify the retained source. Any partial,
+    malformed, or source-conflicting evidence fails closed without changing the row.
+    """
+    from . import solana_deposit_policy
+
+    proposed = solana_deposit_policy.parse_frozen_evidence(proposed_evidence)
+    if proposed["signature"] != sig:
+        raise ValueError("policy evidence signature does not match source key")
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            """SELECT timestamp, COALESCE(memo, ''), from_address, amount_usdc_units,
+                      status, txid, reference, amount_usdd_units,
+                      policy_decision, policy_evidence
+                 FROM unprocessed_sigs WHERE sig = ?""",
+            (sig,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Solana deposit disappeared before policy classification")
+        source = (sig, row[0], row[1], row[2], row[3])
+        proposed_source = (
+            proposed["signature"], proposed["timestamp"], proposed["memo"],
+            proposed["from_address"], proposed["input_units"],
+        )
+        if source != proposed_source:
+            raise ValueError("Solana deposit source conflicts with policy evidence")
+
+        stored_decision, stored_evidence = row[8], row[9]
+        if (stored_decision is None) != (stored_evidence is None):
+            raise ValueError("Solana deposit has partial frozen policy evidence")
+        if stored_evidence is not None:
+            stored = solana_deposit_policy.parse_frozen_evidence(stored_evidence)
+            stored_source = (
+                stored["signature"], stored["timestamp"], stored["memo"],
+                stored["from_address"], stored["input_units"],
+            )
+            if stored_source != source or stored_decision != stored["decision"]:
+                raise ValueError("Solana deposit frozen policy evidence conflicts with source")
+            conn.commit()
+            return stored
+
+        if row[4] != "ready for processing" or any(value is not None for value in row[5:8]):
+            raise ValueError("Solana deposit is not eligible for first policy classification")
+        target_status = {
+            solana_deposit_policy.PAYABLE: "ready for processing",
+            solana_deposit_policy.HOLD_BELOW_MINIMUM: "policy held, non-sendable",
+            solana_deposit_policy.HOLD_NONPOSITIVE_OUTPUT: "policy held, non-sendable",
+            solana_deposit_policy.REFUND_OVERSIZED: "to be refunded",
+        }[proposed["decision"]]
+        changed = conn.execute(
+            """UPDATE unprocessed_sigs
+                  SET status = ?, policy_decision = ?, policy_evidence = ?
+                WHERE sig = ? AND status = 'ready for processing'
+                  AND txid IS NULL AND reference IS NULL AND amount_usdd_units IS NULL
+                  AND policy_decision IS NULL AND policy_evidence IS NULL
+                  AND timestamp = ? AND COALESCE(memo, '') = ?
+                  AND from_address IS ? AND amount_usdc_units = ?""",
+            (target_status, proposed["decision"], proposed_evidence, sig,
+             proposed["timestamp"], proposed["memo"], proposed["from_address"],
+             proposed["input_units"]),
+        ).rowcount
+        if changed != 1:
+            raise ValueError("Solana deposit changed during policy classification")
+        conn.commit()
+        return proposed
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
 def filter_unprocessed_sigs(filters: dict) -> List[Tuple[str, int, str, str, float, str | None, str | None]]:
     """
     Fetch unprocessed sigs filtered by multiple attributes.
@@ -2172,47 +2404,89 @@ def filter_unprocessed_sigs(filters: dict) -> List[Tuple[str, int, str, str, flo
     
     where_clauses = []
     values = []
+    capacity_kind = filters.get("capacity_kind")
+    if capacity_kind is not None and capacity_kind not in _SOLANA_SIG_DISPOSITION:
+        conn.close()
+        raise ValueError("capacity_kind must be refund or quarantine")
+    capacity_cap_units = filters.get("capacity_cap_units")
+    if capacity_cap_units is not None and (
+        type(capacity_cap_units) is not int or capacity_cap_units < 0
+    ):
+        conn.close()
+        raise ValueError("capacity_cap_units must be a nonnegative exact integer")
     
     # Build WHERE clauses dynamically
     for key, value in filters.items():
         if key == 'status' and value is not None:
-            where_clauses.append("status = ?")
+            where_clauses.append("u.status = ?")
             values.append(value)
         elif key == 'status_in' and value:
             marks = ",".join("?" for _ in value)
-            where_clauses.append(f"status IN ({marks})")
+            where_clauses.append(f"u.status IN ({marks})")
             values.extend(list(value))
         elif key == 'status_like' and value is not None:
-            where_clauses.append("status LIKE ?")
+            where_clauses.append("u.status LIKE ?")
             values.append(value)
         elif key == 'amount_usdc_units_gt' and value is not None:
-            where_clauses.append("amount_usdc_units > ?")
+            where_clauses.append("u.amount_usdc_units > ?")
             values.append(value)
         elif key == 'amount_usdc_units_lt' and value is not None:
-            where_clauses.append("amount_usdc_units < ?")
+            where_clauses.append("u.amount_usdc_units < ?")
             values.append(value)
         elif key == 'timestamp_gt' and value is not None:
-            where_clauses.append("timestamp > ?")
+            where_clauses.append("u.timestamp > ?")
             values.append(value)
         elif key == 'timestamp_lt' and value is not None:
-            where_clauses.append("timestamp < ?")
+            where_clauses.append("u.timestamp < ?")
             values.append(value)
         elif key == 'memo_like' and value is not None:
-            where_clauses.append("memo LIKE ?")
+            where_clauses.append("u.memo LIKE ?")
             values.append(value)
         elif key == 'from_address' and value is not None:
-            where_clauses.append("from_address = ?")
+            where_clauses.append("u.from_address = ?")
             values.append(value)
         elif key == 'txid' and value is not None:
-            where_clauses.append("txid = ?")
+            where_clauses.append("u.txid = ?")
             values.append(value)
     
     limit = filters.get('limit', 1000)  # Default limit to prevent large fetches
+    join = ""
+    order = "u.timestamp ASC"
+    if capacity_kind is not None:
+        join = (
+            "LEFT JOIN solana_payout_capacity_holds AS h "
+            "ON h.source_signature = u.sig AND h.kind = ?"
+        )
+        values.insert(0, capacity_kind)
+        if capacity_cap_units is None:
+            order = (
+                "CASE WHEN h.source_signature IS NULL THEN 1 ELSE 0 END ASC, "
+                "h.first_held_timestamp ASC, u.timestamp ASC, u.sig ASC"
+            )
+        else:
+            where_clauses.append(
+                "NOT (h.source_signature IS NOT NULL AND ? > 0 "
+                "AND typeof(h.needed_units) = 'integer' AND h.needed_units > ? "
+                "AND h.cap_units = ? AND h.reason = ?)"
+            )
+            values.extend((
+                capacity_cap_units, capacity_cap_units, capacity_cap_units,
+                SOLANA_PAYOUT_CURRENT_CAP_TOO_LOW_REASON,
+            ))
+            order = (
+                "CASE WHEN h.source_signature IS NOT NULL "
+                "AND (? = 0 OR h.needed_units <= ?) THEN 0 "
+                "WHEN h.source_signature IS NULL THEN 1 ELSE 2 END ASC, "
+                "h.first_held_timestamp ASC, u.timestamp ASC, u.sig ASC"
+            )
+            values.extend((capacity_cap_units, capacity_cap_units))
     sql = f"""
-        SELECT sig, timestamp, memo, from_address, amount_usdc_units, status, txid 
-        FROM unprocessed_sigs 
+        SELECT u.sig, u.timestamp, u.memo, u.from_address,
+               u.amount_usdc_units, u.status, u.txid
+        FROM unprocessed_sigs AS u
+        {join}
         {'WHERE ' + ' AND '.join(where_clauses) if where_clauses else ''}
-        ORDER BY timestamp ASC 
+        ORDER BY {order}
         LIMIT ?
     """
     values.append(limit)
@@ -3273,6 +3547,59 @@ def reserve_solana_payout_budget(
         conn.close()
 
 
+def release_solana_payout_budget(obligation_id: str, reason: str) -> bool:
+    """Release an exact reservation only while no remote submission can exist.
+
+    A submitted/confirmed obligation is never releasable through this path: absence of
+    confirmation is not evidence that a transfer did not happen. The durable reason
+    makes an operator cancellation attributable across restart.
+    """
+    obligation_id = _require_solana_payout_budget_text(obligation_id, "obligation id")
+    reason = _require_solana_payout_budget_text(reason, "release reason", 1000)
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("BEGIN IMMEDIATE")
+        reserved = conn.execute(
+            """SELECT kind, amount_usdc_units FROM solana_payout_budget_events
+               WHERE obligation_id = ? AND event = 'reserved'""",
+            (obligation_id,),
+        ).fetchone()
+        has_durable_send_intent = conn.execute(
+            """SELECT 1 FROM refunded_sigs
+                 WHERE 'refund:' || sig = ?
+               UNION ALL
+               SELECT 1 FROM quarantined_sigs
+                 WHERE 'quarantine:' || sig = ?
+               UNION ALL
+               SELECT 1 FROM unprocessed_txids
+                 WHERE 'nexus:' || txid || ':' || contract_id = ?
+                   AND payout_solana_units IS NOT NULL
+               LIMIT 1""",
+            (obligation_id, obligation_id, obligation_id),
+        ).fetchone() is not None
+        if reserved is None or has_durable_send_intent or conn.execute(
+            """SELECT 1 FROM solana_payout_budget_events
+               WHERE obligation_id = ? AND event IN ('submitted', 'confirmed', 'released')""",
+            (obligation_id,),
+        ).fetchone() is not None:
+            conn.commit()
+            return False
+        conn.execute(
+            """INSERT INTO solana_payout_budget_events
+               (obligation_id, kind, event, amount_usdc_units, signature, evidence, timestamp)
+               VALUES (?, ?, 'released', ?, NULL, ?, ?)""",
+            (obligation_id, reserved[0], reserved[1], reason, int(time.time())),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def record_solana_payout_submission(obligation_id: str, signature: str) -> bool:
     """Append the returned signature without making an ambiguous payout retryable."""
     obligation_id = _require_solana_payout_budget_text(obligation_id, "obligation id")
@@ -3484,6 +3811,7 @@ _SOLANA_SIG_DISPOSITION = {
         "units_column": "refunded_units",
         "ready_statuses": ("to be refunded",),
         "held_status": "refund submission held",
+        "capacity_status": "refund capacity held",
         "evidence_held_status": "refund evidence held",
         "awaiting_status": "refund sent, awaiting confirmation",
         "terminal_status": "refund_confirmed",
@@ -3495,6 +3823,7 @@ _SOLANA_SIG_DISPOSITION = {
         "units_column": "quarantined_units",
         "ready_statuses": ("to be quarantined", "quarantine failed"),
         "held_status": "quarantine submission held",
+        "capacity_status": "quarantine capacity held",
         "evidence_held_status": "quarantine evidence held",
         "awaiting_status": "quarantine sent, awaiting confirmation",
         "terminal_status": "quarantine_confirmed",
@@ -3503,6 +3832,71 @@ _SOLANA_SIG_DISPOSITION = {
 }
 
 _SOLANA_SIG_DISPOSITION_PROVENANCE_V1 = "pre_submission_v1"
+SOLANA_PAYOUT_CURRENT_CAP_TOO_LOW_REASON = (
+    "frozen Solana payout exceeds current nonzero cap"
+)
+
+
+class SolanaDispositionPrepareStatus(str, Enum):
+    """Closed set of preparation outcomes consumed by money-moving workers."""
+
+    PREPARED = "prepared"
+    CAPACITY_HELD = "capacity_held"
+    CURRENT_CAP_TOO_LOW = "current_cap_too_low"
+    SOURCE_CONFLICT = "source_conflict"
+    MALFORMED_EVIDENCE = "malformed_evidence"
+    DB_FAILURE = "db_failure"
+    ALREADY_SUBMITTED = "already_submitted"
+
+
+@dataclass(frozen=True)
+class SolanaDispositionPrepareResult:
+    status: SolanaDispositionPrepareStatus
+    obligation_id: str
+    needed_units: int
+    used_units: int
+    cap_units: int
+    reason: str
+
+    def __bool__(self) -> bool:
+        """Only a newly committed intent authorizes the caller's single RPC send."""
+        return self.status is SolanaDispositionPrepareStatus.PREPARED
+
+
+@dataclass(frozen=True)
+class SolanaPayoutCapacityHold:
+    """Validated durable retry state for one unsent refund or quarantine."""
+
+    source_signature: str
+    kind: str
+    obligation_id: str
+    needed_units: int
+    used_units: int
+    cap_units: int
+    first_held_timestamp: int
+    updated_timestamp: int
+    reason: str
+    intent_evidence: str
+    attempt_count: int
+
+
+@dataclass(frozen=True)
+class SolanaDispositionFrozenIntent:
+    """Strictly validated transfer and source terms recovered from a capacity hold."""
+
+    kind: str
+    source_signature: str
+    source_timestamp: int
+    source_token_account: str
+    destination_token_account: str
+    source_amount_solana_units: int
+    source_memo: str
+    payout_memo: str
+    payout_amount_solana_units: int
+    fee_solana_units: int
+    service_terms_version: int
+    refund_solana_fee_units: int
+    intent_evidence: str
 
 
 def _solana_sig_disposition_intent_evidence(
@@ -3536,6 +3930,68 @@ def _solana_sig_disposition_intent_evidence(
     return json.dumps(evidence, sort_keys=True, separators=(",", ":"))
 
 
+def _parse_solana_sig_disposition_intent_evidence(evidence: object) -> dict | None:
+    """Strictly decode one self-consistent immutable disposition intent."""
+    if not isinstance(evidence, str):
+        return None
+
+    def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for field, value in pairs:
+            if field in result:
+                raise ValueError("duplicate intent evidence field")
+            result[field] = value
+        return result
+
+    def reject_nonfinite_number(value: str) -> object:
+        raise ValueError(f"non-finite intent evidence number: {value}")
+
+    try:
+        parsed = json.loads(
+            evidence,
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_nonfinite_number,
+        )
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    text_fields = (
+        "kind", "source_signature", "source_token_account",
+        "destination_token_account", "source_memo", "payout_memo",
+    )
+    integer_fields = (
+        "version", "source_timestamp", "source_amount_solana_units",
+        "payout_amount_solana_units", "fee_solana_units", "service_terms_version",
+        "refund_solana_fee_units",
+    )
+    expected_fields = {*text_fields, *integer_fields}
+    if set(parsed) != expected_fields:
+        return None
+    if any(not isinstance(parsed[field], str) for field in text_fields):
+        return None
+    if any(type(parsed[field]) is not int for field in integer_fields):
+        return None
+    if (
+        parsed["version"] != 1
+        or parsed["kind"] not in _SOLANA_SIG_DISPOSITION
+        or not parsed["source_signature"]
+        or parsed["source_timestamp"] <= 0
+        or not parsed["source_token_account"]
+        or not parsed["destination_token_account"]
+        or not parsed["payout_memo"]
+        or parsed["source_amount_solana_units"] <= 0
+        or parsed["payout_amount_solana_units"] <= 0
+        or parsed["fee_solana_units"] < 0
+        or parsed["service_terms_version"] < 0
+        or parsed["refund_solana_fee_units"] < 0
+        or parsed["payout_amount_solana_units"] + parsed["fee_solana_units"]
+            != parsed["source_amount_solana_units"]
+    ):
+        return None
+    return parsed
+
+
 def _has_valid_solana_sig_disposition_provenance(
     *, provenance: object, evidence: object, kind: str, source_sig: str,
     timestamp: int, from_address: str, destination_address: str,
@@ -3559,13 +4015,10 @@ def _has_valid_solana_sig_disposition_provenance(
     # retrospective terms blob, so a terminal row can never be promoted to v0.
     if provenance == "legacy_pre_submission_v0":
         return evidence is None
-    if provenance != _SOLANA_SIG_DISPOSITION_PROVENANCE_V1 or not isinstance(evidence, str):
+    if provenance != _SOLANA_SIG_DISPOSITION_PROVENANCE_V1:
         return False
-    try:
-        parsed = json.loads(evidence)
-    except (TypeError, ValueError):
-        return False
-    if not isinstance(parsed, dict):
+    parsed = _parse_solana_sig_disposition_intent_evidence(evidence)
+    if parsed is None:
         return False
     expected = {
         "version": 1,
@@ -3580,14 +4033,9 @@ def _has_valid_solana_sig_disposition_provenance(
         "payout_amount_solana_units": payout_units,
         "fee_solana_units": amount_usdc_units - payout_units,
     }
-    if any(parsed.get(field) != value for field, value in expected.items()):
-        return False
-    return (
-        set(parsed) == {*expected, "service_terms_version", "refund_solana_fee_units"}
-        and type(parsed["service_terms_version"]) is int
-        and parsed["service_terms_version"] >= 0
-        and type(parsed["refund_solana_fee_units"]) is int
-        and parsed["refund_solana_fee_units"] >= 0
+    return not any(
+        type(parsed[field]) is not type(value) or parsed[field] != value
+        for field, value in expected.items()
     )
 
 
@@ -3597,6 +4045,210 @@ def _solana_sig_disposition(source_sig: str, kind: str) -> tuple[str, dict]:
     if details is None:
         raise ValueError("Solana disposition kind must be refund or quarantine")
     return source_sig, details
+
+
+def get_solana_payout_capacity_holds(
+    *, kind: str | None = None, limit: int = 1000,
+) -> list[SolanaPayoutCapacityHold]:
+    """Return oldest-first validated holds; malformed durable state fails closed."""
+    if kind is not None and kind not in _SOLANA_SIG_DISPOSITION:
+        raise ValueError("Solana capacity hold kind must be refund or quarantine")
+    if type(limit) is not int or limit <= 0:
+        raise ValueError("Solana capacity hold limit must be positive")
+    where = "WHERE kind = ?" if kind is not None else ""
+    params: tuple[object, ...] = ((kind, limit) if kind is not None else (limit,))
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        rows = conn.execute(
+            """SELECT source_signature, kind, obligation_id, needed_units, used_units,
+                      cap_units, first_held_timestamp, updated_timestamp, reason,
+                      intent_evidence, attempt_count
+                 FROM solana_payout_capacity_holds """
+            + where
+            + " ORDER BY first_held_timestamp ASC, source_signature ASC LIMIT ?",
+            params,
+        ).fetchall()
+    finally:
+        conn.close()
+
+    holds: list[SolanaPayoutCapacityHold] = []
+    for row in rows:
+        hold = SolanaPayoutCapacityHold(*row)
+        frozen = _parse_solana_sig_disposition_intent_evidence(hold.intent_evidence)
+        if (
+            frozen is None
+            or not hold.source_signature
+            or hold.kind not in _SOLANA_SIG_DISPOSITION
+            or hold.obligation_id != _solana_sig_disposition_obligation_id(
+                hold.kind, hold.source_signature
+            )
+            or type(hold.needed_units) is not int or hold.needed_units <= 0
+            or type(hold.used_units) is not int or hold.used_units < 0
+            or type(hold.cap_units) is not int or hold.cap_units <= 0
+            or type(hold.first_held_timestamp) is not int or hold.first_held_timestamp <= 0
+            or type(hold.updated_timestamp) is not int
+            or hold.updated_timestamp < hold.first_held_timestamp
+            or not isinstance(hold.reason, str) or not hold.reason
+            or type(hold.attempt_count) is not int or hold.attempt_count <= 0
+            or frozen["source_signature"] != hold.source_signature
+            or frozen["kind"] != hold.kind
+            or frozen["payout_amount_solana_units"] != hold.needed_units
+        ):
+            raise RuntimeError("malformed durable Solana payout capacity hold")
+        holds.append(hold)
+    return holds
+
+
+def get_solana_sig_disposition_capacity_hold_intent(
+    *, source_sig: str, kind: str,
+) -> SolanaDispositionFrozenIntent | SolanaDispositionPrepareResult:
+    """Load one held retry's immutable terms without consulting mutable configuration.
+
+    This read is advisory for the worker. ``prepare_solana_sig_disposition`` compares
+    the same evidence and source again under ``BEGIN IMMEDIATE`` before authorizing RPC.
+    """
+    raw_source_sig = source_sig if isinstance(source_sig, str) else ""
+    raw_kind = kind if isinstance(kind, str) else ""
+    obligation_id = (
+        _solana_sig_disposition_obligation_id(raw_kind, raw_source_sig)
+        if raw_kind and raw_source_sig else "invalid"
+    )
+
+    def result(
+        status: SolanaDispositionPrepareStatus, reason: str, *,
+        needed_units: int = 0, used_units: int = 0, cap_units: int = 0,
+    ) -> SolanaDispositionPrepareResult:
+        return SolanaDispositionPrepareResult(
+            status=status, obligation_id=obligation_id, needed_units=needed_units,
+            used_units=used_units, cap_units=cap_units, reason=reason,
+        )
+
+    try:
+        source_sig, details = _solana_sig_disposition(source_sig, kind)
+        obligation_id = _solana_sig_disposition_obligation_id(kind, source_sig)
+    except (TypeError, ValueError) as exc:
+        return result(SolanaDispositionPrepareStatus.MALFORMED_EVIDENCE, str(exc))
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+    except sqlite3.Error as exc:
+        return result(
+            SolanaDispositionPrepareStatus.DB_FAILURE,
+            f"database failure: {type(exc).__name__}",
+        )
+    try:
+        row = conn.execute(
+            """SELECT h.kind, h.obligation_id, h.needed_units, h.used_units,
+                      h.cap_units, h.first_held_timestamp, h.updated_timestamp,
+                      h.reason, h.intent_evidence, h.attempt_count,
+                      u.timestamp, u.memo, u.from_address, u.amount_usdc_units, u.status
+                 FROM solana_payout_capacity_holds AS h
+                 LEFT JOIN unprocessed_sigs AS u ON u.sig = h.source_signature
+                WHERE h.source_signature = ?""",
+            (source_sig,),
+        ).fetchone()
+    except sqlite3.Error as exc:
+        return result(
+            SolanaDispositionPrepareStatus.DB_FAILURE,
+            f"database failure: {type(exc).__name__}",
+        )
+    finally:
+        conn.close()
+
+    if row is None:
+        return result(
+            SolanaDispositionPrepareStatus.SOURCE_CONFLICT,
+            "capacity lifecycle status conflicts with durable hold evidence",
+        )
+
+    needed_units = row[2] if type(row[2]) is int and row[2] > 0 else 0
+    used_units = row[3] if type(row[3]) is int and row[3] >= 0 else 0
+    cap_units = row[4] if type(row[4]) is int and row[4] > 0 else 0
+    frozen = _parse_solana_sig_disposition_intent_evidence(row[8])
+    if frozen is None:
+        return result(
+            SolanaDispositionPrepareStatus.MALFORMED_EVIDENCE,
+            "capacity hold has malformed frozen intent evidence",
+            needed_units=needed_units, used_units=used_units, cap_units=cap_units,
+        )
+
+    hold_is_valid = (
+        row[0] == kind
+        and row[1] == obligation_id
+        and needed_units == frozen["payout_amount_solana_units"]
+        and type(row[3]) is int and row[3] >= 0
+        and type(row[4]) is int and row[4] > 0
+        and type(row[5]) is int and row[5] > 0
+        and type(row[6]) is int and row[6] >= row[5]
+        and isinstance(row[7], str) and bool(row[7])
+        and type(row[9]) is int and row[9] > 0
+        and frozen["kind"] == kind
+        and frozen["source_signature"] == source_sig
+    )
+    if not hold_is_valid:
+        return result(
+            SolanaDispositionPrepareStatus.MALFORMED_EVIDENCE,
+            "capacity hold has malformed frozen intent evidence",
+            needed_units=needed_units, used_units=used_units, cap_units=cap_units,
+        )
+
+    try:
+        source_memo = _canonical_solana_source_memo(row[11])
+    except (TypeError, ValueError) as exc:
+        return result(
+            SolanaDispositionPrepareStatus.MALFORMED_EVIDENCE, str(exc),
+            needed_units=needed_units, used_units=used_units, cap_units=cap_units,
+        )
+    source_matches = (
+        row[10] == frozen["source_timestamp"]
+        and source_memo == frozen["source_memo"]
+        and row[12] == frozen["source_token_account"]
+        and type(row[13]) is int
+        and row[13] == frozen["source_amount_solana_units"]
+        and row[14] == details["capacity_status"]
+    )
+    if not source_matches:
+        return result(
+            SolanaDispositionPrepareStatus.SOURCE_CONFLICT,
+            "source evidence conflicts with frozen capacity hold",
+            needed_units=needed_units, used_units=used_units, cap_units=cap_units,
+        )
+
+    return SolanaDispositionFrozenIntent(
+        kind=frozen["kind"],
+        source_signature=frozen["source_signature"],
+        source_timestamp=frozen["source_timestamp"],
+        source_token_account=frozen["source_token_account"],
+        destination_token_account=frozen["destination_token_account"],
+        source_amount_solana_units=frozen["source_amount_solana_units"],
+        source_memo=frozen["source_memo"],
+        payout_memo=frozen["payout_memo"],
+        payout_amount_solana_units=frozen["payout_amount_solana_units"],
+        fee_solana_units=frozen["fee_solana_units"],
+        service_terms_version=frozen["service_terms_version"],
+        refund_solana_fee_units=frozen["refund_solana_fee_units"],
+        intent_evidence=row[8],
+    )
+
+
+def get_solana_sig_disposition_candidates(
+    kind: str, limit: int = 1000, *, cap_units: int | None = None,
+) -> list[tuple]:
+    """Select fair retry work without letting known impossible holds consume the limit."""
+    _, details = _solana_sig_disposition("candidate", kind)
+    if type(limit) is not int or limit <= 0:
+        raise ValueError("Solana disposition candidate limit must be positive")
+    if cap_units is None:
+        from . import config
+        cap_units = int(getattr(config, "DAILY_PAYOUT_CAP_SOLANA_UNITS", 0) or 0)
+    cap_units = _require_solana_payout_budget_units(cap_units, "cap", positive=False)
+    statuses = (*details["ready_statuses"], details["capacity_status"])
+    return filter_unprocessed_sigs({
+        "status_in": statuses,
+        "capacity_kind": kind,
+        "capacity_cap_units": cap_units,
+        "limit": limit,
+    })
 
 
 def _solana_sig_disposition_obligation_id(kind: str, source_sig: str) -> str:
@@ -3942,33 +4594,85 @@ def get_solana_sig_disposition_evidence(
 def prepare_solana_sig_disposition(
     *, source_sig: str, kind: str, timestamp: int, from_address: str,
     destination_address: str, amount_usdc_units: int, memo: str | None, payout_memo: str,
-    payout_units: int, cap_units: int,
-) -> bool:
+    payout_units: int, cap_units: int, frozen_intent_evidence: str | None = None,
+) -> SolanaDispositionPrepareResult:
     """Atomically freeze and cap-reserve one refund/quarantine before Solana RPC.
 
     Once this returns true, the source is deliberately held in a durable pre-submit
     state.  A process loss before a returned signature is an unknown outcome, not
     permission to resend or to release the cap reservation.
     """
-    source_sig, details = _solana_sig_disposition(source_sig, kind)
-    timestamp = _require_solana_payout_budget_units(timestamp, "source timestamp")
-    from_address = _require_solana_payout_budget_text(from_address, "source address")
-    destination_address = _require_solana_payout_budget_text(
-        destination_address, "destination address"
+    raw_source_sig = source_sig if isinstance(source_sig, str) else ""
+    raw_kind = kind if isinstance(kind, str) else ""
+    obligation_id = (
+        _solana_sig_disposition_obligation_id(raw_kind, raw_source_sig)
+        if raw_kind and raw_source_sig else "invalid"
     )
-    payout_memo = _require_solana_payout_budget_text(payout_memo, "payout memo", 1024)
-    amount_usdc_units = _require_solana_payout_budget_units(amount_usdc_units, "source amount")
-    payout_units = _require_solana_payout_budget_units(payout_units, "amount")
-    cap_units = _require_solana_payout_budget_units(cap_units, "cap", positive=False)
-    memo = _canonical_solana_source_memo(memo)
-    obligation_id = _solana_sig_disposition_obligation_id(kind, source_sig)
-    intent_evidence = _solana_sig_disposition_intent_evidence(
-        kind=kind, source_sig=source_sig, timestamp=timestamp, from_address=from_address,
-        destination_address=destination_address, amount_usdc_units=amount_usdc_units,
-        memo=memo, payout_memo=payout_memo, payout_units=payout_units,
-    )
+    result_units = payout_units if type(payout_units) is int and payout_units > 0 else 0
+    result_cap = cap_units if type(cap_units) is int and cap_units >= 0 else 0
 
-    conn = sqlite3.connect(DB_PATH)
+    def result(
+        status: SolanaDispositionPrepareStatus, reason: str, *, used_units: int = 0,
+    ) -> SolanaDispositionPrepareResult:
+        return SolanaDispositionPrepareResult(
+            status=status, obligation_id=obligation_id, needed_units=result_units,
+            used_units=used_units, cap_units=result_cap, reason=reason,
+        )
+
+    try:
+        source_sig, details = _solana_sig_disposition(source_sig, kind)
+        timestamp = _require_solana_payout_budget_units(timestamp, "source timestamp")
+        from_address = _require_solana_payout_budget_text(from_address, "source address")
+        destination_address = _require_solana_payout_budget_text(
+            destination_address, "destination address"
+        )
+        payout_memo = _require_solana_payout_budget_text(payout_memo, "payout memo", 1024)
+        amount_usdc_units = _require_solana_payout_budget_units(
+            amount_usdc_units, "source amount"
+        )
+        payout_units = _require_solana_payout_budget_units(payout_units, "amount")
+        cap_units = _require_solana_payout_budget_units(cap_units, "cap", positive=False)
+        if payout_units > amount_usdc_units:
+            raise ValueError("Solana disposition payout exceeds its source amount")
+        memo = _canonical_solana_source_memo(memo)
+        obligation_id = _solana_sig_disposition_obligation_id(kind, source_sig)
+        result_units = payout_units
+        result_cap = cap_units
+        supplied_frozen_evidence = frozen_intent_evidence is not None
+        if supplied_frozen_evidence:
+            frozen = _parse_solana_sig_disposition_intent_evidence(frozen_intent_evidence)
+            if frozen is None:
+                raise ValueError("capacity hold has malformed frozen intent evidence")
+            frozen_request = (
+                frozen["kind"], frozen["source_signature"], frozen["source_timestamp"],
+                frozen["source_token_account"], frozen["destination_token_account"],
+                frozen["source_amount_solana_units"], frozen["source_memo"],
+                frozen["payout_memo"], frozen["payout_amount_solana_units"],
+            )
+            current_request = (
+                kind, source_sig, timestamp, from_address, destination_address,
+                amount_usdc_units, memo, payout_memo, payout_units,
+            )
+            if frozen_request != current_request:
+                raise ValueError("frozen capacity hold evidence conflicts with requested terms")
+            intent_evidence = frozen_intent_evidence
+        else:
+            intent_evidence = _solana_sig_disposition_intent_evidence(
+                kind=kind, source_sig=source_sig, timestamp=timestamp,
+                from_address=from_address, destination_address=destination_address,
+                amount_usdc_units=amount_usdc_units, memo=memo,
+                payout_memo=payout_memo, payout_units=payout_units,
+            )
+    except (TypeError, ValueError, RuntimeError) as exc:
+        return result(SolanaDispositionPrepareStatus.MALFORMED_EVIDENCE, str(exc))
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+    except sqlite3.Error as exc:
+        return result(
+            SolanaDispositionPrepareStatus.DB_FAILURE,
+            f"database failure: {type(exc).__name__}",
+        )
     try:
         conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("BEGIN IMMEDIATE")
@@ -3979,22 +4683,162 @@ def prepare_solana_sig_disposition(
         if (row is None or row[0] != timestamp
                 or _canonical_solana_source_memo(row[1]) != memo
                 or row[2] != from_address
-                or type(row[3]) is not int or row[3] != amount_usdc_units
-                or row[4] not in details["ready_statuses"]):
+                or type(row[3]) is not int or row[3] != amount_usdc_units):
             conn.commit()
-            return False
+            return result(
+                SolanaDispositionPrepareStatus.SOURCE_CONFLICT,
+                "source evidence conflicts with requested disposition",
+            )
         # One incoming deposit can never authorize both a refund and a quarantine send.
-        if any(conn.execute(f"SELECT 1 FROM {table} WHERE sig = ?", (source_sig,)).fetchone()
-               for table in ("refunded_sigs", "quarantined_sigs")):
+        target_exists = conn.execute(
+            f"SELECT 1 FROM {details['table']} WHERE sig = ?", (source_sig,)
+        ).fetchone()
+        if target_exists is not None or conn.execute(
+            """SELECT 1 FROM solana_payout_budget_events
+               WHERE obligation_id = ? AND event IN ('reserved', 'submitted', 'confirmed')""",
+            (obligation_id,),
+        ).fetchone() is not None:
             conn.commit()
-            return False
+            return result(
+                SolanaDispositionPrepareStatus.ALREADY_SUBMITTED,
+                "disposition already has durable submission state",
+            )
+        if row[4] not in (*details["ready_statuses"], details["capacity_status"]):
+            conn.commit()
+            return result(
+                SolanaDispositionPrepareStatus.SOURCE_CONFLICT,
+                "source lifecycle conflicts with requested disposition",
+            )
+        opposing_table = "quarantined_sigs" if kind == "refund" else "refunded_sigs"
+        if conn.execute(
+            f"SELECT 1 FROM {opposing_table} WHERE sig = ?", (source_sig,)
+        ).fetchone() is not None or conn.execute(
+            "SELECT 1 FROM processed_sigs WHERE sig = ?", (source_sig,)
+        ).fetchone() is not None:
+            conn.commit()
+            return result(
+                SolanaDispositionPrepareStatus.SOURCE_CONFLICT,
+                "source has an opposing or terminal lifecycle",
+            )
+
+        existing_hold = conn.execute(
+            """SELECT kind, obligation_id, needed_units, intent_evidence
+               FROM solana_payout_capacity_holds WHERE source_signature = ?""",
+            (source_sig,),
+        ).fetchone()
+        if (row[4] == details["capacity_status"]) != (existing_hold is not None):
+            conn.commit()
+            return result(
+                SolanaDispositionPrepareStatus.SOURCE_CONFLICT,
+                "capacity lifecycle status conflicts with durable hold evidence",
+            )
+        if supplied_frozen_evidence and existing_hold is None:
+            conn.commit()
+            return result(
+                SolanaDispositionPrepareStatus.SOURCE_CONFLICT,
+                "frozen capacity evidence has no durable hold",
+            )
+        if existing_hold is not None:
+            frozen = _parse_solana_sig_disposition_intent_evidence(existing_hold[3])
+            if frozen is None:
+                conn.commit()
+                return result(
+                    SolanaDispositionPrepareStatus.MALFORMED_EVIDENCE,
+                    "capacity hold has malformed frozen intent evidence",
+                )
+            frozen_request = (
+                frozen["kind"], frozen["source_signature"], frozen["source_timestamp"],
+                frozen["source_token_account"], frozen["destination_token_account"],
+                frozen["source_amount_solana_units"], frozen["source_memo"],
+                frozen["payout_memo"], frozen["payout_amount_solana_units"],
+            )
+            current_request = (
+                kind, source_sig, timestamp, from_address, destination_address,
+                amount_usdc_units, memo, payout_memo, payout_units,
+            )
+            if (existing_hold[:3] != (kind, obligation_id, payout_units)
+                    or frozen_request != current_request
+                    or (supplied_frozen_evidence and existing_hold[3] != intent_evidence)):
+                conn.commit()
+                return result(
+                    SolanaDispositionPrepareStatus.SOURCE_CONFLICT,
+                    "capacity hold identity conflicts with current disposition terms",
+                )
+            # Never regenerate a held intent from current service terms. The exact
+            # validated blob is promoted into terminal state unchanged.
+            intent_evidence = existing_hold[3]
+        now = int(time.time())
+        used_units = _payout_budget_usage_in_transaction(conn, now - 86400)
+        oldest_hold = conn.execute(
+            """SELECT source_signature FROM solana_payout_capacity_holds
+               WHERE NOT (
+                   ? > 0
+                   AND typeof(needed_units) = 'integer'
+                   AND needed_units > ?
+               )
+               ORDER BY first_held_timestamp ASC, source_signature ASC LIMIT 1""",
+            (cap_units, cap_units),
+        ).fetchone()
+        waits_for_older = oldest_hold is not None and oldest_hold[0] != source_sig
+        current_cap_too_low = cap_units > 0 and payout_units > cap_units
+        cap_exhausted = cap_units > 0 and used_units + payout_units > cap_units
+        if waits_for_older or cap_exhausted:
+            reason = (
+                SOLANA_PAYOUT_CURRENT_CAP_TOO_LOW_REASON
+                if current_cap_too_low else (
+                    "waiting behind older Solana payout capacity hold"
+                    if waits_for_older else "rolling Solana payout cap exhausted"
+                )
+            )
+            if existing_hold is None:
+                conn.execute(
+                    """INSERT INTO solana_payout_capacity_holds
+                       (source_signature, kind, obligation_id, needed_units, used_units,
+                        cap_units, first_held_timestamp, updated_timestamp, reason,
+                        intent_evidence, attempt_count)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)""",
+                    (source_sig, kind, obligation_id, payout_units, used_units, cap_units,
+                     now, now, reason, intent_evidence),
+                )
+            else:
+                conn.execute(
+                    """UPDATE solana_payout_capacity_holds
+                          SET used_units = ?, cap_units = ?, updated_timestamp = ?,
+                              reason = ?, attempt_count = attempt_count + 1
+                        WHERE source_signature = ?""",
+                    (used_units, cap_units, now, reason, source_sig),
+                )
+            updated = conn.execute(
+                """UPDATE unprocessed_sigs SET status = ?
+                     WHERE sig = ? AND status IN ("""
+                + ", ".join("?" for _ in (*details["ready_statuses"], details["capacity_status"]))
+                + ")",
+                (details["capacity_status"], source_sig,
+                 *details["ready_statuses"], details["capacity_status"]),
+            ).rowcount
+            if updated != 1:
+                raise RuntimeError("Solana disposition source changed during capacity hold")
+            conn.commit()
+            return result(
+                (
+                    SolanaDispositionPrepareStatus.CURRENT_CAP_TOO_LOW
+                    if current_cap_too_low
+                    else SolanaDispositionPrepareStatus.CAPACITY_HELD
+                ),
+                reason,
+                used_units=used_units,
+            )
         if not _reserve_solana_payout_budget_in_transaction(
             conn, obligation_id=obligation_id, kind=details["budget_kind"],
             amount_usdc_units=payout_units, cap_units=cap_units, window_sec=86400,
-            now=int(time.time()),
+            now=now,
         ):
             conn.commit()
-            return False
+            return result(
+                SolanaDispositionPrepareStatus.ALREADY_SUBMITTED,
+                "disposition capacity was claimed concurrently",
+                used_units=used_units,
+            )
         signature_column = details["signature_column"]
         units_column = details["units_column"]
         conn.execute(
@@ -4007,15 +4851,34 @@ def prepare_solana_sig_disposition(
              memo, payout_memo, payout_units, _SOLANA_SIG_DISPOSITION_PROVENANCE_V1,
              intent_evidence),
         )
+        preparable_statuses = (*details["ready_statuses"], details["capacity_status"])
         updated = conn.execute(
             """UPDATE unprocessed_sigs SET status = ?
-               WHERE sig = ? AND status IN (""" + ", ".join("?" for _ in details["ready_statuses"]) + ")",
-            (details["held_status"], source_sig, *details["ready_statuses"]),
+               WHERE sig = ? AND status IN ("""
+            + ", ".join("?" for _ in preparable_statuses) + ")",
+            (details["held_status"], source_sig, *preparable_statuses),
         ).rowcount
         if updated != 1:
             raise RuntimeError("Solana disposition source changed during preparation")
+        conn.execute(
+            "DELETE FROM solana_payout_capacity_holds WHERE source_signature = ?",
+            (source_sig,),
+        )
         conn.commit()
-        return True
+        return result(
+            SolanaDispositionPrepareStatus.PREPARED,
+            "durable intent and payout capacity reserved",
+            used_units=used_units,
+        )
+    except (TypeError, ValueError) as exc:
+        conn.rollback()
+        return result(SolanaDispositionPrepareStatus.MALFORMED_EVIDENCE, str(exc))
+    except sqlite3.Error as exc:
+        conn.rollback()
+        return result(
+            SolanaDispositionPrepareStatus.DB_FAILURE,
+            f"database failure: {type(exc).__name__}",
+        )
     except Exception:
         conn.rollback()
         raise

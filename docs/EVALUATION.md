@@ -1,5 +1,75 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
+## 2026-09-22 A/B/C repairs — offline acceptance approved
+
+The requested batches are complete in the dirty single-pair candidate based on
+`a1f19b109681da693331583e30fa192ccee17d2d`. Final independent runtime/integration review is
+**APPROVED**; the parent verified all reviewed runtime/test hashes and reran the full gate.
+This is **not approval for production, live-chain use or real funds**. Nothing was staged,
+committed, pushed or deployed.
+
+| Batch | Accepted offline behavior |
+|---|---|
+| A — recovery | Strict duplicate-key/exact-type provenance validation; atomic DDL/data migration with safe rollback and lock release; conservative full-principal evidence holds, inferred-fee reversal and preserved cap spend; in-place, online-backup and DB+WAL acceptance. |
+| B — minimum policy | Shared exact-integer min/max/decimal/fee classifier before destination/refund routing; below-minimum and nonpositive-output principal stays held without fees or sends; frozen decisions survive restart; live/recovery/public v1 terms agree. |
+| C — capacity holds | Typed atomic refusal/admission, needed/used/cap diagnostics, frozen-term retries, conflict liability retention and alerts. Payouts above the current nonzero cap stay held without starving fitting work, including across kinds and worker limits. |
+
+**Parent gate:** 565 tests + 77 subtests passed. Separate shards: recovery 35 + 52 subtests;
+recovery/SDK 36 + 52 subtests; receipt/payout/Nexus-fee/SDK 85; policy/cap/recovery acceptance
+129. Dependency consistency, compilation, Markdown links, whitespace and disposable-index
+inventory (274 active lines) passed. Real Git index and baseline unrelated files are unchanged.
+
+See the [acceptance report](RECOVERY_INPUT_CAP_ACCEPTANCE.md) and
+[independent closure review](review_evidence/2026-09-22/final-runtime-review.md) for exact scope,
+reviewed hashes and the historical RED/GREEN record. Earlier counts below belong to their dated
+snapshots and are not the current acceptance result.
+
+### Remaining release gates
+
+1. Explicitly authorized devnet/test infrastructure: both directions, provider pagination/finality,
+   authoritative chain readback, crash/unknown outcomes and actual backup operations.
+2. Operational acceptance: alerts, incident response, hold-resolution and key-rotation rehearsal.
+3. A separate publication/release decision and exact-commit CI; this dirty candidate includes
+   preserved provider-v2/config work that this repair neither integrates nor approves. Rebuild the
+   inventory for the precise publication scope. Optional receipts remain outside this acceptance.
+
+## Historical snapshot — 2026-09-22 startup containment before A/B/C completion
+
+> This section is preserved verbatim as a dated pre-completion snapshot. Its statements that strict
+> migration, the shared classifier or typed capacity holds were missing are superseded for the current
+> dirty candidate by the status above. Its test counts describe that snapshot only.
+
+The `a1f19b1` provenance repair already migrates legacy disposition terminals when
+chain evidence rediscovers them. It does not by itself prevent an older terminal
+outside the bounded recovery scan from retaining an inferred fee and no liability.
+The local startup candidate audits both persisted terminal tables in one read
+snapshot before heartbeat/history lookup. Missing or rejected provenance refuses
+startup with `solana_terminal_provenance_unresolved`; a schema/read failure returns
+`solana_terminal_provenance_audit_failed`. The guard does not manufacture cap spend,
+rewrite fees, or treat a current fee configuration as historical authorization.
+
+Focused collected coverage exercises both disposition kinds, absent/unknown/recovery-only
+provenance, a current marker without matching evidence, accepted current and migrated-v0
+intent, and failed audit lock release. This is containment, **not closure of the P0
+migration gate**: conservative quantified-hold migration, backup/WAL acceptance and
+strict provenance validation remain required. In particular, the committed validator
+still permits JSON boolean/integer equality and duplicate keys; its stricter replacement
+is part of separate pre-existing uncommitted work and is not included in this candidate.
+An isolated HEAD-plus-candidate execution was denied by unattended execution policy.
+Do not interpret shared-working-tree test results as clean-candidate verification or
+publish this candidate until those dependencies and its exact verification are resolved.
+
+Local verification of the shared tree: **505 tests + 77 subtests passed**; the new
+startup admission module passed **13 tests**. Recovery alone passed **35 tests + 52
+subtests**, recovery with installed SDK passed **36 tests + 52 subtests**, and the
+receipt/payout/Nexus-fee/SDK shard passed **85 tests**. Compilation, dependency
+consistency, local Markdown links and whitespace passed. Literal inventory passed
+against a disposable index containing only this candidate (**274 active lines**).
+The shared tree still includes the pre-existing recovery and provider-v2 work; those
+files and the real Git index were not included in or modified by this repair.
+
+The historical review baseline and evidence below remain unchanged.
+
 **Reviewed runtime source HEAD:** `814c0ae8cbe0e65036a3b01d1eb8028e4dcb8ad3`.
 **Delta since the September 17 source:** `3da29ba` published review documentation and `814c0ae`
 changed `src/state_db.py`, `src/dashboard.py` and recovery tests. The separate unstaged/untracked

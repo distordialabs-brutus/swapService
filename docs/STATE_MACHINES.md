@@ -1,10 +1,15 @@
 # Swap Service State Machines
 
-**Scope:** one configured classic SPL token ↔ Nexus token pair. This describes the current
-tracked runtime plus explicitly identified local proposal boundaries. The offline execution gate
-passes, but the financial-safety exits below remain open.
-See [EVALUATION.md](EVALUATION.md) for current approval status. Historical dated notes and the full
-previous diagrams are preserved in the [pre-repair snapshot](POST_CHANGE_REVIEW_2026-09-13_PRE_REPAIR_DOCUMENTATION.md).
+**Current candidate scope (2026-09-22):** one configured classic SPL token ↔ Nexus token pair.
+The A/B/C repairs below are implemented and accepted in the dirty offline candidate. Final independent
+runtime review is APPROVED and the parent full gate passed (565 tests + 77 subtests). Nothing here approves production,
+live-chain operation or real funds. See [EVALUATION.md](EVALUATION.md) and the
+[A/B/C acceptance report](RECOVERY_INPUT_CAP_ACCEPTANCE.md).
+
+Provider-v2, optional receipt enablement and dependency upgrades are outside this repair. Historical
+dated notes are preserved below and in the
+[pre-repair snapshot](POST_CHANGE_REVIEW_2026-09-13_PRE_REPAIR_DOCUMENTATION.md); present-tense defect
+statements in those snapshots are superseded only where the current sections explicitly say so.
 
 ## Safety boundaries
 
@@ -30,16 +35,22 @@ flowchart TD
     Helius --> Validate[Validate full page and ordering]
     Core --> Validate
     Validate -->|incomplete or malformed enumeration| Stop[Hold cursor and public waterline]
-    Validate -->|exact positive deposit| Policy{Admission policy}
-    Policy -->|supported and finality satisfied| Queue[ready for processing]
-    Policy -->|unsupported shape or finality pending| Hold[Durable per-signature hold]
-    Queue --> Commit[Atomic rows + page evidence + continuation]
+    Validate -->|exact positive deposit| Queue[Persist ready source]
+    Validate -->|unsupported shape or finality pending| Hold[Durable per-signature evidence hold]
+    Queue --> Commit[Atomic source + page evidence + continuation]
     Hold --> Commit
     Commit -->|continuation remains| Query
     Commit -->|range complete| Checkpoint[Evaluate conservative public waterline]
     Hold --> Replay[Fair bounded replay using frozen provenance]
     Replay -->|exact evidence and required finality| Queue
     Replay -->|still unresolved| Hold
+    Queue --> Policy{Freeze shared exact input policy}
+    Policy -->|below minimum| PolicyHold[policy held, non-sendable<br/>retain full principal]
+    Policy -->|calculated output non-positive| PolicyHold
+    Policy -->|above maximum| Refund[to be refunded]
+    Policy -->|payable| Destination{Validate memo and destination}
+    Destination -->|invalid| Refund
+    Destination -->|valid| Debit[Persist Nexus debit intent]
 ```
 
 Helius is trusted; core RPC is not a mandatory second attestor. Bind provider continuations to
@@ -56,9 +67,15 @@ Status queries obey provider batch limits, and replay cannot repeatedly select o
 unsupported oldest window.
 
 Ordinary classic SPL `transfer` and `transferChecked` share exact vault-balance validation. An outer
-ATA creation and its matching inner initialization form one logical creation. Multiple incoming
-sources or memos remain held when one payable source/destination cannot be established. Every positive
-deposit enters the liability/fee/refund lifecycle; processing minimums must not silently filter history.
+ATA creation and its matching inner initialization form one logical creation. Every positive deposit
+enters durable liability state before economic admission; processing minimums never filter history.
+The worker freezes one pure strict-integer policy before destination validation. Classification order
+is below minimum, above maximum, non-positive output, then payable. Exact minimum/maximum are payable;
+decimal rescaling and flat-plus-basis-point fees use integer floor arithmetic. `MICRO_DEPOSIT_FEE_PCT`
+is intentionally unused because no percentage micro-deposit disposition is supported. Below-minimum
+and non-positive-output inputs retain full principal and book no fee. Payable invalid destinations and
+oversized inputs follow the established refund route. Submitted intent is not reclassified by later
+configuration changes.
 
 ## Public waterlines and database loss
 
@@ -86,25 +103,37 @@ gate, not something local fixtures prove.
 
 ```mermaid
 flowchart LR
-    Ready[ready for processing] -->|persist reference and terms| Flight[debit in flight]
+    Ready[ready for processing] --> Policy{Freeze input policy}
+    Policy -->|below minimum or non-positive output| PolicyHold[policy held, non-sendable]
+    Policy -->|above maximum| Refund[to be refunded]
+    Policy -->|payable + valid destination; persist terms| Flight[debit in flight]
+    Policy -->|payable + invalid destination| Refund
     Flight -->|returned txid recorded| Await[debited, awaiting confirmation]
     Flight -->|uncertain response| Unknown[debit unverified]
     Unknown -->|positive exact chain evidence| Await
     Await -->|exact confirmed Nexus contract| Done[debit_confirmed]
-    Ready -->|invalid destination/memo or over cap| Refund[to be refunded]
-    Ready -->|net output is not positive| Fees[processed, amount after fees <= 0]
-    Refund -->|intent + cap reservation + one send| RefundWait[refund sent, awaiting confirmation]
+    Refund --> PrepareRefund{Atomic typed preparation}
+    PrepareRefund -->|prepared; exactly one send| RefundWait[refund sent, awaiting confirmation]
+    PrepareRefund -->|capacity held| RefundCap[refund capacity held]
+    PrepareRefund -->|conflict/malformed/DB failure| RefundStop[distinct non-sendable outcome]
+    RefundCap -->|current cap admits original frozen terms| RefundWait
     RefundWait -->|exact finalized transfer| Refunded[refund_confirmed]
     Refund -->|eligible source cannot be refunded| Quarantine[to be quarantined]
-    Quarantine -->|intent + cap reservation + one send| QuarantineWait[quarantine sent, awaiting confirmation]
+    Quarantine --> PrepareQ{Atomic typed preparation}
+    PrepareQ -->|prepared; exactly one send| QuarantineWait[quarantine sent, awaiting confirmation]
+    PrepareQ -->|capacity held| QuarantineCap[quarantine capacity held]
+    PrepareQ -->|conflict/malformed/DB failure| QuarantineStop[distinct non-sendable outcome]
+    QuarantineCap -->|current cap admits original frozen terms| QuarantineWait
     QuarantineWait -->|exact finalized transfer| Quarantined[quarantine_confirmed]
 ```
 
-The diagram omits nonterminal retry/hold loops, not their controls. Unknown Nexus mint outcomes
-cannot be converted into a Solana refund merely because a bounded lookup is empty. Refund/quarantine
-workers freeze the source, resolved token-account recipient, exact output and versioned memo before
-submission; legacy rows without frozen terms remain held. Receipt publication never reopens this
-bridge payout lifecycle.
+Unknown Nexus mint outcomes cannot become Solana refunds merely because a bounded lookup is empty.
+Capacity-held retries parse and reuse the original destination, output, memo, source, fee and service
+terms; mutable configuration and address resolution cannot replace them. Admission applies current
+rolling capacity in global eligible-hold order; individually impossible holds retain full principal
+without blocking fitting work. Lifecycle conflict, malformed evidence, database failure,
+pre-RPC durable intent and unknown/submitted outcomes stay distinct and non-sendable. Receipt
+publication never reopens this payout lifecycle.
 
 ## Nexus token → Solana token lifecycle
 
@@ -134,20 +163,27 @@ mint, amount, memo and authoritative chronology. A conflicting active Nexus mint
 reconstruction instead of erasing a possible mint-and-refund conflict. Missing source memos use the
 same representation as normal persisted deposits.
 
-**Current `814c0ae` containment:** when no disposition row survives, current-v1 chain-only evidence
-restores actual cap spend and a full-principal `refund evidence held` / `quarantine evidence held`
-source. It creates no terminal row or fee, remains in unresolved-liability accounting, appears on the
-dashboard and is selected by neither send worker. Current-v1 still binds only kind and source signature;
-without surviving pre-submission terms, operator review is required.
+Current recovery accepts automatic terminal confirmation only with exact chain proof and strict frozen
+authorization provenance. `pre_submission_v1` JSON rejects duplicate keys, non-finite constants,
+booleans/integral floats for integer fields, incomplete fields and conflicting values; identifiers are
+byte-exact. Valid `legacy_pre_submission_v0` intent remains supported.
 
-**Open migration bypass:** the pre-`814c0ae` recovery could manufacture a terminal disposition row and
-fee from the same chain-only evidence. The current branch treats any matching existing terminal row as
-surviving frozen intent, but the schema has no provenance field proving that the row existed before the
-send. Consequently in-place upgrades and backups containing those legacy manufactured terminal rows
-retain the inferred fee and no unresolved source liability. Unknown provenance must be migrated to the
-same evidence-held state before this transition is safe. Genuine automatic terminal reconstruction
-requires durable pre-submission provenance plus exact source, kind, recipient, output, fee/terms and
-chain proof.
+At initialization, WAL selection precedes one migration transaction and `BEGIN IMMEDIATE` starts
+before schema or data migration. In-place upgrades, SQLite online backups and copied DB+WAL restores
+apply this idempotent rule:
+
+```text
+terminal + exact proven pre-submission intent + exact chain match
+  → preserve/confirm terminal disposition
+terminal + absent, malformed, recovery-only or unknown provenance
+  → retain proven cap spend + reverse inferred fee/unsafe terminal
+  → restore full source principal as refund/quarantine evidence held
+  → migration audit + no automatic send
+```
+
+Fresh chain-only current-v1 evidence follows the conservative second path. Any DDL/data failure rolls
+back the migration and releases the lock. A conflicting active Nexus mint lifecycle also holds
+reconstruction rather than erasing a possible mint-and-refund conflict.
 
 Confirmed cap consumption uses chain time, including refunds/quarantine before a newer heartbeat.
 The whole rolling window must be covered even when the recovery checkpoint is newer. Known primary
@@ -189,15 +225,24 @@ records cannot gain a receipt schema through a heartbeat update.
 | Four `*_txids` lifecycle tables | Composite Nexus source obligations and terminal evidence |
 | Provider cursor/event tables | Bound page continuation and completion evidence |
 | `solana_deposit_holds` | Unresolved principal, evidence, provenance and replay state |
+| Policy decision/evidence on source rows | Frozen shared economic admission and full-principal policy holds |
+| `solana_payout_capacity_holds` | Retryable refund/quarantine cap evidence and original frozen intent |
 | `solana_payout_budget_events` | Per-obligation reserved/submitted/confirmed/released cap accounting |
+| `solana_disposition_provenance_migrations` | Idempotent conservative migration and reversed-fee audit |
 | `nexus_transfer_intents` / audit events | Immutable operator disposition and attribution |
 | `swap_receipts` / `receipt_nxs_budget_events` | Publication obligation and NXS reservation |
 | `fee_entries` | Authoritative integer fee journal |
 
-SQLite uses WAL. Use `state_db.payout_budget_used(86400)` for rolling usage rather than summing one
-ledger by hand. Inspect unresolved lifecycle rows, holds, manual-review receipts and unresolved cap
-reservations together. Primary cap refusal has a durable dashboard-visible state; disposition cap
-refusal currently retains generic source states and structured diagnostics.
+SQLite uses WAL. Use runtime snapshot/accounting APIs rather than hand-summing one ledger. Inspect
+source rows, ingestion/policy/cap/evidence holds, migration audit and unresolved reservations together.
+Refund/quarantine preparation returns `prepared`, `capacity_held`, `current_cap_too_low`,
+`source_conflict`, `malformed_evidence`, `db_failure` or `already_submitted`. Retryable rolling waits
+use eligible FIFO order. A frozen payout above the current nonzero cap retains full principal and
+requires a reviewed cap change, not merely aging spend; impossible rows cannot starve fitting work
+even beyond the worker limit. A sufficient cap increase or established cap `0` restores eligibility
+using the unchanged frozen intent. Dashboard/API diagnostics and rate-limited alerts are emitted after durable transition.
+Alert failure cannot erase a hold or cause a send. Diagnose through these surfaces and the audited
+resolution workflow: **do not manually edit SQLite or bypass a hold with a direct token send**.
 
 Frozen compatibility examples include `reservations.kind=usdc_to_usdd_debit`, the
 `usdc_send:<txid>:<contract_id>` attempt key, legacy fee/table columns and existing status strings.
@@ -207,6 +252,12 @@ For settings/timeouts see [CONFIG.md](../CONFIG.md); for operator procedures see
 [SETUP.md](../SETUP.md) and [SECURITY.md](SECURITY.md). The runtime entrypoints are
 `poll_solana_deposits`, `poll_nexus_deposits`, `process_unprocessed_txids`,
 `check_unconfirmed_debits`, and `perform_startup_recovery` in their respective `src/` modules.
+
+## Preserved dated architecture history
+
+The addenda below are unchanged historical snapshots. Their statements that A/B/C transitions were
+missing or partial remain valid for those dated source versions but are superseded for the current
+dirty candidate by the architecture above. They are not production approvals or final-gate results.
 
 ## 2026-09-15 safety-architecture addendum
 

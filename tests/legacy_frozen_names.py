@@ -107,6 +107,12 @@ EXPECTED_SCHEMA = {
     # payout row; its append-only events retain capacity across unknown outcomes.
     "solana_payout_budget_events": ["id", "obligation_id", "kind", "event",
                                     "amount_usdc_units", "signature", "evidence", "timestamp"],
+    # Additive retry journal for cap-refused refund/quarantine obligations. The source
+    # lifecycle remains in unprocessed_sigs while exact frozen terms survive restart.
+    "solana_payout_capacity_holds": ["source_signature", "kind", "obligation_id",
+                                      "needed_units", "used_units", "cap_units",
+                                      "first_held_timestamp", "updated_timestamp", "reason",
+                                      "intent_evidence", "attempt_count"],
     # Provenance migrations append a durable audit record before converting a
     # pre-schema terminal disposition into an evidence hold.
     "solana_disposition_provenance_migrations": ["id", "kind", "source_signature",
@@ -169,8 +175,11 @@ EXPECTED_SCHEMA = {
                                   "expected_cost_nxs_units", "create_txid", "asset_address",
                                   "timestamp"],
     "reservations": ["kind", "key", "timestamp"],
+    # Additive input-policy evidence freezes source, decision and exact terms before
+    # any debit; pre-existing column names and legacy lifecycle values stay intact.
     "unprocessed_sigs": ["sig", "timestamp", "memo", "from_address", "amount_usdc_units",
-                         "amount_usdd_units", "status", "txid", "reference"],
+                         "amount_usdd_units", "status", "txid", "policy_decision",
+                         "policy_evidence", "reference"],
     "unprocessed_txids": ["txid", "contract_id", "timestamp", "amount_usdd", "from_address", "to_address",
                           "owner_from_address", "confirmations_credit", "status",
                           "receival_account", "sig", "amount_usdd_units", "hold_reason",

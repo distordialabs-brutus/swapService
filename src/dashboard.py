@@ -32,6 +32,7 @@ from urllib.parse import urlparse, parse_qs
 
 from . import state_db
 
+_cfg = None
 try:
     from . import config as _cfg
     SOL_DECIMALS = int(_cfg.SOLANA_TOKEN_DECIMALS)
@@ -48,9 +49,10 @@ except Exception:
 # Statuses that mean "a human should look at this".  The paired action maps turn a
 # raw state-machine label into an instruction that is safe for the operator to follow.
 SIG_ISSUE_STATUSES = (
+    "policy held, non-sendable",
     "debit unverified", "debit in flight", "debited, awaiting confirmation",
-    "to be refunded", "refund submission held", "refund evidence held", "refund sent, awaiting confirmation",
-    "to be quarantined", "quarantine submission held", "quarantine evidence held", "quarantine sent, awaiting confirmation",
+    "to be refunded", "refund capacity held", "refund submission held", "refund evidence held", "refund sent, awaiting confirmation",
+    "to be quarantined", "quarantine capacity held", "quarantine submission held", "quarantine evidence held", "quarantine sent, awaiting confirmation",
     "quarantine failed", "refund pending",
 )
 TXID_ISSUE_STATUSES = (
@@ -58,14 +60,23 @@ TXID_ISSUE_STATUSES = (
     "trade balance to be checked", "payout cap held", "sending", "sig created, awaiting confirmations",
 )
 SIG_OPERATOR_ACTIONS = {
+    "policy held, non-sendable": (
+        "retain the full principal; review policy evidence before manual disposition"
+    ),
     "debit in flight": "verify Nexus debit before any disposition",
     "debit unverified": "verify Nexus debit before any disposition",
     "debited, awaiting confirmation": "verify Nexus debit before any disposition",
     "to be refunded": "automatic Solana refund pending; inspect if stale",
+    "refund capacity held": (
+        "wait for rolling capacity; automatic retry preserves the frozen intent"
+    ),
     "refund submission held": "verify the ambiguous Solana refund before any disposition",
     "refund evidence held": "chain spend is proven but current-v1 terms are unresolved; do not terminalize or retry",
     "refund sent, awaiting confirmation": "verify Solana refund before any disposition",
     "to be quarantined": "automatic Solana quarantine pending; inspect if stale",
+    "quarantine capacity held": (
+        "wait for rolling capacity; automatic retry preserves the frozen intent"
+    ),
     "quarantine submission held": "verify the ambiguous Solana quarantine before any disposition",
     "quarantine evidence held": "chain spend is proven but current-v1 terms are unresolved; do not terminalize or retry",
     "quarantine sent, awaiting confirmation": "verify Solana quarantine before any disposition",
@@ -141,6 +152,9 @@ def api_summary() -> dict:
         "refunded_txids": _scalar("SELECT COUNT(*) FROM refunded_txids"),
         "quarantined_sigs": _scalar("SELECT COUNT(*) FROM quarantined_sigs"),
         "quarantined_txids": _scalar("SELECT COUNT(*) FROM quarantined_txids"),
+        "solana_payout_capacity_holds": _scalar(
+            "SELECT COUNT(*) FROM solana_payout_capacity_holds"
+        ),
     }
 
     cap = 0
@@ -196,10 +210,66 @@ def api_issues() -> dict:
     issues: list[dict] = []
 
     marks = ",".join("?" for _ in SIG_ISSUE_STATUSES)
+    try:
+        current_payout_cap = int(
+            getattr(_cfg, "DAILY_PAYOUT_CAP_SOLANA_UNITS", 0) or 0
+        )
+    except (NameError, TypeError, ValueError):
+        current_payout_cap = 0
     for r in _rows(
-        f"""SELECT sig, timestamp, status, amount_usdc_units, from_address, memo, reference
-            FROM unprocessed_sigs WHERE status IN ({marks})
-            ORDER BY timestamp ASC LIMIT 200""", SIG_ISSUE_STATUSES):
+        f"""SELECT u.sig, u.timestamp, u.status, u.amount_usdc_units,
+                   u.from_address, u.memo, u.reference,
+                   h.source_signature AS capacity_source_signature,
+                   h.kind AS capacity_kind, h.obligation_id AS capacity_obligation_id,
+                   h.needed_units AS capacity_needed_units,
+                   h.used_units AS capacity_used_units, h.cap_units AS capacity_cap_units,
+                   h.first_held_timestamp AS capacity_first_held_timestamp,
+                   h.updated_timestamp AS capacity_updated_timestamp,
+                   h.reason AS capacity_reason, h.attempt_count AS capacity_attempt_count
+            FROM unprocessed_sigs AS u
+            LEFT JOIN solana_payout_capacity_holds AS h
+              ON h.source_signature = u.sig
+            WHERE u.status IN ({marks})
+            ORDER BY u.timestamp ASC LIMIT 200""", SIG_ISSUE_STATUSES):
+        capacity_hold = None
+        capacity_detail = r.get("capacity_reason") or r.get("memo")
+        operator_action = SIG_OPERATOR_ACTIONS.get(
+            r["status"], "inspect chain evidence before disposition"
+        )
+        if r.get("capacity_source_signature") is not None:
+            capacity_hold = {
+                "source_signature": r["capacity_source_signature"],
+                "kind": r["capacity_kind"],
+                "obligation_id": r["capacity_obligation_id"],
+                "needed_units": r["capacity_needed_units"],
+                "used_units": r["capacity_used_units"],
+                "cap_units": r["capacity_cap_units"],
+                "first_held_timestamp": r["capacity_first_held_timestamp"],
+                "updated_timestamp": r["capacity_updated_timestamp"],
+                "reason": r["capacity_reason"],
+                "attempt_count": r["capacity_attempt_count"],
+            }
+            currently_too_large = (
+                current_payout_cap > 0
+                and type(r.get("capacity_needed_units")) is int
+                and r["capacity_needed_units"] > current_payout_cap
+            )
+            if currently_too_large:
+                capacity_detail = state_db.SOLANA_PAYOUT_CURRENT_CAP_TOO_LOW_REASON
+                operator_action = (
+                    "raise the payout cap to at least the frozen needed units; "
+                    "do not send manually; automatic retry resumes after a safe cap increase"
+                )
+            elif (
+                r.get("capacity_reason")
+                == state_db.SOLANA_PAYOUT_CURRENT_CAP_TOO_LOW_REASON
+            ):
+                capacity_detail = (
+                    "current payout cap admits the frozen payout; automatic retry pending"
+                )
+                operator_action = (
+                    "allow automatic retry; inspect if stale; do not send manually"
+                )
         issues.append({
             "kind": f"{SOL_SYM}→{NXS_SYM}",
             "id": r["sig"],
@@ -208,9 +278,10 @@ def api_issues() -> dict:
             "amount": _units(r.get("amount_usdc_units"), SOL_DECIMALS),
             "unit": SOL_SYM,
             "counterparty": r.get("from_address"),
-            "detail": r.get("memo"),
+            "detail": capacity_detail,
             "reference": r.get("reference"),
-            "operator_action": SIG_OPERATOR_ACTIONS.get(r["status"], "inspect chain evidence before disposition"),
+            "operator_action": operator_action,
+            "capacity_hold": capacity_hold,
         })
 
     marks = ",".join("?" for _ in TXID_ISSUE_STATUSES)
