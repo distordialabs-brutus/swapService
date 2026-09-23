@@ -184,6 +184,9 @@ EXPECTED_SCHEMA = {
                           "owner_from_address", "confirmations_credit", "status",
                           "receival_account", "sig", "amount_usdd_units", "hold_reason",
                           "payout_solana_units", "payout_fee_nexus_units"],
+    # Additive total-loss admission latch; initialization never clears it or rewrites
+    # custody rows. Existing-schema upgrade is covered by test_empty_database_recovery.
+    "recovery_admission_holds": ["id", "reason", "nexus_waterline", "solana_waterline"],
     "waterline_proposals": ["chain", "proposed_timestamp"],
 }
 

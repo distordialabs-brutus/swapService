@@ -1020,6 +1020,11 @@ class StartupReconstructionTests(unittest.TestCase):
                         ]) as rpc,
                     ):
                         state_db.init_db()
+                        # Retain source history: total loss refuses startup before scans.
+                        state_db.add_unprocessed_sig(
+                            SOLANA_DEPOSIT_SIGNATURE, 97000, "nexus:recipient",
+                            "recipient-token-account", 3_100_000, f"{kind} evidence held", None,
+                        )
                         if existing_budget:
                             self.assertTrue(state_db.reserve_solana_payout_budget(
                                 obligation_id="existing-reservation", kind="nexus_payout",
@@ -1098,7 +1103,7 @@ class StartupReconstructionTests(unittest.TestCase):
         self.assertEqual(result["error"], "legacy_nexus_payout_identity_unresolved")
         self.assertEqual(processed, [])
 
-    def test_wipeout_roundtrip_archives_paid_sibling_and_queues_only_unpaid_sibling(self):
+    def test_retained_history_roundtrip_archives_paid_sibling_and_queues_only_unpaid_sibling(self):
         tx = {
             "txid": NEXUS_TXID,
             "timestamp": 1_000,
@@ -1188,6 +1193,11 @@ class StartupReconstructionTests(unittest.TestCase):
                 patch.object(state_db.time, "time", return_value=1_001),
             ):
                 state_db.init_db()
+                # Preserve source history to exercise reconstruction past admission.
+                state_db.add_unprocessed_sig(
+                    SOLANA_REFUND_SOURCE_SIGNATURE, 950, "nexus:refund-recipient",
+                    "recipient-token-account", 110, "refund evidence held", None,
+                )
                 result = startup_recovery.perform_startup_recovery()
                 second_result = startup_recovery.perform_startup_recovery()
                 reconstructed_cap_used = state_db.payout_budget_used(86400)

@@ -686,6 +686,11 @@ def test_actual_startup_recovery_never_greens_an_incomplete_rolling_window_scan(
         nexus_client, "get_last_reference"
     ) as reference:
         state_db.init_db()
+        # Retained custody history reaches the scan-completeness gate.
+        state_db.add_unprocessed_sig(
+            "retained-source", 100, "nexus:recipient", "sender", 110,
+            "policy held, non-sendable", None,
+        )
         result = startup_recovery.perform_startup_recovery()
 
     assert result["recovery_complete"] is False

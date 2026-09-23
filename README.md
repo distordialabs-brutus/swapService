@@ -134,6 +134,13 @@ Processing time depends on chain finality, polling, asset discovery, RPC availab
 
 The current service requires valid custody checkpoints and affirmative complete startup recovery before exposure-producing loop work. Missing/zero waterlines, incompatible heartbeat data, incomplete scans and recovery errors refuse startup. Creating a heartbeat asset does not by itself establish a safe bootstrap checkpoint. Never set waterlines to the current time to bypass recovery.
 
+An empty custody database with nonzero checkpoints now creates a durable startup hold before
+chain reconstruction or polling. Restarting or inserting rows afterwards does not clear it.
+Restore an independently verified, coherent custody backup; do not delete the hold or seed rows
+to bypass admission. This also blocks automatic empty-database bootstrap. Partial/stale restores
+and source-specific reconciliation remain unresolved; an empty dashboard after refusal is not
+proof of zero liabilities. See the containment scope in [EVALUATION.md](docs/EVALUATION.md).
+
 Mutable multi-page Nexus offset scans cannot authorize checkpoint advancement. Previously discovered positive credits can be retained while coverage remains incomplete. Refer to [STATE_MACHINES.md](docs/STATE_MACHINES.md) for live processing and recovery invariants.
 
 ### Read-only operator dashboard

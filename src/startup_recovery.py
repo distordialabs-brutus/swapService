@@ -674,6 +674,29 @@ def perform_startup_recovery() -> dict:
             "error": "zero_or_missing_checkpoint:" + ",".join(missing),
         }
 
+    # Chain rediscovery cannot restore unsent policy/cap authorization lost with
+    # SQLite. Persist refusal *before* replay writes can make an empty DB nonempty.
+    try:
+        empty_custody_held = state_db.latch_empty_custody_recovery(
+            nexus_waterline=nexus_waterline, solana_waterline=solana_waterline,
+        )
+    except Exception:
+        return {
+            "recovery_complete": False,
+            "recovery_incomplete": True,
+            "error": "custody_recovery_admission_failed",
+        }
+    if empty_custody_held:
+        return {
+            "recovery_complete": False,
+            "recovery_incomplete": True,
+            "error": "empty_custody_database_recovery_held",
+            "operator_action": "restore a verified custody backup; do not seed rows or clear the hold",
+            "nexus_waterline": nexus_waterline,
+            "solana_waterline": solana_waterline,
+            "interrupted_nexus_transfers_held": interrupted_nexus_transfers_held,
+        }
+
     print(f"   Waterlines: Nexus={nexus_waterline}, Solana={solana_waterline}")
 
     try:

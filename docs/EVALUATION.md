@@ -1,5 +1,31 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
+## R-1 maintenance containment — empty-database startup
+
+**Implemented, narrow containment; R-1 is not closed.** Startup now records a durable
+`recovery_admission_holds` latch when validated nonzero custody checkpoints meet a database
+with no source lifecycle rows on either chain and no durable Solana deposit holds. It refuses
+reconstruction before either chain scanner or reference seeding can make that database look
+recovered. The normal `main.run()` gate reports `empty_custody_database_recovery_held` and
+does not start pollers. Reinitialization, newer checkpoints and later source insertion do not
+clear the latch; database read/write failures also refuse admission.
+
+This intentionally blocks an empty new deployment too: there is no safe automatic bootstrap
+exception and no latch-clearing command. Restore and independently verify a coherent custody
+backup; do not seed dummy rows, alter checkpoints or delete the hold to force startup. Presence
+of some retained rows is **not** proof of complete history or backup validity. Partial/stale
+restores, databases already populated by an older unsafe replay, source-specific reconciliation,
+quantified recovery visibility and an audited bootstrap/resolution protocol remain open under
+R-1/R-3. No principal is reconstructed by this containment path, so an empty dashboard after
+refusal must not be interpreted as zero liabilities or safe backing.
+
+Collected coverage in `tests/test_empty_database_recovery.py` exercises the real startup caller
+after DB/WAL loss of below-minimum, nonpositive-output, refund-cap and quarantine-cap holds;
+durable refusal across restarts; persistence failures; and online-backup/DB+WAL restoration of
+original disposition terms with exactly one mocked submission. Existing scanner tests retain
+source history to exercise reconstruction past this new admission gate. All chain boundaries
+are offline; this is not live-chain acceptance or independent release approval.
+
 ## Independent re-evaluation — 2026-09-23
 
 **Reviewed range:** `da79e0928c2dc7c39648734d9ad329637c87eae6..85030c890fa6f3bb7db97e068e5cf80827d21b28`.
@@ -66,9 +92,10 @@ of a demonstrated duplicate payment. Relevant paths: `startup_recovery.py:343-48
 `state_db.py:1742-1777,2306-2375`, `solana_client.py:1049-1063,1329-1390` at the reviewed HEAD.
 
 **Containment:** do not resume an existing deployment from an empty/recreated DB merely because
-source history can be rediscovered. Restore verified frozen evidence from backup, or keep
-processing paused pending reconciliation. This is a required operational restriction; current
-runtime does not enforce the full restriction automatically.
+source history can be rediscovered. The maintenance gate above now durably refuses startup from
+an empty custody database. Restore verified frozen evidence from backup, or keep processing
+paused pending reconciliation. The full source-specific restriction remains unimplemented for
+partial/stale restores or databases populated before the containment gate existed.
 
 **Exit:** either reconstruct exact historical authorization from durable evidence outside the
 lost DB, or retain every affected rediscovered source as a quantified, visible, non-sendable

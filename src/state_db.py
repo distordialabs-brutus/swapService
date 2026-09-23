@@ -302,6 +302,17 @@ def _init_db_with_connection(conn: sqlite3.Connection) -> None:
         )
     """)
     
+    # An empty custody database cannot recover unsent authorization from chains.
+    # This latch is never cleared by initialization, replay or ordinary startup.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS recovery_admission_holds (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            reason TEXT NOT NULL,
+            nexus_waterline INTEGER NOT NULL,
+            solana_waterline INTEGER NOT NULL
+        )
+    """)
+
     # Waterline proposals (ephemeral, cleared after applying to heartbeat)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS waterline_proposals (
@@ -1721,6 +1732,46 @@ def get_nexus_transfer_intents_by_status(statuses: tuple[str, ...], limit: int =
         ).fetchall()
         return [intent for row in rows
                 if (intent := _nexus_transfer_intent_dict(row)) is not None]
+    finally:
+        conn.close()
+
+
+def latch_empty_custody_recovery(*, nexus_waterline: int, solana_waterline: int) -> bool:
+    """Latch an empty-database restart before replay can manufacture local history.
+
+    Retained source rows only avoid this *total-loss* containment gate; their presence
+    is not proof of complete/valid history. Other recovery audits remain mandatory.
+    There is deliberately no automatic reset or new-deployment bootstrap override.
+    """
+    if any(type(value) is not int or value <= 0
+           for value in (nexus_waterline, solana_waterline)):
+        raise ValueError("recovery admission requires positive exact checkpoints")
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute("SELECT 1 FROM recovery_admission_holds LIMIT 1").fetchone():
+            conn.commit()
+            return True
+        tables = (
+            "unprocessed_sigs", "processed_sigs", "refunded_sigs", "quarantined_sigs",
+            "unprocessed_txids", "processed_txids", "refunded_txids", "quarantined_txids",
+            "solana_deposit_holds",
+        )
+        has_source_history = any(
+            conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
+            for table in tables
+        )
+        if not has_source_history:
+            conn.execute(
+                """INSERT INTO recovery_admission_holds
+                   (id, reason, nexus_waterline, solana_waterline) VALUES (1, ?, ?, ?)""",
+                ("empty_custody_database_recovery_held", nexus_waterline, solana_waterline),
+            )
+        conn.commit()
+        return not has_source_history
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
