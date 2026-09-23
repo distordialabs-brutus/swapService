@@ -1,13 +1,27 @@
 # Recovery, input policy and cap-hold implementation plan
 
-**Status — 2026-09-22:** A, B and C are complete and independently accepted offline.
+**Independent re-evaluation — 2026-09-23:** A/B/C remains committed in `85030c8`, and the
+complete offline gate remains green. Release is still blocked by loss of unsent policy/cap
+authorization after DB/WAL wipeout. A fresh real-worker probe adds a bounded retry defect: one
+oldest malformed capacity hold remains safely non-sendable but prevents a later valid fitting hold
+from progressing. Ordinary surviving-database restart tests and valid-evidence FIFO controls remain
+valid; they do not prove either total-loss reconstruction or progress around operator-action rows.
+The executable follow-up is [the September 23 plan](2026-09-23-financial-recovery-follow-up.md).
+The CI run for source SHA `85030c8` failed only its committed-range whitespace check on historical
+`.diff` artifacts, not runtime tests; that historical result does not determine a later documentation
+commit's CI result. This file remains the original A/B/C implementation record; its prior
+whole-candidate acceptance is scope-limited.
+
+**Original acceptance status:** A, B and C were independently accepted in the tested offline scope.
 The final runtime review approved all repairs, including frozen cap retries, conflict liability
 preservation and eligible-FIFO scheduling around impossible holds. Parent final verification:
 **565 passed, 77 subtests passed**, with all configured shards and static/repository checks green.
-No production, live-chain or real-funds approval is implied; changes remain unstaged/uncommitted.
+No production, live-chain or real-funds approval was implied. The dirty candidate was subsequently
+published as `85030c8`; this documentation-only re-evaluation stages/commits nothing.
 
-The original requirements below remain the acceptance contract. See the
-[acceptance report](../RECOVERY_INPUT_CAP_ACCEPTANCE.md) and linked independent review for evidence.
+The original requirements below remain the acceptance contract. See the published
+[historical acceptance report](../RECOVERY_INPUT_CAP_ACCEPTANCE.md) and its tracked independent
+closure review for evidence; newer qualifications are in the current evaluation and follow-up plan.
 
 **Goal:** Complete offline recovery acceptance, enforce Solana deposit admission, and make disposition cap holds durable and observable.
 
@@ -48,7 +62,8 @@ Files: `src/solana_client.py`, new pure policy module if appropriate, `src/state
 
 **Implemented outcome:** one pure strict-integer min/max/decimal/flat-plus-basis-point policy is frozen
 before destination routing for live and recovered inputs. Below-minimum and non-positive-output inputs
-retain full principal in a non-sendable policy hold; exact boundaries are payable and above-maximum
+retain full principal in a non-sendable policy hold; exact boundaries pass size checks (positive
+net output is still required), and above-maximum
 keeps the established refund route. `MICRO_DEPOSIT_FEE_PCT` remains unused because no supported
 percentage policy exists. Batch-scoped independent quality review approved; final candidate gate also passed.
 
@@ -80,3 +95,18 @@ configured shards, dependencies, compilation, links, inventory and whitespace pa
 hashes, real index and unrelated baseline files were verified unchanged. Historical counts remain
 source-attributed in the acceptance report. Do not stage, commit, push, enable receipts/provider-v2, upgrade
 dependencies or perform a live transaction as part of closing this plan.
+
+## September 23 follow-up boundary
+
+Do not reopen or weaken the verified A/B/C local controls while repairing the broader boundaries:
+
+1. Total DB-loss recovery must reconstruct exact historical unsent authorization from an independent
+   durable source, or retain every rediscovered principal in a quantified non-sendable recovery hold.
+2. Malformed, conflicting and unknown-submission capacity evidence must remain non-sendable, but it
+   must not remain in the automatic eligible FIFO if that blocks later valid original intents.
+3. Collected acceptance must traverse real startup, scan-page, policy and both disposition workers;
+   helper-only success is insufficient. Preserve principal, cap journals, diagnostics and exact-once
+   behavior through restart, multi-page replay, worker limits and configuration drift.
+4. Offline closure remains distinct from target Solana/Nexus acceptance and an exact-head release
+   decision. See [the current evaluation](../EVALUATION.md) and
+   [the executable follow-up plan](2026-09-23-financial-recovery-follow-up.md).

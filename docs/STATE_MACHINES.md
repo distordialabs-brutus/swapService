@@ -1,10 +1,15 @@
 # Swap Service State Machines
 
-**Current candidate scope (2026-09-22):** one configured classic SPL token ↔ Nexus token pair.
-The A/B/C repairs below are implemented and accepted in the dirty offline candidate. Final independent
-runtime review is APPROVED and the parent full gate passed (565 tests + 77 subtests). Nothing here approves production,
-live-chain operation or real funds. See [EVALUATION.md](EVALUATION.md) and the
-[A/B/C acceptance report](RECOVERY_INPUT_CAP_ACCEPTANCE.md).
+**Current candidate scope (2026-09-23):** one configured classic SPL token ↔ Nexus token pair.
+The reviewed source is `85030c890fa6f3bb7db97e068e5cf80827d21b28`; its offline full suite
+passes (565 tests + 77 subtests), but that does not establish live or total-loss acceptance.
+Nothing here approves production, live-chain operation or real funds. **Release remains blocked:**
+total DB/WAL loss can discard unsent B/C authorization and replay can regenerate a different
+economic decision. Separately, an oldest malformed capacity hold is non-sendable but can block a
+later valid fitting hold indefinitely. See [EVALUATION.md](EVALUATION.md), the
+[September 23 review](DEVELOPMENT_REVIEW_2026-09-23.md), and the
+[historical A/B/C acceptance report](RECOVERY_INPUT_CAP_ACCEPTANCE.md). Its published tracked version
+records the original offline scope; current total-loss and scheduler limits are stated here.
 
 Provider-v2, optional receipt enablement and dependency upgrades are outside this repair. Historical
 dated notes are preserved below and in the
@@ -70,12 +75,14 @@ Ordinary classic SPL `transfer` and `transferChecked` share exact vault-balance 
 ATA creation and its matching inner initialization form one logical creation. Every positive deposit
 enters durable liability state before economic admission; processing minimums never filter history.
 The worker freezes one pure strict-integer policy before destination validation. Classification order
-is below minimum, above maximum, non-positive output, then payable. Exact minimum/maximum are payable;
+is below minimum, above maximum, non-positive output, then payable. Exact minimum/maximum pass
+the size checks, but payout still requires positive output after conversion and fees;
 decimal rescaling and flat-plus-basis-point fees use integer floor arithmetic. `MICRO_DEPOSIT_FEE_PCT`
 is intentionally unused because no percentage micro-deposit disposition is supported. Below-minimum
 and non-positive-output inputs retain full principal and book no fee. Payable invalid destinations and
 oversized inputs follow the established refund route. Submitted intent is not reclassified by later
-configuration changes.
+configuration changes while the frozen evidence survives in SQLite. Total-loss recovery is not
+equivalent to restart; see the limitation below.
 
 ## Public waterlines and database loss
 
@@ -90,10 +97,18 @@ configuration changes.
 | Nexus mutable multi-page offset scan | Hold; positive rows do not establish complete enumeration |
 | Empty live Nexus enumeration | Hold as unproven absence |
 
-A durable **local** hold is not enough to pass an **external** recovery checkpoint: the local
-record can disappear with the database. Either keep the public checkpoint behind it or demonstrate
-complete reconstruction before startup succeeds. Do not initialize or move checkpoints to “now” to
-bypass custody history. A policy/configuration mismatch must not silently reinterpret a saved cursor.
+A durable **local** hold can disappear with the database. Keeping the public checkpoint behind it
+proves source rediscovery only, not reconstruction of its frozen economic authorization. **Current
+implementation gap:** after DB/WAL loss, startup can succeed without an unsent policy/cap hold;
+replay inserts a ready source and workers recompute policy/refund terms from current configuration.
+The review reproduced an oversized refund becoming a Nexus debit and a refund changing recipient,
+output and fee. See [R-1 and repair exits](EVALUATION.md).
+
+**Required, not yet implemented:** reconstruct exact historical authorization from surviving
+authoritative evidence or retain a quantified, visible, non-sendable recovery hold. Until then,
+do not resume a wiped existing deployment without verified frozen evidence or reconciliation.
+Do not move checkpoints to “now” to bypass history. Cursor query identity and economic
+authorization are distinct recovery requirements.
 
 Nexus startup currently accepts an empty first bounded page while rejecting a later mutable-offset
 page. The stricter live-poller rule differs; target-node completeness semantics remain an acceptance
@@ -129,10 +144,15 @@ flowchart LR
 
 Unknown Nexus mint outcomes cannot become Solana refunds merely because a bounded lookup is empty.
 Capacity-held retries parse and reuse the original destination, output, memo, source, fee and service
-terms; mutable configuration and address resolution cannot replace them. Admission applies current
-rolling capacity in global eligible-hold order; individually impossible holds retain full principal
-without blocking fitting work. Lifecycle conflict, malformed evidence, database failure,
-pre-RPC durable intent and unknown/submitted outcomes stay distinct and non-sendable. Receipt
+terms while their database evidence survives; wipeout replay currently loses that protection
+(R-1 above). With retained valid evidence, mutable configuration/address resolution cannot replace
+those terms. Admission applies current rolling capacity in global eligible-hold order; individually
+impossible holds retain full principal without blocking fitting work. Lifecycle conflict, malformed
+evidence, database failure, pre-RPC durable intent and unknown/submitted outcomes stay distinct and
+non-sendable. **Current scheduler qualification:** the global oldest-hold query still includes a
+malformed oldest row, so it can keep a later valid fitting hold in `capacity held` forever. This
+retains liabilities and causes no send, but violates progress; move such rows atomically to an
+operator-action class outside automatic FIFO before claiming complete retry fairness. Receipt
 publication never reopens this payout lifecycle.
 
 ## Nexus token → Solana token lifecycle
@@ -237,12 +257,18 @@ SQLite uses WAL. Use runtime snapshot/accounting APIs rather than hand-summing o
 source rows, ingestion/policy/cap/evidence holds, migration audit and unresolved reservations together.
 Refund/quarantine preparation returns `prepared`, `capacity_held`, `current_cap_too_low`,
 `source_conflict`, `malformed_evidence`, `db_failure` or `already_submitted`. Retryable rolling waits
-use eligible FIFO order. A frozen payout above the current nonzero cap retains full principal and
-requires a reviewed cap change, not merely aging spend; impossible rows cannot starve fitting work
-even beyond the worker limit. A sufficient cap increase or established cap `0` restores eligibility
-using the unchanged frozen intent. Dashboard/API diagnostics and rate-limited alerts are emitted after durable transition.
-Alert failure cannot erase a hold or cause a send. Diagnose through these surfaces and the audited
-resolution workflow: **do not manually edit SQLite or bypass a hold with a direct token send**.
+with valid evidence use eligible FIFO order. A frozen payout above the current nonzero cap retains
+full principal and requires a reviewed cap change, not merely aging spend; impossible rows cannot
+starve fitting work even beyond the worker limit. This guarantee currently excludes malformed or
+conflicting oldest holds, which remain safe but can block later automatic progress (R-1b). A
+sufficient cap increase or established cap `0` restores eligibility using the unchanged frozen
+intent only when that evidence validates. Dashboard/API diagnostics and rate-limited alerts are
+emitted after durable transition.
+Alert failure cannot erase a hold or cause a send. The audited operator workflow currently covers
+only an exact Nexus refund-hold family. Solana policy/evidence/conflict/malformed/unknown-submission
+holds lack an equivalent resolution command; do not treat dashboard visibility as that protocol.
+**Do not manually edit SQLite or bypass a hold with a direct token send**, including the unsafe
+legacy advice in `quarantine_viewer.py`. See R-3 in [the evaluation](EVALUATION.md).
 
 Frozen compatibility examples include `reservations.kind=usdc_to_usdd_debit`, the
 `usdc_send:<txid>:<contract_id>` attempt key, legacy fee/table columns and existing status strings.
@@ -253,11 +279,24 @@ For settings/timeouts see [CONFIG.md](../CONFIG.md); for operator procedures see
 `poll_solana_deposits`, `poll_nexus_deposits`, `process_unprocessed_txids`,
 `check_unconfirmed_debits`, and `perform_startup_recovery` in their respective `src/` modules.
 
+## Startup identity and provider contract limitations
+
+Incomplete recovery blocks startup, but failed heartbeat validation currently only alerts and
+can reach pollers. Known Solana hostname/label checks do not prove the authoritative network
+and freshness of a custom endpoint; Nexus network/sync/tip admission is not implemented.
+Fail-closed registration/chain admission is a required repair, not a property of these diagrams.
+
+Provider-v2 is committed library code with no production importer. Actual registration, heartbeat
+and recovery still use named v1 records; the parsed legacy opt-in flag is not enforced. V2 needs
+a target-valid storage layout and exact address/owner/schema/pair/custody validation through every
+caller before cutover. See R-2/R-5 in [the evaluation](EVALUATION.md).
+
 ## Preserved dated architecture history
 
 The addenda below are unchanged historical snapshots. Their statements that A/B/C transitions were
 missing or partial remain valid for those dated source versions but are superseded for the current
-dirty candidate by the architecture above. They are not production approvals or final-gate results.
+published candidate only within the qualified scope above. They are not production approvals or
+final-gate results.
 
 ## 2026-09-15 safety-architecture addendum
 

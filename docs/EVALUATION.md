@@ -1,384 +1,214 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
-## 2026-09-22 A/B/C repairs — offline acceptance approved
+## Independent re-evaluation — 2026-09-23
 
-The requested batches are complete in the dirty single-pair candidate based on
-`a1f19b109681da693331583e30fa192ccee17d2d`. Final independent runtime/integration review is
-**APPROVED**; the parent verified all reviewed runtime/test hashes and reran the full gate.
-This is **not approval for production, live-chain use or real funds**. Nothing was staged,
-committed, pushed or deployed.
+**Reviewed range:** `da79e0928c2dc7c39648734d9ad329637c87eae6..85030c890fa6f3bb7db97e068e5cf80827d21b28`.
+**Verdict: release blocked.** The committed A/B/C repairs pass the complete offline gate and provide
+meaningful safety while SQLite survives. They do not establish total-database-loss recovery of
+unsent authorization: a wiped deployment can rediscover principal, return startup recovery as
+complete, and authorize a different route or different refund terms. A fresh retry probe also
+shows that one oldest malformed capacity hold safely prevents sends but indefinitely blocks a
+later valid fitting hold, so the advertised eligible-FIFO retry has an operability exception.
 
-| Batch | Accepted offline behavior |
+This review changed documentation only. It did not change runtime/tests, stage the real index,
+commit, push, access production credentials, call a live chain, or move funds. The September 22
+review artifacts remain historical inputs; the complete September 23 evidence and commands are in
+the [dated development review](DEVELOPMENT_REVIEW_2026-09-23.md).
+
+The complete published `EVALUATION.md` snapshot replaced by this current issue register remains
+available at the immutable
+[reviewed source SHA](https://github.com/distordialabs-brutus/swapService/blob/85030c890fa6f3bb7db97e068e5cf80827d21b28/docs/EVALUATION.md).
+
+## Architecture and verified progress
+
+One process bridges one configured classic SPL token ↔ Nexus token pair. `config.SWAP_PAIR`
+contains token/custody identity, independent decimals and fee terms. Gross conversion is 1:1 in
+whole-token units before fees/rounding, not market pricing. Native SOL, Token-2022, arbitrary
+chains and simultaneous pairs remain outside scope. Helius is a trusted primary provider; a
+second attestor is not required. Exact amounts, success/finality and complete enumeration remain
+application responsibilities.
+
+| Area | Current implementation and acceptance boundary |
 |---|---|
-| A — recovery | Strict duplicate-key/exact-type provenance validation; atomic DDL/data migration with safe rollback and lock release; conservative full-principal evidence holds, inferred-fee reversal and preserved cap spend; in-place, online-backup and DB+WAL acceptance. |
-| B — minimum policy | Shared exact-integer min/max/decimal/fee classifier before destination/refund routing; below-minimum and nonpositive-output principal stays held without fees or sends; frozen decisions survive restart; live/recovery/public v1 terms agree. |
-| C — capacity holds | Typed atomic refusal/admission, needed/used/cap diagnostics, frozen-term retries, conflict liability retention and alerts. Payouts above the current nonzero cap stay held without starving fitting work, including across kinds and worker limits. |
+| A — disposition recovery, E-015/E-018 | Strict provenance parsing, conservative legacy-terminal migration, full-principal evidence holds, inferred-fee reversal and preserved proven cap spend. Atomic DDL/data rollback, in-place upgrade, online-backup and copied DB+WAL tests pass. This does not reconstruct an unsent B/C authorization that was lost with SQLite. |
+| B — Solana input policy | Shared strict-integer minimum/maximum/decimal/fee classifier runs before destination routing. Below-minimum/nonpositive-output holds retain principal without fees. Frozen decisions survive restart **when the database survives**. |
+| C — typed capacity holds | Durable typed outcomes, exact capacity diagnostics, liability/alert visibility, original-term retry and eligible FIFO are implemented for valid retained evidence. An individually impossible payout does not starve fitting work. A malformed oldest hold is fail-closed but can globally block a later valid fitting hold; see R-1b. Frozen retry requires retained intent evidence. |
+| Ingestion/finality | Positive principal is durably retained; query/provider continuation is bound; unsupported/finality evidence is held; liability totals use one SQLite snapshot. Public waterlines pin behind unresolved sources. Source rediscovery alone does not reconstruct historical authorization. |
+| Nexus identity/reconciliation, E-001–E-004/E-014 | Composite `(txid, contract_id)` identity, exact payout evidence, integer math and fail-closed backing controls remain. Automatic Nexus compensating transfers remain disabled; a narrow explicit operator protocol exists. |
+| Optional receipts, E-016 | Durable outbox and independent positive-evidence/budget controls remain; production enablement is separately blocked pending cost/schema/target-chain acceptance. |
+| Provider-v2 | Builder/validator and tests are committed, but registration, heartbeat, recovery and inspection still use v1. This is library-only implementation, not a default-v2 runtime migration. |
 
-**Parent gate:** 565 tests + 77 subtests passed. Separate shards: recovery 35 + 52 subtests;
-recovery/SDK 36 + 52 subtests; receipt/payout/Nexus-fee/SDK 85; policy/cap/recovery acceptance
-129. Dependency consistency, compilation, Markdown links, whitespace and disposable-index
-inventory (274 active lines) passed. Real Git index and baseline unrelated files are unchanged.
+See [state machines](STATE_MACHINES.md) and the published
+[historical A/B/C acceptance record](RECOVERY_INPUT_CAP_ACCEPTANCE.md). That tracked record documents
+the original tested scope; the total-loss and scheduler qualifications in this evaluation are newer.
 
-See the [acceptance report](RECOVERY_INPUT_CAP_ACCEPTANCE.md) and
-[independent closure review](review_evidence/2026-09-22/final-runtime-review.md) for exact scope,
-reviewed hashes and the historical RED/GREEN record. Earlier counts below belong to their dated
-snapshots and are not the current acceptance result.
+## Remaining findings, in repair order
 
-### Remaining release gates
+### R-1 — High: lost unsent policy/cap intent can be reinterpreted after database loss
 
-1. Explicitly authorized devnet/test infrastructure: both directions, provider pagination/finality,
-   authoritative chain readback, crash/unknown outcomes and actual backup operations.
-2. Operational acceptance: alerts, incident response, hold-resolution and key-rotation rehearsal.
-3. A separate publication/release decision and exact-commit CI; this dirty candidate includes
-   preserved provider-v2/config work that this repair neither integrates nor approves. Rebuild the
-   inventory for the precise publication scope. Optional receipts remain outside this acceptance.
+The real startup caller can return `recovery_complete=True` after total DB/WAL loss even though
+no outgoing transaction exists from which to reconstruct an unsent hold. Incoming replay then
+inserts a ready source with no policy evidence. Workers classify it using current configuration.
 
-## Historical snapshot — 2026-09-22 startup containment before A/B/C completion
+The parent independently reran both offline reviewer probes with dotenv loading and socket
+connections disabled, temporary databases and mocked chain/send boundaries:
 
-> This section is preserved verbatim as a dated pre-completion snapshot. Its statements that strict
-> migration, the shared classifier or typed capacity holds were missing are superseded for the current
-> dirty candidate by the status above. Its test counts describe that snapshot only.
+- A 1,100-unit deposit classified above max 1,000 froze a refund of 1,090 with fee 10 and was
+  capacity-held. The public waterline correctly stayed behind the source. After database loss
+  and a max increase to 2,000, startup returned complete and the deposit worker invoked the
+  mocked Nexus debit for 1,100 instead of retaining the original refund obligation.
+- With the oversized-refund route unchanged, losing the DB and changing fee/destination produced
+  a mocked refund of 1,080 to a changed destination instead of the original 1,090/fee-10 intent.
 
-The `a1f19b1` provenance repair already migrates legacy disposition terminals when
-chain evidence rediscovers them. It does not by itself prevent an older terminal
-outside the bounded recovery scan from retaining an inferred fee and no liability.
-The local startup candidate audits both persisted terminal tables in one read
-snapshot before heartbeat/history lookup. Missing or rejected provenance refuses
-startup with `solana_terminal_provenance_unresolved`; a schema/read failure returns
-`solana_terminal_provenance_audit_failed`. The guard does not manufacture cap spend,
-rewrite fees, or treat a current fee configuration as historical authorization.
+The second probe isolates replay plus the refund worker; the first includes actual startup and
+waterline callers. These are reproducible offline contract mutations, not claims of live loss or
+of a demonstrated duplicate payment. Relevant paths: `startup_recovery.py:343-481,607-843`,
+`state_db.py:1742-1777,2306-2375`, `solana_client.py:1049-1063,1329-1390` at the reviewed HEAD.
 
-Focused collected coverage exercises both disposition kinds, absent/unknown/recovery-only
-provenance, a current marker without matching evidence, accepted current and migrated-v0
-intent, and failed audit lock release. This is containment, **not closure of the P0
-migration gate**: conservative quantified-hold migration, backup/WAL acceptance and
-strict provenance validation remain required. In particular, the committed validator
-still permits JSON boolean/integer equality and duplicate keys; its stricter replacement
-is part of separate pre-existing uncommitted work and is not included in this candidate.
-An isolated HEAD-plus-candidate execution was denied by unattended execution policy.
-Do not interpret shared-working-tree test results as clean-candidate verification or
-publish this candidate until those dependencies and its exact verification are resolved.
+**Containment:** do not resume an existing deployment from an empty/recreated DB merely because
+source history can be rediscovered. Restore verified frozen evidence from backup, or keep
+processing paused pending reconciliation. This is a required operational restriction; current
+runtime does not enforce the full restriction automatically.
 
-Local verification of the shared tree: **505 tests + 77 subtests passed**; the new
-startup admission module passed **13 tests**. Recovery alone passed **35 tests + 52
-subtests**, recovery with installed SDK passed **36 tests + 52 subtests**, and the
-receipt/payout/Nexus-fee/SDK shard passed **85 tests**. Compilation, dependency
-consistency, local Markdown links and whitespace passed. Literal inventory passed
-against a disposable index containing only this candidate (**274 active lines**).
-The shared tree still includes the pre-existing recovery and provider-v2 work; those
-files and the real Git index were not included in or modified by this repair.
+**Exit:** either reconstruct exact historical authorization from durable evidence outside the
+lost DB, or retain every affected rediscovered source as a quantified, visible, non-sendable
+recovery hold. Test below-minimum/nonpositive policy holds and refund/quarantine cap holds through
+DB/WAL loss, policy/fee/destination drift, multi-page replay and worker limits. Assert zero sends
+without restored authorization, liability conservation and no inferred fee. Separately prove
+verified backup restoration sends the original destination/output/memo/fee exactly once.
 
-The historical review baseline and evidence below remain unchanged.
+### R-1b — High operability: malformed oldest capacity evidence blocks later valid retries
 
-**Reviewed runtime source HEAD:** `814c0ae8cbe0e65036a3b01d1eb8028e4dcb8ad3`.
-**Delta since the September 17 source:** `3da29ba` published review documentation and `814c0ae`
-changed `src/state_db.py`, `src/dashboard.py` and recovery tests. The separate unstaged/untracked
-provider-v2 proposal remains outside the deployable runtime.
-**Status:** fresh chain-only disposition recovery is contained, but an upgrade/back-up migration bypass
-and two previously identified financial-state blockers remain; **not approved for real funds**.
+The retry protocol correctly refuses malformed frozen evidence and retains all principal. However,
+its global FIFO query still treats that unresolved row as the oldest eligible hold. A fresh real-worker
+probe created two ordinary refund capacity holds, corrupted only the older hold's frozen JSON, released
+the blocking budget, and ran the worker twice. Both runs returned zero; the valid younger 50-unit
+refund remained `refund capacity held`, its attempt count increased from 1 to 3 with reason
+`waiting behind older Solana payout capacity hold`, zero sends occurred, and the full 120-unit
+liability remained. This is safe containment, but not progress or the claimed eligible-FIFO behavior.
+The probe is session scratch only; its SHA-256 and exact output are recorded in the September 23 review.
 
-This is the current issue register. The complete earlier evaluation and state-machine notes,
-including pre-existing staged documentation, are preserved in the
-[pre-repair snapshot](POST_CHANGE_REVIEW_2026-09-13_PRE_REPAIR_DOCUMENTATION.md).
-Dated reviews describe their own snapshots, not the current working tree.
+Relevant code is `state_db.py:4158-4214,4770-4830` and
+`solana_client.py:1289-1409`: loading the oldest hold returns `malformed_evidence`, while the later
+valid prepare still selects that malformed source in the global oldest-hold query. The existing
+suite covers malformed refusal, but not a younger fitting obligation behind it.
 
-## Architecture and scope
+**Exit:** keep malformed/source-conflict/unknown-submission evidence non-sendable, but remove it from
+automatic eligible FIFO after atomically promoting it to a distinct operator-action queue, or define
+another durable scheduler disposition that cannot authorize transport. Add real refund and quarantine
+worker tests with a malformed/conflicting oldest row, more rows than the worker limit, restart, alert
+deduplication and later reviewed resolution. Require the younger valid original intent to submit
+exactly once without deleting or reducing the blocked row's liability.
 
-One process bridges one configured classic-SPL-token/Nexus-token pair. `config.SWAP_PAIR`
-provides immutable token/custody identities, independent decimals, display metadata and fee terms.
-Gross conversion is 1:1 in whole-token units before fees and rounding; this is not market pricing.
-Native SOL, Token-2022, arbitrary-chain routing and simultaneous pairs are not implemented.
+### R-2 — High deployment-safety gap: invalid registration is alert-only
 
-Helius is a **trusted primary Solana history provider**, not an untrusted hint requiring a second
-attestor. Application validation still requires correct network selection, exact integer amounts,
-transaction success/finality and durable continuation. Core RPC is an operational alternative;
-one provider's cursor must never be interpreted under another query or network.
+`src/main.py:370-379` reports failed heartbeat validation or an exception but does not return;
+execution can continue to pollers. The independent reviewer exercised that path offline. The
+current validator checks readability/fields/parseable waterlines, not complete owner/address/
+pair/terms identity. Authoritative network and freshness admission is also missing: known Solana
+hostname/label checks exist, but custom endpoints are not checked against genesis/health/root
+freshness, and Nexus network/sync/tip freshness is not an enforced startup gate.
 
-Every financial side effect follows:
+**Exit:** add explicit fail-closed registration and authoritative chain-identity/freshness admission
+before mutable startup/polling. Test mismatch, unavailable evidence, stale/unsynced nodes and
+validator exceptions with zero poller/chain-write calls; validate semantics on intended nodes.
+Do not equate a configured network label or a successful recovery mock with this gate.
 
-```text
-persist intent → execute once → record remote identity →
-resolve uncertain outcome against the chain → finalize atomically
-```
+### R-3 — High operability gate: non-capacity Solana holds lack audited resolution
 
-A timeout is not failure. A bounded empty lookup is not proof of non-execution. A finalized
-signature alone does not prove the intended transfer. Unknown outcomes retain liabilities and
-budget capacity. Public recovery waterlines must not pass unresolved obligations that would be
-lost with the database.
+Capacity-only holds can retry their retained original intent. Policy, recovery-evidence,
+malformed-evidence, source/lifecycle-conflict and unknown-submission holds have no corresponding
+audited Solana resolution command. Dashboard visibility is not a disposition protocol.
+`nexus_transfer_operator.py` handles only an exact Nexus refund-hold family; actor strings do
+not enforce distinct human approval roles.
 
-## Current repair batch
+**Do not follow** the direct-chain-transfer/manual-DB advice in `quarantine_viewer.py:409-418`.
+It bypasses intent/cap/evidence protocols. The source text is flagged for repair, not changed in
+this documentation-only review.
 
-| Area | Implementation / required acceptance |
+**Exit:** implement an evidence-bound operator protocol, or explicitly approve permanent retention
+as policy. Require actor/rationale, competing-state checks, authoritative exact readback,
+capacity accounting, atomic terminalization, replay/crash tests and no blind retries. If two-person
+approval is required, enforce distinct identities rather than merely recording labels.
+
+### R-4 — Publication gate: verify the new exact head independently of source-SHA history
+
+[CI run 35755684698](https://github.com/distordialabs-brutus/swapService/actions/runs/35755684698)
+for source SHA `85030c890fa6f3bb7db97e068e5cf80827d21b28` passed dependency, compile, Markdown,
+full-suite and isolation steps, then
+failed `git diff --check HEAD~1 HEAD`. Local reproduction reports 194 whitespace findings in
+`docs/review_evidence/2026-09-15/committed-since-sept12.diff` and 2 in `dirty-config.diff`.
+This is a historical result for that source SHA and a committed-artifact failure, not a failed
+runtime test. It does not predict the result for a later documentation commit whose `HEAD~1..HEAD`
+delta does not rewrite those raw forensic `.diff` bytes.
+
+**Exit:** after the five review documents are staged, run the index-aware inventory and candidate
+whitespace/link gates, then verify CI for the resulting exact publication SHA. Do not rewrite raw
+forensic `.diff` bytes merely to repair the earlier source-SHA run; any future archival normalization
+must be separately scoped and preserve provenance. The artifacts were not rewritten here.
+
+### R-5 — Provider-v2 cutover remains a separate, blocked migration
+
+`src/service_record.py` has no production importer. `ALLOW_LEGACY_PROVIDER_V1` is parsed but
+inert; runtime v1 is not disabled by its false default. Immutable asset address, expected owner,
+service ID and Nexus network settings do not currently protect registration/recovery callers.
+The reviewer and parent measured the v2 fixture with `last_poll=0` at 1,448 bytes using the repository's
+`service_record_size()` estimator, above its declared 1,024-byte budget. This is **not** proof of
+the target node's exact encoded size limit; it blocks assuming the proposed record fits.
+
+**Exit:** choose and verify a target-valid storage layout before any NXS-spending create, then
+wire address-selected create/read/update, startup, heartbeat and recovery to one identity policy.
+Enforce explicit legacy opt-in, exact owner/type/schema/service/pair/custody, monotonic terms,
+secret-safe publication and agreement between published economics and executable policy. Test
+multiple assets, name/address disagreement, readback delay, oversize rejection and migration on
+the intended Nexus build. Provider-v2 is not a prerequisite to repairing R-1 in the existing
+single-pair bridge; committing the library does not make it integrated.
+
+## Fresh verification at the reviewed runtime — 2026-09-23
+
+The reviewed runtime/test paths remained at the published HEAD hashes before and after execution.
+The real index tree remained `a89d8904a200cafce86a5ecd002fa90978f2be13` and had no cached diff.
+
+| Executed offline gate | Result |
 |---|---|
-| Trusted Helius ingestion | Full parsed pages, fixed query identity and atomic provider-token persistence are integrated. Endpoint precedence, known-network conflict rejection and unambiguous API-key network selection are regression-tested. The final review exposed an already-finalized replay bypass; replay now validates the actual provider endpoint before every promotion. Independent closure review passed. |
-| Finality and unsupported evidence | Holds freeze provenance and retain principal as a liability; unknown amounts fail accounting closed. Public recovery waterlines remain behind holds. Replay uses ≤256-signature status batches, validates all batches before promotion and fairly reaches beyond 1,000 holds. Liability reads use one SQLite snapshot during concurrent promotion. |
-| Classic SPL parsing | Exact vault deltas support ordinary classic-SPL transfers. A matching outer ATA-create/inner-initialization bundle is recognized as one creation; ambiguous sources, duplicate or conflicting evidence remain held. |
-| Refund/quarantine recovery — E-015, E-018 | `814c0ae` contains fresh current-v1 chain-only evidence: it records exact proven cap spend, creates no terminal row/fee, retains the complete source principal in an evidence hold and exposes that hold on the dashboard. **Open P0 migration bypass:** a terminal row manufactured by the pre-`814c0ae` recovery is accepted as if it proved pre-submission frozen intent; replay can preserve the old inferred fee and missing liability. Existing terminal rows/backups require provenance-aware migration or conservative hold before this exit closes. |
-| Receipt outbox — E-016 | Settlement atomically retains an owner-independent obligation. Builder/payload failures enter explicit manual review. The shared all-string schema rejects overflowing JSON numbers before coercion; publication continues to valid later rows. Authenticated owner binding and budgeted one-shot creation remain separate. Focused independent receipt review/testing passed; its optional hash audit was incomplete. |
-| Simplification — E-010 | Shared receipt contract, one authoritative durable ingestion/admission path, one registration lookup per publication batch and completed-query seen-row cleanup reduce duplicate policy and work. Non-durable scanner helpers and the budget-bypassing receipt claim were retired; database compatibility remains supported. |
-| Test isolation — E-005, E-017 | Shared offline defaults support standalone modules, real installed-SDK checks and deposit/critical-safety collection in both orders. These gates pass on the current candidate. |
+| `.venv/bin/python -m pytest -q` | **565 passed, 77 subtests passed in 66.89s** |
+| Recovery standalone | **35 passed, 52 subtests passed in 2.21s** |
+| Recovery plus installed SDK boundary | **36 passed, 52 subtests passed in 2.62s** |
+| Receipt/payout/Nexus-fee/SDK shard | **85 passed in 7.12s** |
+| Provenance migration + terminal admission + deposit policy + capacity holds | **129 passed in 13.25s** |
+| Legacy script/frozen-name gate | **5 passed in 1.41s** |
+| Dependency consistency, byte compilation, Markdown links | Passed |
+| Token-literal inventory | Passed; **274 active lines** |
+| Working documentation whitespace | `git diff --check` passed |
+| Two total-DB-loss probes | Both reproduced R-1; no live calls and not default-collected tests |
+| Malformed-oldest capacity probe | Reproduced R-1b: **0 sends, 120 units retained, valid younger hold did not progress** |
+| Source-SHA CI history | Run `35755684698` for `85030c8` **failed on committed historical-artifact whitespace**, not runtime tests; the future publication head is untested |
 
-### Verified current candidate
+The green suite preserves evidence for local provenance migration, retained-database policy and valid
+capacity retries; it does not close either fresh integration finding or any live-chain gate. Runtime
+and test SHA-256 values, exact commands, probe hashes/output and the complete review-authored path list
+are in the [September 23 review](DEVELOPMENT_REVIEW_2026-09-23.md). Earlier independent reviewer
+artifacts remain only as excluded local worktree files under `docs/review_evidence/2026-09-22/`,
+including `REEVALUATION.md`; they are not published links or dependencies of these five documents.
 
-The parent reran these gates against a disposable index containing the actual working candidate,
-including new files. The real staged entries were byte-for-byte unchanged by that verification.
+## Development and release sequence
 
-| Gate | Actual result |
-|---|---|
-| Full pytest suite | **405 tests + 71 subtests passed** |
-| Helius ingestion + deposit scanner | **70 tests passed** |
-| Recovery standalone | **33 tests + 46 subtests passed** |
-| Recovery + installed-SDK boundary | **34 tests + 46 subtests passed** |
-| Receipt + payout + Nexus fee lifecycle + SDK | **85 tests passed** |
-| Deposit then critical safety | **169 tests + 25 subtests passed** |
-| Critical safety then deposit | **169 tests + 25 subtests passed** |
-| Dependency consistency / compilation / Markdown links / whitespace | Passed |
-| Candidate token-literal inventory | Passed; **274 active lines** |
+1. **Contain/repair R-1 first**, adding collected end-to-end regression tests before runtime fixes.
+   Keep A's safe migration and B/C's valid surviving-database controls; do not undo them.
+2. Repair R-1b without releasing malformed/conflicting evidence to transport: separate operator-action
+   holds from eligible automatic FIFO and prove later valid work progresses with liability conserved.
+3. Close R-2 admission and R-3 audited resolution with independent caller-level review. For R-4,
+   verify the exact five-document publication candidate and its resulting CI without changing the
+   excluded raw forensic artifacts; neither whitespace nor a green suite closes R-1.
+4. Keep provider-v2 and receipts disabled/unclaimed as runtime capabilities until their separate
+   migration/cost gates pass. Preserve compatibility; no dependency upgrade is part of this review.
+5. On explicitly approved Solana devnet/Nexus test infrastructure, run both directions, mixed
+   decimals, provider pagination/concurrent arrivals, finality, exact readback, Nexus references,
+   accepted-but-unparsed/timeout outcomes, durable-boundary crashes, backup/WAL and total-loss
+   recovery. Rehearse alerts, holds, incident response, key rotation and TLS/session controls.
+6. Re-review the final runtime identity, run the complete configured gate, then make a separate
+   release decision. Production and real funds remain blocked; no live acceptance was performed.
 
-These are offline results, not live-chain acceptance. The final independent ingestion review and
-its narrow replay-provider closure review completed; the latter independently passed the same
-70-test ingestion/scanner suite and additional core-replay probes. Runtime code was held unchanged
-during that review and the final full-suite verification. See the [repair report](POST_CHANGE_REVIEW_2026-09-13_BLOCKERS.md).
-
-### Applied cleanup and deliberately retained boundaries
-
-- Removed `fetch_incoming_deposits_via_helius`, `_fetch_deposits_helius`,
-  `_fetch_deposits_core_rpc`, `process_helius_deposits`, `core_get_transactions_for_address`
-  and `get_signatures_confirmation`; parser/SDK coverage now exercises authoritative scanners.
-- Removed the ingestion `min_units` parameter: all positive principal must enter the liability
-  lifecycle, where processing policy may classify it. History filtering cannot discard it.
-- Centralized pure receipt schema/name validation in `receipt_contract.py`; independent exact-payout
-  validation at the database boundary remains intentional defense, not duplicate code to delete.
-- Purged completed-query `scan_seen` rows atomically and reused provider registration within a receipt
-  batch. Kept immutable hold provenance, explicit unknown-outcome states and frozen database names.
-- Deferred broader typed-evidence/DB-layer restructuring and combined recovery-history projections:
-  these change safety-critical interfaces and are not justified as cosmetic cleanup.
-
-## Existing controls retained
-
-- **E-014:** Nexus source identity is `(txid, contract_id)` throughout admission, payout memos,
-  operator intents and terminalization; an unpaid sibling remains independent. Legacy identity
-  sentinels cannot authorize a guessed fresh transfer.
-- **E-001 / E-007:** automatic Nexus refunds/quarantine remain disabled. The separate operator
-  workflow prepares, authorizes, executes once, resolves positive evidence and finalizes one exact
-  source. Live operational acceptance remains required.
-- **E-002:** no heuristic amount filter hides Nexus credits. Mutable multi-page offset scans hold
-  checkpoints; processing-only passes cannot claim enumeration completeness.
-- **E-003 / E-004:** exact mixed-decimal money calculations and durable completed-payout evidence
-  support fail-closed reconciliation. Errors/unhealthy results latch an exposure pause.
-- **E-008 / E-009 / E-012:** explicit production admission requires configured pair/fee terms,
-  positive exposure caps, alerting, quarantine destinations and authenticated Nexus HTTPS transport.
-  The dashboard uses bearer-header authentication, not query tokens. Live TLS/proxy/alert verification
-  remains an operator gate.
-- **E-013:** earlier compatibility-tested dependency remediation is retained. This repair does not
-  upgrade dependencies; a dependency-consistency check is not a fresh vulnerability audit.
-- **E-011:** current documentation is separated from historical evidence. Persisted legacy names
-  are migration contracts, not proof that the bridge only supports its original token pair.
-
-## Remaining release gates
-
-### Local execution gate — green; safety review remains open
-
-- Full suite, focused financial regressions and installed-SDK/config-order shards passed.
-- Dependency consistency, byte compilation, local Markdown links and whitespace passed.
-- Token-literal inventory passed against the actual candidate in a disposable index; real staged
-  entries were unchanged. The working candidate has not been staged or committed.
-- The September 15 review identified three committed-runtime blockers. `814c0ae` closes the fresh-wipeout
-  unsafe branch but not the upgrade/back-up branch: terminal rows created by the earlier lossy recovery
-  have no provenance marker and are still accepted as frozen intent. Solana input processing still lacks
-  the post-ingestion minimum classifier, and disposition cap refusal still lacks typed durable state/alert.
-  The September 21 exact-HEAD bypass probes reproduce both remaining behaviors and the legacy-terminal
-  migration bypass while proving the new evidence hold itself is non-sendable and liability-counted.
-- The earlier optional receipt hash audit did not complete; no signed/full hash attestation is claimed.
-
-Any subsequent runtime edit requires renewed affected-path review and test verification.
-
-### Target-chain acceptance — E-006
-
-These are **not established by offline fixtures**:
-
-- Helius target-network history, real nested transaction shapes, continuation/restart, confirmed
-  versus finalized behavior and concurrent arrivals over bounded ranges.
-- Both bridge directions, mixed decimals, refund/quarantine, and exact authoritative readback.
-- Accepted-but-unparsed responses, timeout before/after acceptance, crashes at durable boundaries,
-  backup/WAL restore and database-loss reconstruction without skipped deposits or double payout.
-- Nexus reference/contract fields, pagination/completeness, TLS and POST semantics on the intended build.
-
-No live financial transaction is authorized by this repair. Run the matrix on explicitly approved
-Solana devnet and Nexus test infrastructure before any production decision.
-
-### Optional receipts — E-016
-
-Receipt assets and names spend operator NXS. Keep `NEXUS_SWAP_RECEIPTS_ENABLED=false` for production;
-the admission gate still rejects an explicit enablement. Required separate acceptance covers the
-actual creation/name cost, budget adequacy, timeout-after-acceptance, indexing delay, exact owner and
-payload readback, duplicate detection, and receipt-capable registration migration. A fixed-field v1
-asset cannot gain `receipt_schema` through a heartbeat update.
-
-### Operations — E-007 / E-009
-
-Rehearse hold resolution, alert delivery, incident response, backups and key rotation. Maintain
-independent authorization for ambiguous financial dispositions. Unknown/legacy evidence remains
-held, not silently rewritten or released by an upgrade.
-
-## Prioritized development plan
-
-1. **P0 — finish disposition-recovery migration safety.** Keep the `814c0ae` fresh-chain hold. Add
-   durable provenance that distinguishes an intent frozen before submission from a terminal row created
-   by legacy chain-only reconstruction; migrate every existing/refetched `refund_confirmed` and
-   `quarantine_confirmed` row conservatively. Unknown provenance must restore proven cap spend but move
-   the source into a quantified operator hold with no inferred fee. Audit backup/WAL and in-place upgrades.
-2. **P1 — shared Solana-input admission policy.** Add one exact minimum/micro classifier used by live
-   processing and recovery without restoring lossy history filtering.
-3. **P1 — typed disposition-cap hold.** Persist dashboard-visible and alerted disposition cap-refusal
-   evidence separately from lifecycle/evidence conflicts.
-4. Repair and independently review those boundaries, then execute the target-chain matrix and operator
-   rehearsals with recorded authoritative evidence.
-5. Enable optional receipts only after their separate cost/schema gate; otherwise leave them disabled.
-6. Pursue provider-v2 and remaining configuration consolidation as a separate versioned migration,
-   after its published fields map to enforced runtime policy and its secret/publication controls pass.
-
-### Batch 7 — Complete configurability and provider asset v2 **(in progress; provider v2 remains documentation only)**
-
-The implemented canonical pair object is not the planned provider-v2 contract. Remaining work:
-
-- Consolidate network, custody, complete fee/minimum/dust terms and a deterministic terms fingerprint.
-- Replace named-v1 heartbeat identity with an explicitly selected immutable asset address; validate
-  owner, `distordia-type=swapService`, schema, `service_id` and complete pair/custody identity.
-- Create a new complete fixed-field registration rather than relabelling v1, with an explicit
-  compatibility release and migration evidence.
-- Test multiple services/assets per signature chain, address/name disagreement, altered terms and
-  every configured fee/decimal/legacy-alias conflict. Never select the first type match.
-- Publish only non-secret identity, terms, custody, status and liveness data; never private RPC URLs,
-  PINs, sessions or keys.
-
-See the [planned standard](../ASSET_STANDARD.md#provider-swapservice-asset-standard-v2-planned),
-[configuration reference](../CONFIG.md), [state machines](STATE_MACHINES.md), and
-[token-literal inventory](TOKEN_PAIR_LITERAL_INVENTORY.md). Provider-v2 is not a prerequisite to
-correctly repairing the existing single-pair bridge, and is not implemented by this batch.
-
-## 2026-09-15 architecture and development review addendum
-
-This dated addendum does not rewrite the September 13 candidate evidence. The independent
-[2026-09-15 review](DEVELOPMENT_REVIEW_2026-09-15.md) inspected committed
-`d0acd721..6b1f052` and the separate dirty provider-v2 candidate.
-
-### Current local status corrections
-
-- Helius durable ingestion, current disposition discovery, receipt-outbox retention and their
-  isolation suites remain verified locally. Helius is trusted; a second attestor is not required.
-- **P0 recovery intent gap:** wipeout reconstruction accepts any positive current-v1 disposition
-  output not exceeding source principal, then books the difference as a fee. Because the memo binds
-  no frozen output, fee or terms revision, chain-only evidence must count actual cap spend but retain
-  the source as unresolved instead of terminalizing it.
-- **P1 Solana policy gap:** removing unsafe ingestion-time minimum filtering was correct, but no
-  processing classifier replaced it. A positive-net deposit below `MIN_DEPOSIT_SOLANA_UNITS`
-  currently reaches the Nexus debit boundary. Implement one shared live/recovery classifier rather
-  than filtering history.
-- **P1 operational gap retained:** refund/quarantine cap refusal remains generic and log-only. Persist
-  typed capacity evidence and alert it separately from lifecycle/evidence conflicts.
-
-### Dirty provider-v2 candidate status
-
-`src/service_record.py` and `tests/test_service_record_v2.py` are untracked, with related unstaged
-configuration additions. They are new work and remain **library-only / not merge-ready**:
-
-- no live registration, heartbeat, startup-recovery or waterline caller imports the module;
-- the claimed default-v2/legacy-fallback configuration is therefore not a runtime migration;
-- published micro percentages are parsed settings that current money paths do not enforce;
-- exact-secret equality checks do not prevent a credential embedded in a public URL;
-- zero/non-monotonic terms revisions and target Nexus address-based create/update/readback remain
-  unimplemented.
-
-Do not mark provider-v2 implemented or default until every published field maps to an enforced
-runtime/recovery policy and the address-selected Nexus migration passes multi-asset target-node
-acceptance. Production and real funds remain hard-blocked.
-
-## 2026-09-16 no-runtime-delta verification
-
-The [September 16 review](DEVELOPMENT_REVIEW_2026-09-16.md) found no tracked runtime,
-dependency or workflow change after the September 15 source baseline. All ten paths in the prior
-runtime manifest still match byte-for-byte. The real index equals the tracked HEAD tree and excludes
-the unstaged `src/config.py` additions plus untracked provider-v2 implementation/test.
-
-Fresh execution in an isolated Python 3.11 environment with the pinned requirements produced:
-
-- full shared-tree suite: **434 passed, 71 subtests passed**;
-- recovery: **33 passed, 46 subtests passed**; recovery plus installed SDK: **34 passed,
-  46 subtests passed**;
-- receipt/payout/Nexus-fee/SDK shard: **85 passed**;
-- dependency consistency, literal CI compilation, Markdown links, CI/shared/index whitespace and the
-  real-index token inventory: passed; inventory remains **274 active lines**;
-- focused blocker probes: **3 committed-runtime reproductions passed** and **2 dirty provider-v2
-  reproductions passed**. Passing means the probes still observed the documented unsafe behavior.
-
-The full suite necessarily covered the shared working tree, including the unchanged dirty v2 proposal.
-An isolated exact-HEAD materialization was denied by unattended approval policy and was not rerouted,
-so this is not represented as a clean-checkout or exact-HEAD CI result. No live-chain operation ran.
-
-## 2026-09-17 review and next coding batches
-
-The [September 17 review](DEVELOPMENT_REVIEW_2026-09-17.md) found no tracked implementation,
-dependency or workflow delta after the September 16 report. The committed runtime manifest and the
-three concurrent provider-v2 worktree hashes are unchanged. This is a source-identity result, not a
-new implementation claim.
-
-Deeper inspection of default-collected tests makes the remaining exits more specific:
-
-- Current recovery tests positively expect chain-only current-v1 disposition evidence to archive the
-  source and derive a fee as `source principal - observed output`. Those assertions codify the P0
-  unsafe inference; a green suite cannot close it.
-- The collected ingestion test correctly proves that a positive below-minimum deposit enters durable
-  state, but no collected worker test requires below/boundary/above-minimum behavior. The real worker
-  checks only whether output after fees is positive before reaching the cross-chain debit boundary.
-- The disposition-cap test proves only that capacity refusal leaves the generic source state unchanged.
-  It does not require a durable typed reason, exact capacity evidence, dashboard visibility or alert.
-
-Implement and review these batches in order:
-
-1. **P0 — intent-safe disposition recovery.** For current-v1 chain-only evidence, record positively
-   proven spend for cap accounting but retain a quantified unresolved liability and do not create a
-   terminal fee. Permit automatic terminal reconstruction only from surviving exact frozen intent or
-   a new pre-submission evidence version binding source, kind, recipient, output, fee and terms.
-2. **P1 — shared Solana-input admission policy.** Classify every positive durable input before the
-   cross-chain debit in both live processing and reconstruction. Define exact below/boundary/above
-   behavior, integer rounding and any micro percentage once; make public terms derive from the same
-   executable policy without restoring ingestion-time filtering.
-3. **P1 — typed disposition-cap hold.** Atomically distinguish capacity refusal from lifecycle or
-   evidence conflict, retain needed/used/cap units, expose it to operators, alert it and support a
-   restart-safe retry when capacity becomes available. No remote send may occur while held.
-4. **P1 after those repairs — provider-v2 integration.** Keep the current dirty library outside the
-   deployable runtime until address-selected create/read/update, exact owner/type/schema/service and
-   custody validation, monotonic terms, explicit v1 fallback, secret-safe public fields and actual
-   caller integration pass target-node tests.
-
-Each batch must add default-collected acceptance tests through the real worker/finalizer/recovery
-caller, not helper-only probes. Required cases include wipeout and backup/WAL restore, policy change,
-duplicate and conflicting evidence, crash boundaries, below/exact/above thresholds with equal and
-unequal decimals, both disposition kinds, cap exhaustion and later release, restart, operator
-surfaces and proof that transport send helpers remain uncalled on every hold. The exact publication
-and live-acceptance gates are enumerated in the dated review. Production and real-fund admission
-remain hard-blocked.
-
-## 2026-09-21 recovery-repair assessment
-
-The [September 21 review](DEVELOPMENT_REVIEW_2026-09-21.md) executes the `814c0ae` repair from an
-exact archived HEAD and separates it from the unchanged dirty provider-v2 proposal. Seven targeted
-cases establish both the repaired branch and the remaining bypasses:
-
-- Fresh wipeout evidence for both dispositions creates an evidence hold, counts only the one-unit
-  observed spend against the cap, books no fee, preserves the full quantified source liability,
-  appears in the dashboard and is selected by neither send worker.
-- A terminal row in the exact shape emitted by the pre-repair chain-only recovery bypasses the new
-  `terminal is None` hold branch. For both refund and quarantine, replay accepts that row, retains no
-  pending liability and books `source - observed output` as fee. The schema has no provenance that
-  distinguishes this manufactured row from a genuine pre-submission frozen intent.
-- The real Solana-input worker still sends a positive-net input one unit below a patched processing
-  minimum to the mocked Nexus transport boundary.
-- Refund and quarantine cap refusal still leave the original generic status and persist no typed
-  per-obligation capacity record.
-
-Therefore `814c0ae` is a valid containment improvement, not a complete P0 closure. Implement Batch 1
-above before the shared classifier and typed-cap batches. Then rerun exact-HEAD probes, the complete
-configured gate and the non-mutating target-chain acceptance matrix. No live financial operation was
-performed by this review.
+The original [A/B/C implementation plan](plans/recovery-input-cap-repairs.md) remains the historical
+implementation record. The executable follow-up is the
+[September 23 recovery/retry plan](plans/2026-09-23-financial-recovery-follow-up.md).
