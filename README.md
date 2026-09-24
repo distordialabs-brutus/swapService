@@ -152,6 +152,12 @@ python3 dashboard.py
 
 The dashboard is separate from the service and exposes no retry/refund controls. It shows selected-token labels, backing/liabilities, pending and held work, fee accounting, payout-cap use and heartbeat age. Historic column names are compatibility fields, not fixed token selection.
 
+A durable startup recovery hold appears in the summary, issue list and recovery banner.
+When held or admission evidence is unavailable, total obligations are **unknown, not zero**:
+backing ratio, fee totals and payout usage are unavailable even if a snapshot survives.
+Displayed row counts cover only the local database. Absence of this narrow latch is not
+proof that recovery is complete or that a partial/stale backup is safe.
+
 Keep it local or follow the authentication/TLS requirements in [SETUP.md](SETUP.md). The dashboard's read-only design is not an instruction to expose custody credentials or the service database publicly.
 
 ## Operator and developer entry points

@@ -1,5 +1,30 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
+## R-1 maintenance visibility — startup refusal on the dashboard
+
+**Implemented, reporting-only containment; R-1 remains open.** The read-only dashboard
+now exposes the durable empty-database admission latch in `/api/summary`, `/api/issues`
+and a prominent recovery banner. It reports total liabilities and open obligations as
+unknown rather than treating absent local rows as zero. While admission is held or its
+evidence is unreadable/malformed, backing ratio, fee totals and rolling payout usage are
+unavailable; a retained metrics snapshot cannot make the page look recovered. Local row
+counts remain explicitly local, and the backing-deficit banner cannot incorrectly claim
+refunds/quarantine continue during recovery refusal.
+
+The reader does not clear holds or write recovery state. Missing admission tables produce
+an explicit unknown status, not a healthy result; raw database errors are not published by
+the admission reader. An empty latch table means only `not_held`, with no claim of complete
+liabilities or successful recovery. Operators must restore and independently verify coherent
+custody evidence, never seed rows, clear holds or send funds manually to bypass admission.
+Collected tests in `tests/test_dashboard_recovery_admission.py` cover the real startup latch,
+retained healthy metrics, repeated reads/reinitialization, missing/malformed evidence, sanitized
+read failure, and execution of the shipped JavaScript renderer (Node.js required for that shard).
+Browser verification also exposed a pre-existing chained `Element.append()` call that broke
+nonempty issue tables; the renderer now appends the header separately so recovery issues display.
+
+This does not reconstruct principal, quantify lost liabilities, validate partial/stale restores,
+or implement source-specific authorization/resolution. Those R-1/R-3 release gates remain open.
+
 ## R-1 maintenance containment — empty-database startup
 
 **Implemented, narrow containment; R-1 is not closed.** Startup now records a durable

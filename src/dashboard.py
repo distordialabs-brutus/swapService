@@ -135,10 +135,60 @@ def _units(v, decimals: int) -> float | None:
 # --------------------------------------------------------------------------- API
 
 
+def _recovery_admission_status() -> dict:
+    """Read the startup latch without treating a failed lookup as an empty table.
+
+    Absence of this narrow total-loss latch is NOT proof of complete recovery.
+    In particular, it cannot validate partial/stale restores or authorize sends.
+    """
+    unavailable = {
+        "status": "unknown", "reason": "custody_recovery_admission_unavailable",
+        "liabilities_complete": False,
+        "detail": "Recovery admission evidence is unavailable; total liabilities are unknown.",
+        "operator_action": (
+            "keep processing stopped; inspect custody database recovery evidence; "
+            "do not seed rows, clear holds or send funds manually"
+        ),
+    }
+    conn = None
+    try:
+        conn = _ro_conn()
+        rows = conn.execute(
+            "SELECT id, reason, nexus_waterline, solana_waterline "
+            "FROM recovery_admission_holds LIMIT 2"
+        ).fetchall()
+    except sqlite3.Error:
+        return unavailable
+    finally:
+        if conn is not None:
+            conn.close()
+    if not rows:
+        return {"status": "not_held", "liabilities_complete": None}
+    row = rows[0]
+    if (len(rows) != 1 or row[0] != 1
+            or row[1] != "empty_custody_database_recovery_held"
+            or any(type(value) is not int or value <= 0 for value in row[2:])):
+        return unavailable
+    return {
+        "status": "held",
+        "reason": row[1],
+        "nexus_waterline": row[2],
+        "solana_waterline": row[3],
+        "liabilities_complete": False,
+        "detail": "Recovery is held; total liabilities are unknown, not zero.",
+        "operator_action": (
+            "restore an independently verified custody backup with coherent DB/WAL evidence; "
+            "do not seed rows, clear the hold or send funds manually"
+        ),
+    }
+
+
 def api_summary() -> dict:
+    recovery = _recovery_admission_status()
+    recovery_unresolved = recovery["status"] != "not_held"
     snap = state_db.get_metrics_snapshot() or {}
     now = int(time.time())
-    ratio_bps = snap.get("ratio_bps")
+    ratio_bps = None if recovery_unresolved else snap.get("ratio_bps")
 
     hb = _rows("SELECT name, last_beat, wline_sol, wline_nxs FROM heartbeat LIMIT 1")
     hb = hb[0] if hb else {}
@@ -181,6 +231,7 @@ def api_summary() -> dict:
 
     return {
         "now": now,
+        "recovery_admission": recovery,
         "snapshot_age_sec": snap_age,
         "snapshot_stale": snap_age is None or snap_age > 300,
         "paused": bool(snap.get("paused")),
@@ -188,11 +239,11 @@ def api_summary() -> dict:
         "circulating_nexus": _units(snap.get("circulating_usdd_units"), NXS_DECIMALS),
         "ratio": (ratio_bps / 10000.0) if ratio_bps is not None else None,
         "ratio_bps": ratio_bps,
-        "fees_solana": _units(snap.get("fees_usdc_units"), SOL_DECIMALS),
-        "fees_nexus": _units(snap.get("fees_usdd_units"), NXS_DECIMALS),
+        "fees_solana": None if recovery_unresolved else _units(snap.get("fees_usdc_units"), SOL_DECIMALS),
+        "fees_nexus": None if recovery_unresolved else _units(snap.get("fees_usdd_units"), NXS_DECIMALS),
         "payout_cap_solana": _units(cap, SOL_DECIMALS) if cap else None,
-        "payout_24h_solana": _units(spent, SOL_DECIMALS),
-        "payout_cap_pct": (100.0 * spent / cap) if cap else None,
+        "payout_24h_solana": None if recovery_unresolved else _units(spent, SOL_DECIMALS),
+        "payout_cap_pct": (100.0 * spent / cap) if cap and not recovery_unresolved else None,
         "heartbeat": {
             "name": hb.get("name"),
             "last_beat": hb.get("last_beat"),
@@ -208,6 +259,15 @@ def api_issues() -> dict:
     """Anything an operator should act on, newest first, with a plain-language reason."""
     now = int(time.time())
     issues: list[dict] = []
+    recovery = _recovery_admission_status()
+    if recovery["status"] != "not_held":
+        issues.append({
+            "kind": "Custody recovery", "id": "custody-recovery-admission",
+            "status": recovery["reason"], "age_sec": None,
+            "amount": None, "unit": None, "counterparty": None,
+            "detail": recovery["detail"], "reference": None,
+            "operator_action": recovery["operator_action"],
+        })
 
     marks = ",".join("?" for _ in SIG_ISSUE_STATUSES)
     try:
@@ -558,7 +618,13 @@ function card(k,v,s,cls){const c=el("div","card");c.append(el("div","k",k));
 
 function renderSummary(d){
   const b=document.getElementById("banners");b.textContent="";
-  if(d.paused){const x=el("div","banner bad");
+  const recovery=d.recovery_admission;
+  const unresolved=!recovery||recovery.status!=="not_held";
+  if(unresolved){const x=el("div","banner bad");
+    x.append(el("strong",null,recovery?.status==="held"?"RECOVERY HELD. ":"RECOVERY STATUS UNKNOWN. "));
+    x.append(document.createTextNode((recovery?.detail||"Total liabilities are unknown.")+" "+
+      (recovery?.operator_action||"Keep processing stopped; verify custody recovery evidence.")));b.append(x);}
+  if(d.paused&&!unresolved){const x=el("div","banner bad");
     x.append(el("strong",null,"PAUSED — backing deficit. "));
     x.append(document.createTextNode("New swaps are stopped; refunds and quarantine continue."));b.append(x);}
   if(d.snapshot_stale){const x=el("div","banner warn");
@@ -569,15 +635,15 @@ function renderSummary(d){
     x.append(document.createTextNode("Vault "+SOL+" is below circulating "+NXS+"."));b.append(x);}
 
   const c=document.getElementById("cards");c.textContent="";
-  const rc=d.ratio==null?"":d.ratio>=1?"ok":d.ratio>=0.99?"warn":"bad";
-  c.append(card("Backing ratio", d.ratio==null?"—":d.ratio.toFixed(4),
-    d.ratio_bps!=null?d.ratio_bps+" bps":"vault ÷ circulating", rc));
+  const rc=unresolved?"bad":d.ratio==null?"":d.ratio>=1?"ok":d.ratio>=0.99?"warn":"bad";
+  c.append(card("Backing ratio", unresolved?"Unknown":d.ratio==null?"—":d.ratio.toFixed(4),
+    unresolved?"recovery evidence incomplete":d.ratio_bps!=null?d.ratio_bps+" bps":"vault ÷ circulating", rc));
   c.append(card("Vault "+SOL, F(d.vault_solana,2), "on Solana"));
   c.append(card("Circulating "+NXS, F(d.circulating_nexus,2), "on Nexus"));
   c.append(card("Open items",
-    (d.counts.unprocessed_sigs+d.counts.unprocessed_txids),
-    d.counts.unprocessed_sigs+" "+SOL+" · "+d.counts.unprocessed_txids+" "+NXS));
-  c.append(card("Quarantined",
+    unresolved?"Unknown":(d.counts.unprocessed_sigs+d.counts.unprocessed_txids),
+    d.counts.unprocessed_sigs+" "+SOL+" · "+d.counts.unprocessed_txids+" "+NXS+" (local rows only)"));
+  c.append(card("Quarantined (local)",
     (d.counts.quarantined_sigs+d.counts.quarantined_txids),
     "needs manual review",
     (d.counts.quarantined_sigs+d.counts.quarantined_txids)>0?"warn":""));
@@ -600,7 +666,7 @@ function renderSummary(d){
 function table(cols,rows,build){
   if(!rows.length){const e=el("div","empty","Nothing here.");return e;}
   const t=el("table"),th=el("tr");cols.forEach(c=>th.append(el("th",null,c)));
-  t.append(el("thead")).append(th);const tb=el("tbody");
+  const thead=el("thead");thead.append(th);t.append(thead);const tb=el("tbody");
   rows.forEach(r=>tb.append(build(r)));t.append(tb);return t;
 }
 
