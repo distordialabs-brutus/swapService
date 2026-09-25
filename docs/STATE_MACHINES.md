@@ -1,17 +1,19 @@
 # Swap Service State Machines
 
-**Current candidate scope (2026-09-23):** one configured classic SPL token ↔ Nexus token pair.
-The reviewed source is `85030c890fa6f3bb7db97e068e5cf80827d21b28`; its offline full suite
-passes (565 tests + 77 subtests), but that does not establish live or total-loss acceptance.
-Nothing here approves production, live-chain operation or real funds. **Release remains blocked:**
-total DB/WAL loss can discard unsent B/C authorization and replay can regenerate a different
-economic decision. Separately, an oldest malformed capacity hold is non-sendable but can block a
-later valid fitting hold indefinitely. See [EVALUATION.md](EVALUATION.md), the
-[September 23 review](DEVELOPMENT_REVIEW_2026-09-23.md), and the
-[historical A/B/C acceptance report](RECOVERY_INPUT_CAP_ACCEPTANCE.md). Its published tracked version
-records the original offline scope; current total-loss and scheduler limits are stated here.
+**Current candidate scope (2026-09-25):** one configured classic SPL token ↔ Nexus token pair.
+Reviewed source `17f65a3e3b45281162c1604cd0a695a36dc55991` passes the exact-source offline
+suite (592 tests + 77 subtests). That does not establish live or release acceptance.
 
-Provider-v2, optional receipt enablement and dependency upgrades are outside this repair. Historical
+The empty-custody latch now blocks total DB/WAL loss before reconstruction, and its held/unknown
+state is visible on the dashboard. **Release remains blocked:** one unrelated retained source row
+can exempt a partial/stale restore and allow a different current-term decision; startup failures
+other than this latch are not durable dashboard admission; and an oldest malformed capacity hold
+can still starve younger valid work. See [EVALUATION.md](EVALUATION.md), the
+[September 25 review](DEVELOPMENT_REVIEW_2026-09-25.md), the
+[current repair plan](plans/2026-09-25-recovery-admission-and-capacity-fairness.md), and the
+[historical A/B/C acceptance report](RECOVERY_INPUT_CAP_ACCEPTANCE.md).
+
+Provider-v2, optional receipt enablement and dependency upgrades remain outside this repair. Historical
 dated notes are preserved below and in the
 [pre-repair snapshot](POST_CHANGE_REVIEW_2026-09-13_PRE_REPAIR_DOCUMENTATION.md); present-tense defect
 statements in those snapshots are superseded only where the current sections explicitly say so.
@@ -27,8 +29,9 @@ statements in those snapshots are superseded only where the current sections exp
   success, source identity, vault/mint, exact recipient and output against frozen intent.
 - Payout completion, fee booking and exact source removal commit atomically. Nexus source identity
   is `(txid, contract_id)` so settling one sibling cannot delete another.
-- Incomplete recovery prevents the exposure-producing service loop from starting. Paused operation
-  continues evidence-only resolution and existing refund/quarantine work, not new bridge exposure.
+- Incomplete startup recovery prevents every poller/worker from starting. A later reconciliation/exposure
+  pause inside an admitted process may continue evidence-only resolution and already-authorized
+  refund/quarantine work, but that is a different state and must not be advertised during startup refusal.
 
 ## Solana deposit enumeration and holds
 
@@ -98,17 +101,21 @@ equivalent to restart; see the limitation below.
 | Empty live Nexus enumeration | Hold as unproven absence |
 
 A durable **local** hold can disappear with the database. Keeping the public checkpoint behind it
-proves source rediscovery only, not reconstruction of its frozen economic authorization. **Current
-implementation gap:** after DB/WAL loss, startup can succeed without an unsent policy/cap hold;
-replay inserts a ready source and workers recompute policy/refund terms from current configuration.
-The review reproduced an oversized refund becoming a Nexus debit and a refund changing recipient,
-output and fee. See [R-1 and repair exits](EVALUATION.md).
+proves source rediscovery only, not reconstruction of frozen authorization. Current empty-custody
+containment checks positive heartbeat waterlines before reconstruction and persists
+`empty_custody_database_recovery_held` when all recognized source lifecycle/deposit-hold tables are empty.
+`main.run()` then starts no poller or worker, and initialization/replay cannot clear the latch.
 
-**Required, not yet implemented:** reconstruct exact historical authorization from surviving
-authoritative evidence or retain a quantified, visible, non-sendable recovery hold. Until then,
-do not resume a wiped existing deployment without verified frozen evidence or reconciliation.
-Do not move checkpoints to “now” to bypass history. Cursor query identity and economic
-authorization are distinct recovery requirements.
+That check is necessary but not sufficient. It treats one surviving row in any recognized table as enough
+to avoid the latch; it does not prove every other lifecycle, policy, capacity, fee and cap record is part of
+one coherent restore. A review probe retained one unrelated processed source, lost a frozen oversized
+refund, passed startup, replayed the lost source after terms changed and reached the mocked Nexus debit
+boundary under the changed decision.
+
+**Required, not yet implemented:** verify a complete restore/deployment identity or retain each
+rediscovered source without exact historical authorization as a quantified, visible, non-sendable recovery
+hold. Do not move checkpoints, seed rows or accept table non-emptiness as history proof. An audited new
+bootstrap remains separate from existing-deployment restore.
 
 Nexus startup currently accepts an empty first bounded page while rejecting a later mutable-offset
 page. The stricter live-poller rule differs; target-node completeness semantics remain an acceptance
@@ -144,16 +151,17 @@ flowchart LR
 
 Unknown Nexus mint outcomes cannot become Solana refunds merely because a bounded lookup is empty.
 Capacity-held retries parse and reuse the original destination, output, memo, source, fee and service
-terms while their database evidence survives; wipeout replay currently loses that protection
-(R-1 above). With retained valid evidence, mutable configuration/address resolution cannot replace
-those terms. Admission applies current rolling capacity in global eligible-hold order; individually
-impossible holds retain full principal without blocking fitting work. Lifecycle conflict, malformed
-evidence, database failure, pre-RPC durable intent and unknown/submitted outcomes stay distinct and
-non-sendable. **Current scheduler qualification:** the global oldest-hold query still includes a
-malformed oldest row, so it can keep a later valid fitting hold in `capacity held` forever. This
-retains liabilities and causes no send, but violates progress; move such rows atomically to an
-operator-action class outside automatic FIFO before claiming complete retry fairness. Receipt
-publication never reopens this payout lifecycle.
+terms while coherent database evidence survives. An empty database with positive waterlines is now latched
+before replay, but a partial/stale database with any unrelated recognized source can still bypass that
+containment and lose this protection (R-1 above). With retained valid evidence, mutable configuration or
+address resolution cannot replace those terms. Admission applies current rolling capacity in global
+eligible-hold order; individually impossible holds retain full principal without blocking fitting work.
+Lifecycle conflict, malformed evidence, database failure, pre-RPC durable intent and unknown/submitted
+outcomes stay distinct and non-sendable. **Current scheduler qualification:** the global oldest-hold query
+still includes a malformed oldest row, so it can keep a later valid fitting hold in `capacity held` forever.
+This retains liabilities and causes no send, but violates progress; move such rows atomically to a durable
+operator-action class outside automatic FIFO before claiming complete retry fairness. Receipt publication
+never reopens this payout lifecycle.
 
 ## Nexus token → Solana token lifecycle
 
@@ -249,6 +257,7 @@ records cannot gain a receipt schema through a heartbeat update.
 | `solana_payout_capacity_holds` | Retryable refund/quarantine cap evidence and original frozen intent |
 | `solana_payout_budget_events` | Per-obligation reserved/submitted/confirmed/released cap accounting |
 | `solana_disposition_provenance_migrations` | Idempotent conservative migration and reversed-fee audit |
+| `recovery_admission_holds` | Narrow durable empty-custody startup latch; absence is not general recovery completion or restore proof |
 | `nexus_transfer_intents` / audit events | Immutable operator disposition and attribution |
 | `swap_receipts` / `receipt_nxs_budget_events` | Publication obligation and NXS reservation |
 | `fee_entries` | Authoritative integer fee journal |
@@ -279,17 +288,24 @@ For settings/timeouts see [CONFIG.md](../CONFIG.md); for operator procedures see
 `poll_solana_deposits`, `poll_nexus_deposits`, `process_unprocessed_txids`,
 `check_unconfirmed_debits`, and `perform_startup_recovery` in their respective `src/` modules.
 
-## Startup identity and provider contract limitations
+## Startup identity and admission limitations
 
-Incomplete recovery blocks startup, but failed heartbeat validation currently only alerts and
-can reach pollers. Known Solana hostname/label checks do not prove the authoritative network
-and freshness of a custom endpoint; Nexus network/sync/tip admission is not implemented.
-Fail-closed registration/chain admission is a required repair, not a property of these diagrams.
+Incomplete recovery blocks `main.run()` before pollers. The new empty-custody latch is persisted before
+chain reconstruction and its held/unreadable state suppresses apparently healthy dashboard totals. It is
+not a general admission record: heartbeat/provenance/scan/reference failures can leave the table empty, so
+the dashboard currently renders `not_held` and may expose retained healthy metrics while startup has
+refused. Dashboard summary also mixes read-only queries with writable state helpers and can create a
+missing SQLite file. Persist every startup outcome and read admission/metrics/counts through one read-only
+snapshot before describing the operator view as authoritative.
 
-Provider-v2 is committed library code with no production importer. Actual registration, heartbeat
-and recovery still use named v1 records; the parsed legacy opt-in flag is not enforced. V2 needs
-a target-valid storage layout and exact address/owner/schema/pair/custody validation through every
-caller before cutover. See R-2/R-5 in [the evaluation](EVALUATION.md).
+Failed heartbeat validation after recovery currently only alerts and can reach pollers. Known Solana
+hostname/label checks do not prove the authoritative network and freshness of a custom endpoint; Nexus
+network/sync/tip admission is not implemented. Fail-closed registration/chain admission remains required.
+
+Provider-v2 is committed library code with no production importer. Actual registration, heartbeat and
+recovery still use named v1 records; the parsed legacy opt-in flag is not enforced. V2 needs a target-valid
+storage layout and exact address/owner/schema/pair/custody validation through every caller before cutover.
+See R-1c/R-1d/R-2/R-5 in [the evaluation](EVALUATION.md).
 
 ## Preserved dated architecture history
 

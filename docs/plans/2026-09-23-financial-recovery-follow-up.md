@@ -1,5 +1,11 @@
 # Financial recovery and capacity-retry follow-up plan — 2026-09-23
 
+> **Historical plan.** The empty-custody latch and dashboard containment described by later work are
+> implemented at `17f65a3e3b45281162c1604cd0a695a36dc55991`. The remaining partial/stale-restore,
+> complete admission visibility, malformed-oldest fairness and read-only dashboard work is ordered in
+> the [2026-09-25 recovery admission and capacity-fairness plan](2026-09-25-recovery-admission-and-capacity-fairness.md).
+> Preserve the acceptance detail below as the pre-containment repair record.
+
 ## Decision and scope
 
 Source under review: `85030c890fa6f3bb7db97e068e5cf80827d21b28`, compared with
