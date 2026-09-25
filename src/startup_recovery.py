@@ -697,6 +697,18 @@ def perform_startup_recovery() -> dict:
             "interrupted_nexus_transfers_held": interrupted_nexus_transfers_held,
         }
 
+    # A nonempty restore can still have lost an unsent authorization. Before any
+    # reconstruction, fence off unseen pre-startup Solana inputs from current terms.
+    # This does not certify retained rows or prove a complete/coherent restore.
+    try:
+        state_db.record_solana_recovery_boundary(max(int(time.time()), solana_waterline))
+    except Exception:
+        return {
+            "recovery_complete": False,
+            "recovery_incomplete": True,
+            "error": "solana_recovery_boundary_persistence_failed",
+        }
+
     print(f"   Waterlines: Nexus={nexus_waterline}, Solana={solana_waterline}")
 
     try:

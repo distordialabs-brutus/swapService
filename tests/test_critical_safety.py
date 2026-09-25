@@ -3500,8 +3500,9 @@ class CriticalSafetyTests(unittest.TestCase):
         },
     )
     @patch.object(state_db, "latch_empty_custody_recovery", return_value=False)
+    @patch.object(state_db, "record_solana_recovery_boundary")
     def test_startup_recovery_reads_runtime_top_level_heartbeat_waterlines(
-        self, _admission, _heartbeat, _recover, fallback, rebuild_nexus, rebuild_solana, _reference, _provenance
+        self, _boundary, _admission, _heartbeat, _recover, fallback, rebuild_nexus, rebuild_solana, _reference, _provenance
     ):
         """A standard runtime heartbeat must rebuild both chains, never take the legacy fallback."""
         stats = startup_recovery.perform_startup_recovery()
@@ -3531,7 +3532,8 @@ class CriticalSafetyTests(unittest.TestCase):
 
     @patch.object(startup_recovery, "_terminal_solana_dispositions_have_provenance", return_value=True)
     @patch.object(state_db, "latch_empty_custody_recovery", return_value=False)
-    def test_startup_recovery_never_clamps_a_custody_waterline_forward(self, _admission, _provenance):
+    @patch.object(state_db, "record_solana_recovery_boundary")
+    def test_startup_recovery_never_clamps_a_custody_waterline_forward(self, _boundary, _admission, _provenance):
         """An admitted rebuild must scan the published checkpoint, however old it is."""
         heartbeat = {
             "address": "heartbeat-address",

@@ -313,6 +313,15 @@ def _init_db_with_connection(conn: sqlite3.Connection) -> None:
         )
     """)
 
+    # Monotonic startup observation boundary, not a restore-completeness certificate.
+    # Unseen older Solana sources must not acquire current-term authorization.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS solana_recovery_boundary (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            cutoff_timestamp INTEGER NOT NULL CHECK (cutoff_timestamp > 0)
+        )
+    """)
+
     # Waterline proposals (ephemeral, cleared after applying to heartbeat)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS waterline_proposals (
@@ -1790,7 +1799,46 @@ def _solana_deposit_lifecycle_locations(conn, signature: str) -> int:
     )
 
 
-def _insert_solana_deposit(conn, deposit: tuple) -> bool:
+HISTORICAL_SOLANA_AUTHORIZATION_MISSING = "historical_solana_authorization_missing"
+
+
+def record_solana_recovery_boundary(cutoff_timestamp: int) -> None:
+    """Persist a monotonic no-current-terms replay boundary before chain recovery.
+
+    This is containment, not proof of a coherent restore or chain clock identity.
+    Neither initialization nor a backward local clock may reduce a retained boundary.
+    """
+    if type(cutoff_timestamp) is not int or cutoff_timestamp <= 0:
+        raise ValueError("Solana recovery boundary requires a positive exact timestamp")
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        _solana_recovery_cutoff(conn)  # Malformed retained evidence fails closed.
+        conn.execute(
+            """INSERT INTO solana_recovery_boundary (id, cutoff_timestamp) VALUES (1, ?)
+               ON CONFLICT(id) DO UPDATE SET cutoff_timestamp =
+                   MAX(cutoff_timestamp, excluded.cutoff_timestamp)""",
+            (cutoff_timestamp,),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _solana_recovery_cutoff(conn) -> int | None:
+    rows = conn.execute("SELECT id, cutoff_timestamp FROM solana_recovery_boundary").fetchall()
+    if not rows:
+        return None  # Initialization alone is not startup admission.
+    if (len(rows) != 1 or rows[0][0] != 1
+            or type(rows[0][1]) is not int or rows[0][1] <= 0):
+        raise ValueError("invalid Solana recovery boundary")
+    return rows[0][1]
+
+
+def _insert_solana_deposit(conn, deposit: tuple, *, recovery_context: dict) -> tuple[int, int]:
     if not isinstance(deposit, tuple) or len(deposit) != 5:
         raise ValueError("invalid Solana deposit evidence")
     sig, timestamp, memo, from_address, amount_units = deposit
@@ -1812,14 +1860,39 @@ def _insert_solana_deposit(conn, deposit: tuple) -> bool:
             timestamp, memo or "", from_address, amount_units,
         ):
             raise ValueError("deposit conflicts with retained Solana source evidence")
-        return False
+        return 0, 0
     held = conn.execute(
-        """SELECT block_timestamp, memo, from_address, amount_units
+        """SELECT block_timestamp, memo, from_address, amount_units, reason
              FROM solana_deposit_holds WHERE signature = ?""",
         (sig,),
     ).fetchone()
-    if held is not None and held != (timestamp, memo, from_address, amount_units):
+    if held is not None and held[:4] != (timestamp, memo, from_address, amount_units):
         raise ValueError("deposit conflicts with durable Solana hold evidence")
+    cutoff = _solana_recovery_cutoff(conn)
+    if ((held is not None and held[4] == HISTORICAL_SOLANA_AUTHORIZATION_MISSING)
+            or (held is None and cutoff is not None and timestamp <= cutoff)):
+        if held is not None:
+            conn.execute(
+                "UPDATE solana_deposit_holds SET reason = ? WHERE signature = ?",
+                (HISTORICAL_SOLANA_AUTHORIZATION_MISSING, sig),
+            )
+        else:
+            context = recovery_context
+            evidence = json.dumps({
+                "source_signature": sig, "source_timestamp": timestamp,
+                "source_memo": memo, "source_token_account": from_address,
+                "source_amount_units": amount_units, "recovery_cutoff": cutoff,
+                "token_program": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+                **context,
+            }, sort_keys=True)
+            _insert_solana_deposit_hold(conn, (
+                sig, timestamp, memo, from_address, amount_units,
+                HISTORICAL_SOLANA_AUTHORIZATION_MISSING, evidence,
+                context["provider"], context["query_identity"], context["network"],
+                context["vault_account"], context["mint"], context["commitment"],
+                int(context["commitment"] != "finalized"),
+            ))
+        return 0, int(held is None)
     conn.execute(
         """INSERT INTO unprocessed_sigs
            (sig, timestamp, memo, from_address, amount_usdc_units, status, txid)
@@ -1828,7 +1901,7 @@ def _insert_solana_deposit(conn, deposit: tuple) -> bool:
     )
     if held is not None:
         conn.execute("DELETE FROM solana_deposit_holds WHERE signature = ?", (sig,))
-    return True
+    return 1, 0
 
 
 def _insert_solana_deposit_hold(conn, hold: tuple) -> bool:
@@ -1867,6 +1940,10 @@ def _insert_solana_deposit_hold(conn, hold: tuple) -> bool:
              FROM solana_deposit_holds WHERE signature = ?""",
         (signature,),
     ).fetchone()
+    cutoff = _solana_recovery_cutoff(conn)
+    if ((existing is None and cutoff is not None and block_timestamp <= cutoff)
+            or (existing is not None and existing[4] == HISTORICAL_SOLANA_AUTHORIZATION_MISSING)):
+        reason = HISTORICAL_SOLANA_AUTHORIZATION_MISSING
     exact = (block_timestamp, memo, from_address, amount_units, reason,
              evidence_json, provider, network, vault_account, mint,
              observed_commitment, finality_required)
@@ -1981,8 +2058,15 @@ def commit_helius_deposit_scan_page(
             except sqlite3.IntegrityError as exc:
                 raise ValueError("duplicate Helius signature inside bounded query") from exc
 
-        admitted = sum(_insert_solana_deposit(conn, deposit) for deposit in deposits)
-        held = sum(_insert_solana_deposit_hold(conn, hold) for hold in holds)
+        context = dict(provider="helius", network=network, vault_account=vault_account,
+                       mint=mint, commitment=commitment, query_identity=query_identity)
+        admitted = held = 0
+        for deposit in deposits:
+            added, held_added = _insert_solana_deposit(conn, deposit, recovery_context=context)
+            admitted += added
+            held += held_added
+        for hold in holds:
+            held += int(_insert_solana_deposit_hold(conn, hold))
         event = "range_completed" if complete else "page_committed"
         conn.execute(
             """INSERT INTO helius_deposit_scan_events
@@ -2021,7 +2105,7 @@ def commit_helius_deposit_scan_page(
         conn.close()
 
 
-def get_solana_deposit_holds(limit: int = 1000) -> list[dict]:
+def get_solana_deposit_holds(limit: int = 1000, *, include_historical: bool = True) -> list[dict]:
     if type(limit) is not int or limit <= 0:
         raise ValueError("Solana deposit hold limit must be positive")
     conn = sqlite3.connect(DB_PATH)
@@ -2033,11 +2117,12 @@ def get_solana_deposit_holds(limit: int = 1000) -> list[dict]:
                       mint, observed_commitment, finality_required, replay_attempts,
                       last_replay_timestamp
                  FROM solana_deposit_holds
+                WHERE (? OR reason != ?)
                 ORDER BY replay_attempts ASC,
                          CASE WHEN reason = 'awaiting_finalized' THEN 0 ELSE 1 END ASC,
                          last_replay_timestamp ASC, block_timestamp ASC, signature ASC
                 LIMIT ?""",
-            (limit,),
+            (int(include_historical), HISTORICAL_SOLANA_AUTHORIZATION_MISSING, limit),
         ).fetchall()
         keys = (
             "signature", "block_timestamp", "memo", "from_address", "amount_units",
@@ -2138,11 +2223,14 @@ def promote_solana_deposit_hold(
     try:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            """SELECT block_timestamp, memo, from_address, amount_units
+            """SELECT block_timestamp, memo, from_address, amount_units, reason
                  FROM solana_deposit_holds WHERE signature = ?""",
             (signature,),
         ).fetchone()
         if row is None:
+            conn.rollback()
+            return False
+        if row[4] == HISTORICAL_SOLANA_AUTHORIZATION_MISSING:
             conn.rollback()
             return False
         deposit = (
@@ -2152,10 +2240,14 @@ def promote_solana_deposit_hold(
             row[2] if from_address is None else from_address,
             row[3] if amount_units is None else amount_units,
         )
-        conn.execute("DELETE FROM solana_deposit_holds WHERE signature = ?", (signature,))
-        inserted = _insert_solana_deposit(conn, deposit)
+        conn.execute(
+            """UPDATE solana_deposit_holds SET memo = ?, from_address = ?, amount_units = ?
+               WHERE signature = ?""",
+            (deposit[2], deposit[3], deposit[4], signature),
+        )
+        inserted, _held = _insert_solana_deposit(conn, deposit, recovery_context={})
         conn.commit()
-        return inserted
+        return bool(inserted)
     except Exception:
         conn.rollback()
         raise
@@ -2194,7 +2286,8 @@ def commit_solana_deposit_scan_page(
     scanned_signature_count: int,
     deposits: list[tuple[str, int, str | None, str | None, int]], complete: bool,
     holds: list[tuple] | None = None,
-) -> int:
+    with_hold_count: bool = False,
+) -> int | tuple[int, int]:
     """Atomically persist one validated history page and its exact resume cursor.
 
     The page's deposits enter the normal durable queue before the cursor can move.
@@ -2250,9 +2343,15 @@ def commit_solana_deposit_scan_page(
             if existing[3] != upper_timestamp:
                 raise ValueError("Solana scan upper timestamp conflict")
 
-        admitted = sum(_insert_solana_deposit(conn, deposit) for deposit in deposits)
+        context = dict(provider="core", network=network, vault_account=vault_account,
+                       mint=mint, commitment=commitment, query_identity=query_identity)
+        admitted = held = 0
+        for deposit in deposits:
+            added, held_added = _insert_solana_deposit(conn, deposit, recovery_context=context)
+            admitted += added
+            held += held_added
         for hold in holds or ():
-            _insert_solana_deposit_hold(conn, hold)
+            held += int(_insert_solana_deposit_hold(conn, hold))
 
         event = "range_completed" if complete else "page_committed"
         conn.execute(
@@ -2273,7 +2372,7 @@ def commit_solana_deposit_scan_page(
                 (next_before_signature, page_last_timestamp, vault_account),
             )
         conn.commit()
-        return admitted
+        return (admitted, held) if with_hold_count else admitted
     except Exception:
         conn.rollback()
         raise

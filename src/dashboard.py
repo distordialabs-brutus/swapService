@@ -269,6 +269,26 @@ def api_issues() -> dict:
             "operator_action": recovery["operator_action"],
         })
 
+    for r in _rows(
+        """SELECT signature, block_timestamp, reason, amount_units, from_address
+           FROM solana_deposit_holds WHERE reason = ?
+           ORDER BY block_timestamp ASC, signature ASC LIMIT 200""",
+        (state_db.HISTORICAL_SOLANA_AUTHORIZATION_MISSING,),
+    ):
+        issues.append({
+            "kind": f"{SOL_SYM} recovery", "id": r["signature"],
+            "status": r["reason"],
+            "age_sec": now - int(r["block_timestamp"]),
+            "amount": _units(r["amount_units"], SOL_DECIMALS),
+            "amount_units": r["amount_units"], "unit": SOL_SYM,
+            "counterparty": r["from_address"], "reference": None,
+            "detail": "Source principal retained; historical authorization is missing.",
+            "operator_action": (
+                "retain principal and verify coherent backup evidence; do not clear the hold "
+                "or send manually; automated disposition is disabled"
+            ),
+        })
+
     marks = ",".join("?" for _ in SIG_ISSUE_STATUSES)
     try:
         current_payout_cap = int(

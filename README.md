@@ -137,9 +137,13 @@ The current service requires valid custody checkpoints and affirmative complete 
 An empty custody database with nonzero checkpoints now creates a durable startup hold before
 chain reconstruction or polling. Restarting or inserting rows afterwards does not clear it.
 Restore an independently verified, coherent custody backup; do not delete the hold or seed rows
-to bypass admission. This also blocks automatic empty-database bootstrap. Partial/stale restores
-and source-specific reconciliation remain unresolved; an empty dashboard after refusal is not
-proof of zero liabilities. See the containment scope in [EVALUATION.md](docs/EVALUATION.md).
+to bypass admission. Startup also persists a monotonic Solana replay boundary: previously unseen
+inputs at or before it become quantified, non-sendable historical-authorization holds, visible in the
+dashboard issues list. This includes inputs received while offline; chain rediscovery alone cannot
+release them. Retained source/finality rows keep their existing behavior. This local-time/checkpoint
+containment is not a complete-restore certificate: partial/stale restores, pre-fix replay rows and
+source-specific audited resolution remain unresolved. An empty dashboard is not proof of zero
+liabilities. See the containment scope in [EVALUATION.md](docs/EVALUATION.md).
 
 Mutable multi-page Nexus offset scans cannot authorize checkpoint advancement. Previously discovered positive credits can be retained while coverage remains incomplete. Refer to [STATE_MACHINES.md](docs/STATE_MACHINES.md) for live processing and recovery invariants.
 

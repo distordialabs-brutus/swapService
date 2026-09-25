@@ -187,6 +187,9 @@ EXPECTED_SCHEMA = {
     # Additive total-loss admission latch; initialization never clears it or rewrites
     # custody rows. Existing-schema upgrade is covered by test_empty_database_recovery.
     "recovery_admission_holds": ["id", "reason", "nexus_waterline", "solana_waterline"],
+    # Additive replay containment; existing-schema upgrade/reinitialization is covered
+    # by test_partial_restore_deposit_recovery without changing any retained rows.
+    "solana_recovery_boundary": ["id", "cutoff_timestamp"],
     "waterline_proposals": ["chain", "proposed_timestamp"],
 }
 

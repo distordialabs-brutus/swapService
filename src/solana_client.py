@@ -708,12 +708,14 @@ def _scan_incoming_deposits_helius(
 
 def replay_solana_deposit_holds(limit: int = 1000) -> int:
     """Fairly reparse holds without changing their frozen custody/finality provenance."""
-    held_rows = state_db.get_solana_deposit_holds(limit)
+    held_rows = state_db.get_solana_deposit_holds(limit, include_historical=False)
     candidates: list[tuple[dict, str | None, str | None, int, bool]] = []
     current_vault = str(getattr(config, "VAULT_USDC_ACCOUNT"))
     current_mint = str(getattr(config, "USDC_MINT"))
 
     for row in held_rows:
+        if row["reason"] == state_db.HISTORICAL_SOLANA_AUTHORIZATION_MISSING:
+            continue  # Revalidated chain input cannot restore a missing authorization.
         state_db.record_solana_deposit_hold_replay_attempt(row["signature"])
         provenance = {
             "network": row.get("network"),
@@ -985,7 +987,7 @@ def _scan_incoming_deposits_core(
         next_before = None if complete else last_signature
         if not complete and not next_before:
             raise RuntimeError("Solana cursor page has no exact continuation")
-        admitted = state_db.commit_solana_deposit_scan_page(
+        admitted, held = state_db.commit_solana_deposit_scan_page(
             vault_account=vault_account, mint=mint, network=network,
             commitment=commitment, query_identity=str(core_query_identity),
             lower_timestamp=since_ts,
@@ -993,11 +995,11 @@ def _scan_incoming_deposits_core(
             upper_timestamp=upper_timestamp, previous_timestamp=previous_timestamp,
             page_last_timestamp=page_last_timestamp,
             scanned_signature_count=len(entries),
-            deposits=deposits, holds=holds, complete=complete,
+            deposits=deposits, holds=holds, complete=complete, with_hold_count=True,
         )
         return SolanaDepositBacklogProgress(
             complete, admitted, upper_timestamp, next_before,
-            provider="core", held_count=len(holds),
+            provider="core", held_count=held,
         )
     except Exception as exc:
         _log("solana_cursor_scan_failed", level=logging.ERROR, error=str(exc))

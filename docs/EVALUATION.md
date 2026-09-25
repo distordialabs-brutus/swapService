@@ -133,6 +133,29 @@ and worker paths remain `state_db.py:1793-1915` and `solana_client.py:1007-1169`
 existing deployment only from independently validated coherent DB+WAL/online-backup evidence, otherwise
 remain paused.
 
+**Implemented maintenance containment — unseen pre-startup Solana inputs:** startup now persists
+an additive, monotonic `solana_recovery_boundary` before chain reconstruction. Both deposit page
+committers retain a previously unseen source at or before that boundary as
+`historical_solana_authorization_missing` rather than `ready for processing`. The full observed
+principal, source and custody/query provenance remain in `solana_deposit_holds`; liabilities and
+checkpoint pinning include those rows. Historical holds cannot be automatically promoted, including
+through repeated pages or direct hold replay, and are excluded before the automatic replay limit.
+The dashboard issues endpoint exposes them with exact integer principal and a no-manual-send warning.
+Retained lifecycle/finality/parser rows are not reclassified by this containment.
+
+This is **not R-1 closure**: the boundary is the greater of the startup local timestamp, Solana
+checkpoint and previously retained boundary, not an independent restore manifest or authoritative
+chain-clock certificate. Inputs received while offline can conservatively require permanent holds
+until an audited resolution protocol exists. Pre-fix replay rows, partial restores containing an
+incomplete lifecycle component, unseen sources outside enumeration, Nexus-side reconstruction and
+clock/identity assurance remain open. Do not infer complete liabilities from startup success or use
+post-boundary timestamps as proof of a coherent restore. Empty-database startup still refuses replay.
+
+Collected coverage in `tests/test_partial_restore_deposit_recovery.py` exercises stale backups retaining
+one unrelated processed source after lost below-minimum/nonpositive/refund/quarantine decisions, both
+page committers, changed terms, multiple pages, cutoff equality, restart/duplicate replay, full liability,
+zero mocked sends, retained hold eligibility, query rollback, upgrade and persistence failures.
+
 **Exit:** bind admission to a complete restore/deployment identity, or retain each affected rediscovered
 source as a quantified, visible, non-sendable recovery hold. Test stale/partial/pre-fix restores containing
 only one lifecycle component, every policy/disposition kind, terms drift, multi-page replay and worker
