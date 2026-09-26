@@ -140,8 +140,11 @@ Restore an independently verified, coherent custody backup; do not delete the ho
 to bypass admission. Startup also persists a monotonic Solana replay boundary: previously unseen
 inputs at or before it become quantified, non-sendable historical-authorization holds, visible in the
 dashboard issues list. This includes inputs received while offline; chain rediscovery alone cannot
-release them. Retained source/finality rows keep their existing behavior. This local-time/checkpoint
-containment is not a complete-restore certificate: partial/stale restores, pre-fix replay rows and
+release them. Startup also holds retained `ready for processing` source rows when both frozen-policy
+fields are absent, without changing their principal or other evidence. This includes pre-fix replay
+rows and deposits interrupted before their first policy freeze; timestamps alone cannot exempt them.
+Existing frozen-policy and non-ready lifecycle/finality rows keep their behavior. This containment
+is not a complete-restore certificate: other partial/stale restores, already-reclassified pre-fix rows and
 source-specific audited resolution remain unresolved. An empty dashboard is not proof of zero
 liabilities. See the containment scope in [EVALUATION.md](docs/EVALUATION.md).
 

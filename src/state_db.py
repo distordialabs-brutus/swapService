@@ -1807,6 +1807,8 @@ def record_solana_recovery_boundary(cutoff_timestamp: int) -> None:
 
     This is containment, not proof of a coherent restore or chain clock identity.
     Neither initialization nor a backward local clock may reduce a retained boundary.
+    In the same transaction, hold retained ready rows with no frozen policy. This
+    includes unfinished first admission: restart cannot distinguish it from loss.
     """
     if type(cutoff_timestamp) is not int or cutoff_timestamp <= 0:
         raise ValueError("Solana recovery boundary requires a positive exact timestamp")
@@ -1819,6 +1821,16 @@ def record_solana_recovery_boundary(cutoff_timestamp: int) -> None:
                ON CONFLICT(id) DO UPDATE SET cutoff_timestamp =
                    MAX(cutoff_timestamp, excluded.cutoff_timestamp)""",
             (cutoff_timestamp,),
+        )
+        # A retained source-only row (including one produced by pre-fix replay)
+        # cannot prove that its original policy survived. Classify all such ready
+        # rows before recovery/polling, independent of timestamps or worker limits.
+        # Keep principal, source fields and any submission evidence untouched.
+        conn.execute(
+            """UPDATE unprocessed_sigs SET status = ?
+                 WHERE status = 'ready for processing'
+                   AND policy_decision IS NULL AND policy_evidence IS NULL""",
+            (HISTORICAL_SOLANA_AUTHORIZATION_MISSING,),
         )
         conn.commit()
     except Exception:

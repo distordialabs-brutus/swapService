@@ -1,0 +1,161 @@
+"""A retained source alone cannot authorize a new policy after restart."""
+import sqlite3
+from unittest.mock import Mock
+
+import pytest
+
+from src import (config, dashboard, nexus_client, solana_client,
+                 solana_deposit_policy, startup_recovery, state_db)
+from test_empty_database_recovery import recovery_env, _configure_workers  # noqa: F401
+from test_partial_restore_deposit_recovery import commit_page
+
+
+@pytest.mark.parametrize("timestamp", [10, 110, 1001])
+def test_startup_holds_retained_ready_source_without_policy(recovery_env, monkeypatch, timestamp):
+    path, *_ = recovery_env
+    _configure_workers(monkeypatch, maximum=2000)
+    monkeypatch.setattr(startup_recovery.time, "time", lambda: 1000)
+    send, debit = Mock(), Mock(return_value=(True, "unauthorized-debit"))
+    monkeypatch.setattr(solana_client, "send_solana_token_to_account_with_sig", send)
+    monkeypatch.setattr(nexus_client, "debit_nexus_token_with_txid", debit)
+    deposit = ("source-only", timestamp, "nexus:recipient", "sender", 1100)
+    # This is also the row left by old replay before the policy worker ran.
+    state_db.add_unprocessed_sig(*deposit, "ready for processing", None)
+
+    for _ in range(2):
+        assert startup_recovery.perform_startup_recovery()["recovery_complete"] is True
+        solana_client.process_unprocessed_solana_deposits(limit=1)
+        solana_client.process_solana_deposits_refunding(limit=1)
+        solana_client.process_solana_deposits_quarantine(limit=1)
+        debit.assert_not_called()
+        send.assert_not_called()
+        assert state_db.get_unprocessed_sig_status("source-only") == (
+            state_db.HISTORICAL_SOLANA_AUTHORIZATION_MISSING
+        )
+        assert state_db.get_unresolved_solana_liability_units() == 1100
+        with sqlite3.connect(path) as conn:
+            assert conn.execute(
+                "SELECT timestamp, memo, from_address, amount_usdc_units, policy_decision, "
+                "policy_evidence FROM unprocessed_sigs WHERE sig = 'source-only'"
+            ).fetchone() == (*deposit[1:], None, None)
+            for table in ("fee_entries", "reservations", "solana_payout_budget_events",
+                          "processed_sigs", "refunded_sigs", "quarantined_sigs"):
+                assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+        issue = next(row for row in dashboard.api_issues()["issues"] if row["id"] == "source-only")
+        assert issue["status"] == state_db.HISTORICAL_SOLANA_AUTHORIZATION_MISSING
+        assert "do not" in issue["operator_action"]
+        # Repeated scan pages and schema initialization cannot promote a retained hold.
+        assert commit_page("core", [deposit]) == 0
+        assert commit_page("helius", [deposit]) == 0
+        state_db.init_db()
+
+
+@pytest.mark.parametrize("existing_boundary", [None, 100])
+def test_failed_hold_update_rolls_back_boundary_and_refuses_scans(recovery_env, existing_boundary):
+    path, scan, nexus_scan, reference = recovery_env
+    if existing_boundary is not None:
+        state_db.record_solana_recovery_boundary(existing_boundary)
+    state_db.add_unprocessed_sig("source-only", 110, "memo", "sender", 1100,
+                                 "ready for processing", None)
+    with sqlite3.connect(path) as conn:
+        conn.execute("""CREATE TRIGGER reject_source_hold BEFORE UPDATE ON unprocessed_sigs
+            BEGIN SELECT RAISE(ABORT, 'injected persistence failure'); END""")
+    result = startup_recovery.perform_startup_recovery()
+    assert result["recovery_complete"] is False
+    assert result["error"] == "solana_recovery_boundary_persistence_failed"
+    scan.assert_not_called()
+    nexus_scan.assert_not_called()
+    reference.assert_not_called()
+    assert state_db.get_unprocessed_sig_status("source-only") == "ready for processing"
+    with sqlite3.connect(path, timeout=0) as conn:
+        conn.execute("BEGIN EXCLUSIVE")
+        assert conn.execute("SELECT cutoff_timestamp FROM solana_recovery_boundary").fetchone() == (
+            None if existing_boundary is None else (existing_boundary,)
+        )
+
+
+def test_all_source_only_rows_are_held_without_starving_frozen_or_live_work(recovery_env, monkeypatch):
+    path, *_ = recovery_env
+    _configure_workers(monkeypatch, maximum=2000, flat=10)
+    monkeypatch.setattr(startup_recovery.time, "time", lambda: 1000)
+    send, debit = Mock(), Mock(return_value=(True, "original-debit"))
+    monkeypatch.setattr(solana_client, "send_solana_token_to_account_with_sig", send)
+    monkeypatch.setattr(nexus_client, "debit_nexus_token_with_txid", debit)
+    for index in range(5):
+        state_db.add_unprocessed_sig(f"source-{index}", 10 + index, "nexus:recipient",
+                                     "sender", 1100, "ready for processing", None)
+    state_db.add_unprocessed_sig("frozen", 110, "nexus:recipient", "sender", 1100,
+                                 "ready for processing", None)
+    evidence = solana_deposit_policy.freeze_evidence(
+        signature="frozen", timestamp=110, memo="nexus:recipient", from_address="sender",
+        input_units=1100, decision=solana_deposit_policy.classify(
+            1100, solana_deposit_policy.terms_from_config(config)),
+    )
+    state_db.freeze_solana_deposit_policy_decision("frozen", evidence)
+    _configure_workers(monkeypatch, maximum=2000, flat=100)
+    assert startup_recovery.perform_startup_recovery()["recovery_complete"] is True
+    assert solana_client.process_unprocessed_solana_deposits(limit=1) == [1, 0, 0, 0]
+    assert debit.call_args.args[:2] == ("recipient", 1090)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT policy_evidence FROM unprocessed_sigs WHERE sig = 'frozen'").fetchone() == (evidence,)
+        assert conn.execute("SELECT COUNT(*) FROM unprocessed_sigs WHERE status = ?",
+                            (state_db.HISTORICAL_SOLANA_AUTHORIZATION_MISSING,)).fetchone() == (5,)
+    # Fresh post-startup input can still freeze its first policy and execute once.
+    assert commit_page("core", [("live", 1001, "nexus:recipient", "sender", 1100)]) == 1
+    assert solana_client.process_unprocessed_solana_deposits(limit=1) == [1, 0, 0, 0]
+    assert debit.call_args.args[:2] == ("recipient", 1000)
+    state_db.init_db()
+    assert startup_recovery.perform_startup_recovery()["recovery_complete"] is True
+    solana_client.process_unprocessed_solana_deposits(limit=1)
+    assert debit.call_count == 2
+    send.assert_not_called()
+    assert state_db.get_unresolved_solana_liability_units() == 7700
+
+
+def test_recovery_hold_preserves_capacity_evidence_without_advertising_retry(recovery_env, monkeypatch):
+    path, *_ = recovery_env
+    _configure_workers(monkeypatch)
+    send = Mock()
+    monkeypatch.setattr(solana_client, "send_solana_token_to_account_with_sig", send)
+    state_db.add_unprocessed_sig("partial", 110, "nexus:recipient", "sender", 1100,
+                                 "ready for processing", None)
+    solana_client.process_unprocessed_solana_deposits(limit=1)
+    solana_client.process_solana_deposits_refunding(limit=1)
+    assert state_db.get_unprocessed_sig_status("partial") == "refund capacity held"
+    with sqlite3.connect(path) as conn:
+        capacity_before = conn.execute("SELECT * FROM solana_payout_capacity_holds").fetchall()
+        # Partial restore: stale source component alongside retained frozen capacity.
+        conn.execute("UPDATE unprocessed_sigs SET status = 'ready for processing', "
+                     "policy_decision = NULL, policy_evidence = NULL WHERE sig = 'partial'")
+    assert startup_recovery.perform_startup_recovery()["recovery_complete"] is True
+    issue = next(row for row in dashboard.api_issues()["issues"] if row["id"] == "partial")
+    assert issue["status"] == state_db.HISTORICAL_SOLANA_AUTHORIZATION_MISSING
+    assert issue["operator_action"] == dashboard.SIG_OPERATOR_ACTIONS[issue["status"]]
+    for _ in range(2):
+        solana_client.process_unprocessed_solana_deposits(limit=1)
+        solana_client.process_solana_deposits_refunding(limit=1)
+        solana_client.process_solana_deposits_quarantine(limit=1)
+        state_db.init_db()
+    send.assert_not_called()
+    assert state_db.get_unresolved_solana_liability_units() == 1100
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT * FROM solana_payout_capacity_holds").fetchall() == capacity_before
+
+
+def test_source_hold_changes_only_status_and_retains_existing_reservation(recovery_env):
+    path, *_ = recovery_env
+    state_db.add_unprocessed_sig("interrupted", 110, "nexus:recipient", "sender", 1100,
+                                 "ready for processing", "retained-remote-id")
+    assert state_db.reserve_action(state_db.DEBIT_RESERVATION_KIND, "interrupted")
+    with sqlite3.connect(path) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute("UPDATE unprocessed_sigs SET reference = 99, amount_usdd_units = 1090")
+        before = dict(conn.execute("SELECT * FROM unprocessed_sigs").fetchone())
+        reservations = [tuple(row) for row in conn.execute("SELECT * FROM reservations")]
+    assert startup_recovery.perform_startup_recovery()["recovery_complete"] is True
+    with sqlite3.connect(path) as conn:
+        conn.row_factory = sqlite3.Row
+        after = dict(conn.execute("SELECT * FROM unprocessed_sigs").fetchone())
+        assert after == {**before, "status": state_db.HISTORICAL_SOLANA_AUTHORIZATION_MISSING}
+        assert [tuple(row) for row in conn.execute("SELECT * FROM reservations")] == reservations
+    assert state_db.get_unresolved_solana_liability_units() == 1100

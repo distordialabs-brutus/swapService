@@ -152,7 +152,11 @@ def test_boundary_is_inclusive_and_paged_replay_preserves_retained_rows(recovery
                        previous=1000) == 0
     assert {row["signature"] for row in state_db.get_solana_deposit_holds()} == {"equal", "older"}
     assert state_db.get_unprocessed_sig_status("retained") == "policy held, non-sendable"
-    assert state_db.get_unprocessed_sig_status("live") == "ready for processing"
+    # A restart cannot certify this retained source-only row's missing policy,
+    # even when its timestamp exceeds the clock/replay boundary.
+    assert state_db.get_unprocessed_sig_status("live") == (
+        state_db.HISTORICAL_SOLANA_AUTHORIZATION_MISSING
+    )
     assert state_db.get_unresolved_solana_liability_units() == 213
 
 

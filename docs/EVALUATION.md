@@ -141,7 +141,8 @@ principal, source and custody/query provenance remain in `solana_deposit_holds`;
 checkpoint pinning include those rows. Historical holds cannot be automatically promoted, including
 through repeated pages or direct hold replay, and are excluded before the automatic replay limit.
 The dashboard issues endpoint exposes them with exact integer principal and a no-manual-send warning.
-Retained lifecycle/finality/parser rows are not reclassified by this containment.
+Retained lifecycle/finality/parser rows are not reclassified by this unseen-source containment; the
+additional source-only ready-row containment below applies at startup.
 
 This is **not R-1 closure**: the boundary is the greater of the startup local timestamp, Solana
 checkpoint and previously retained boundary, not an independent restore manifest or authoritative
@@ -155,6 +156,27 @@ Collected coverage in `tests/test_partial_restore_deposit_recovery.py` exercises
 one unrelated processed source after lost below-minimum/nonpositive/refund/quarantine decisions, both
 page committers, changed terms, multiple pages, cutoff equality, restart/duplicate replay, full liability,
 zero mocked sends, retained hold eligibility, query rollback, upgrade and persistence failures.
+
+**Implemented maintenance containment — retained source-only ready rows:** in the same startup
+transaction as the replay boundary, every retained `ready for processing` Solana row with both
+`policy_decision` and `policy_evidence` absent becomes `historical_solana_authorization_missing`.
+No timestamp or worker-limit exemption applies. Source fields, full principal, submission metadata,
+reservations and capacity evidence are not rewritten or released. Existing liability/checkpoint logic
+continues to include these non-sendable rows; the dashboard exposes their hold without suggesting
+that retained capacity evidence authorizes retry. Reinitialization and duplicate pages cannot promote them.
+
+The regression first reproduced a current-term Nexus debit from a retained source-only row. Collected
+coverage in `tests/test_retained_source_recovery.py` now verifies zero transport for that case, sources
+older than scan ranges and newer than the local clock, repeated startup, both page committers, more
+held rows than the worker limit, preserved capacity evidence, and atomic rollback/refusal on a failed
+hold write. Positive controls retain the original frozen policy through terms drift and admit genuinely
+new post-startup sources. Existing online-backup/DB+WAL capacity-intent tests remain applicable.
+
+This remains **narrow R-1 containment**, not closure. A crash after source admission but before the
+first policy freeze now conservatively requires an audited resolution that does not yet exist.
+Partially present/malformed policy fields, pre-fix rows already classified under replacement terms,
+other lifecycle components and Nexus-side recovery still require the broader admission protocol.
+Do not clear or manually retry these holds; production remains blocked.
 
 **Exit:** bind admission to a complete restore/deployment identity, or retain each affected rediscovered
 source as a quantified, visible, non-sendable recovery hold. Test stale/partial/pre-fix restores containing

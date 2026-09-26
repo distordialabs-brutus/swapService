@@ -49,6 +49,7 @@ except Exception:
 # Statuses that mean "a human should look at this".  The paired action maps turn a
 # raw state-machine label into an instruction that is safe for the operator to follow.
 SIG_ISSUE_STATUSES = (
+    "historical_solana_authorization_missing",
     "policy held, non-sendable",
     "debit unverified", "debit in flight", "debited, awaiting confirmation",
     "to be refunded", "refund capacity held", "refund submission held", "refund evidence held", "refund sent, awaiting confirmation",
@@ -60,6 +61,9 @@ TXID_ISSUE_STATUSES = (
     "trade balance to be checked", "payout cap held", "sending", "sig created, awaiting confirmations",
 )
 SIG_OPERATOR_ACTIONS = {
+    "historical_solana_authorization_missing": (
+        "retain full principal; historical policy is missing; do not retry or send manually"
+    ),
     "policy held, non-sendable": (
         "retain the full principal; review policy evidence before manual disposition"
     ),
@@ -350,6 +354,11 @@ def api_issues() -> dict:
                 operator_action = (
                     "allow automatic retry; inspect if stale; do not send manually"
                 )
+        if r["status"] == state_db.HISTORICAL_SOLANA_AUTHORIZATION_MISSING:
+            # Retained capacity evidence is diagnostic, not permission to retry a
+            # source whose startup authorization is held.
+            operator_action = SIG_OPERATOR_ACTIONS[r["status"]]
+            capacity_detail = "Historical policy missing; full source principal held."
         issues.append({
             "kind": f"{SOL_SYM}→{NXS_SYM}",
             "id": r["sig"],
