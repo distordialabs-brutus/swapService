@@ -62,6 +62,8 @@ search roots or symlinks to executable locations. A pinned unsafe image is still
 
 The guard requires:
 
+- object-shaped `HostConfig` evidence; null, arrays and scalar values refuse through
+  the sanitized invalid-evidence boundary even if their approval digest matches;
 - a never-started (`created`, not running) container with the exact approved image ID;
 - `ReadonlyRootfs=true`, `Privileged=false`, `CapDrop=["ALL"]`, no added capabilities;
 - explicit `HostConfig.RestartPolicy.Name="no"` and integer `MaximumRetryCount=0`;

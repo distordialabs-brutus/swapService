@@ -77,6 +77,8 @@ def launch(container_id: str, image_id: str, config_sha256: str) -> int:
             if hashlib.sha256(raw).hexdigest() != config_sha256:
                 raise LaunchError("container configuration does not match independent approval")
             host = value["HostConfig"]
+            if not isinstance(host, dict):
+                raise ValueError
             restart = host.get("RestartPolicy")
             if (not isinstance(restart, dict)
                     or restart.get("Name") != "no"

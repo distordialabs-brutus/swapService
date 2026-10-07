@@ -194,6 +194,33 @@ closure, witness-image binding and real Docker claim/run/seal/mutation/crash acc
 remain open. This host still denies Docker socket access; engine tests are offline/injected,
 not an actual restart rehearsal. Production and real funds remain blocked.
 
+### Maintenance increment — sanitize malformed external host-policy evidence
+
+**Implemented narrowly offline; Batch 0 remains blocked.** On clean publication base
+`ea5a1af`, the external launcher dereferenced `HostConfig.get()` without checking that
+Docker inspection supplied a JSON object. A matching approval digest with null, array,
+string, integer or boolean host policy escaped `main()` as an uncaught `AttributeError`,
+violating the launcher's controlled, secret-safe refusal boundary. Five collected
+regressions reproduced the exception before the fix. Both inspection iterations now
+require object-shaped host policy before reading its restart or execution constraints;
+invalid shape follows the existing sanitized `LaunchError` path, with exit status 1
+and no diff/start action. No approval, image or financial authority is created.
+
+The focused collected launcher module returned **80 passed**, including unchanged
+exact-candidate one-start/exit-status coverage. Full-suite, static/index, isolation and
+exact publication results accompany the maintenance commit report. Production paths
+are `scripts/custody_external_launcher.py` and its focused tests; no dependency,
+custody schema, worker or witness behavior changed.
+
+**Work-item grounding:** Batch 0 external executable authority, O4/O3 and supporting
+O1; deployment/startup owns the component and the scheduled maintainer acts under the
+bounded one-issue authorization. The non-Atlas settlement hypothesis, transitional
+custody and independent artifact/release authority remain unchanged. This fixes a
+malformed-evidence reporting boundary only, not complete artifact attestation or a
+transport bypass. Engine tests remain offline/injected. Protected installation,
+complete image closure, external-image witness binding, real Docker mutation and
+claim/run/seal/crash acceptance remain open; production and real funds remain blocked.
+
 ## Historical verdict — 2026-10-02
 
 **Release blocked.** Committed-runtime and separately reviewed candidate identity:

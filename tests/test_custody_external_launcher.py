@@ -226,6 +226,31 @@ def test_missing_or_malformed_restart_evidence_is_not_disabled(monkeypatch, poli
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize("host", [None, [], "private-token", 0, False])
+def test_nonobject_host_policy_is_sanitized_before_later_action(monkeypatch, capsys, host):
+    launcher = load_launcher()
+    value = candidate()
+    value["HostConfig"] = host
+    calls = []
+
+    def engine(args, *, attach=False):
+        calls.append(args)
+        if args[0] == "inspect":
+            return json.dumps([value])
+        if args[0] == "diff":
+            return ""
+        pytest.fail("invalid host policy reached execution")
+
+    monkeypatch.setattr(launcher, "_engine", engine)
+    # An independently matching digest is not proof of valid evidence shape.
+    assert launcher.main(["--container", CONTAINER, "--approved-image", IMAGE,
+                          "--approved-config", approved_config(value)]) == 1
+    error = capsys.readouterr().err
+    assert error == "custody launcher refused: local container evidence is invalid\n"
+    assert "private-token" not in error
+    assert [args[0] for args in calls] == ["inspect"]
+
+
 @pytest.mark.parametrize("drift", ["config", "state", "layer", "restart"])
 def test_changed_evidence_between_checks_never_starts(monkeypatch, drift):
     launcher = load_launcher()
