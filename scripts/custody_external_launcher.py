@@ -77,6 +77,14 @@ def launch(container_id: str, image_id: str, config_sha256: str) -> int:
             if hashlib.sha256(raw).hexdigest() != config_sha256:
                 raise LaunchError("container configuration does not match independent approval")
             host = value["HostConfig"]
+            restart = host.get("RestartPolicy")
+            if (not isinstance(restart, dict)
+                    or restart.get("Name") != "no"
+                    or type(restart.get("MaximumRetryCount")) is not int
+                    or restart["MaximumRetryCount"] != 0):
+                # A daemon restart would skip admission and reuse a previously
+                # executed container rather than a pristine created candidate.
+                raise LaunchError("container automatic restart policy is not disabled")
             if (value["State"]["Status"] != "created"
                     or value["State"]["Running"] is not False
                     or host["ReadonlyRootfs"] is not True

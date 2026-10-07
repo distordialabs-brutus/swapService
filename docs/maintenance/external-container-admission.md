@@ -64,6 +64,10 @@ The guard requires:
 
 - a never-started (`created`, not running) container with the exact approved image ID;
 - `ReadonlyRootfs=true`, `Privileged=false`, `CapDrop=["ALL"]`, no added capabilities;
+- explicit `HostConfig.RestartPolicy.Name="no"` and integer `MaximumRetryCount=0`;
+  missing/malformed evidence and `always`, `unless-stopped` or `on-failure` policies
+  refuse even if the configuration digest matches independent approval. Docker-managed
+  restarts would reuse an executed container without repeating admission;
 - no user-configured tmpfs, anonymous image volumes or legacy `HostConfig.Binds`;
 - only explicit bind destinations `/var/lib/swapservice` (custody data) and
   `/run/swapservice-secrets` (read-only credentials); source paths, permissions and all

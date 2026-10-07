@@ -32,6 +32,7 @@ def candidate():
                    "WorkingDir": "/opt/swapService", "User": "1000:1000"},
         "HostConfig": {"ReadonlyRootfs": True, "Privileged": False,
                        "CapDrop": ["ALL"], "CapAdd": None, "Tmpfs": {},
+                       "RestartPolicy": {"Name": "no", "MaximumRetryCount": 0},
                        "Mounts": [
                            {"Type": "bind", "Source": "/protected/custody", "Target": "/var/lib/swapservice",
                             "ReadOnly": False, "BindOptions": {"NonRecursive": True, "Propagation": "rprivate"}},
@@ -170,7 +171,62 @@ def test_unsafe_container_is_rejected_even_with_matching_config_pin(monkeypatch,
         launcher.launch(CONTAINER, IMAGE, approved_config(value))
 
 
-@pytest.mark.parametrize("drift", ["config", "state", "layer"])
+@pytest.mark.parametrize("policy", [
+    {"Name": "always", "MaximumRetryCount": 0},
+    {"Name": "unless-stopped", "MaximumRetryCount": 0},
+    {"Name": "on-failure", "MaximumRetryCount": 3},
+])
+def test_daemon_restart_bypass_refuses_even_with_matching_approval(monkeypatch, policy):
+    launcher = load_launcher()
+    value = candidate()
+    value["HostConfig"]["RestartPolicy"] = policy
+    calls = []
+
+    def engine(args, *, attach=False):
+        calls.append(args)
+        if args[0] == "inspect":
+            return json.dumps([value])
+        if args[0] == "diff":
+            return ""
+        return 0
+
+    monkeypatch.setattr(launcher, "_engine", engine)
+    with pytest.raises(launcher.LaunchError, match="restart"):
+        launcher.launch(CONTAINER, IMAGE, approved_config(value))
+    assert [args[0] for args in calls] == ["inspect"]
+
+
+@pytest.mark.parametrize("policy", [
+    "missing", None, [], "no", {},
+    {"Name": "", "MaximumRetryCount": 0},
+    {"Name": "no"}, {"MaximumRetryCount": 0},
+    {"Name": "no", "MaximumRetryCount": False},
+    {"Name": "no", "MaximumRetryCount": 0.0},
+    {"Name": "no", "MaximumRetryCount": "0"},
+    {"Name": "no", "MaximumRetryCount": -1},
+    {"Name": "no", "MaximumRetryCount": 1},
+])
+def test_missing_or_malformed_restart_evidence_is_not_disabled(monkeypatch, policy):
+    launcher = load_launcher()
+    value = candidate()
+    if policy == "missing":
+        del value["HostConfig"]["RestartPolicy"]
+    else:
+        value["HostConfig"]["RestartPolicy"] = policy
+    calls = []
+
+    def engine(args, *, attach=False):
+        calls.append(args)
+        assert args[0] == "inspect", "invalid restart evidence reached later action"
+        return json.dumps([value])
+
+    monkeypatch.setattr(launcher, "_engine", engine)
+    with pytest.raises(launcher.LaunchError, match="restart"):
+        launcher.launch(CONTAINER, IMAGE, approved_config(value))
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("drift", ["config", "state", "layer", "restart"])
 def test_changed_evidence_between_checks_never_starts(monkeypatch, drift):
     launcher = load_launcher()
     value = candidate()
@@ -186,6 +242,8 @@ def test_changed_evidence_between_checks_never_starts(monkeypatch, drift):
                     seen["Config"]["Env"].append("PYTHONPATH=/var/lib/swapservice")
                 elif drift == "state":
                     seen["State"] = {"Status": "running", "Running": True}
+                elif drift == "restart":
+                    seen["HostConfig"]["RestartPolicy"]["Name"] = "always"
             return json.dumps([seen])
         return "A /opt/swapService/evil.py\n" if drift == "layer" and len(calls) == 4 else ""
 

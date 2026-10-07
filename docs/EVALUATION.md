@@ -161,6 +161,39 @@ is unchanged; this tool is not yet the mandatory supported deployment path. Batc
 and real funds remain blocked. Full/static/index and publication results accompany the exact
 maintenance commit report.
 
+### Maintenance increment — refuse Docker-managed restart bypass (2026-10-07)
+
+**Implemented narrowly offline; Batch 0 remains blocked.** On clean publication base
+`08e2799`, the external launcher still accepted `always`, `unless-stopped` and
+`on-failure` restart policies when their configuration digest was independently pinned.
+Docker could consequently restart a previously executed container without repeating the
+external admission checks. Three collected regressions reproduced that acceptance before
+this fix. Both inspections now require explicit `RestartPolicy.Name="no"` and an exact
+integer `MaximumRetryCount=0`; absent or malformed evidence refuses before diff/start.
+Approval pinning alone cannot exempt an automatic restart policy. The existing valid
+candidate still starts exactly once after both inspections and preserves its exit status.
+
+Collected coverage in `tests/test_custody_external_launcher.py` adds unsafe-policy,
+missing/malformed/type-boundary and between-inspection restart-policy drift cases. The
+focused module returned **75 passed**. The clean Python **3.12** complete suite returned
+**1,597 passed, 77 subtests passed** in 108.96 seconds, with no skips. Static/index and
+CI-isolation gates, final diff and exact publication evidence accompany the maintenance
+commit report. No dependency, financial worker, custody schema or witness behavior changed.
+
+**Work-item grounding:** O4/O3 and supporting O1; explicit non-Atlas settlement hypothesis
+and transitional custody are unchanged. Deployment/startup owns the production path
+`scripts/custody_external_launcher.py`; the scheduled maintainer acts under the operator's
+one-issue repair/publication authorization. Independent artifact approval and human release
+remain separate. The contract is documented in the
+[external-container admission note](maintenance/external-container-admission.md).
+
+This prevents the declared Docker restart-policy bypass only. Exclusive protected Docker
+administration remains mandatory: another administrator or external supervisor can still
+change policy or bypass the guard after inspection. Protected installation, complete image
+closure, witness-image binding and real Docker claim/run/seal/mutation/crash acceptance
+remain open. This host still denies Docker socket access; engine tests are offline/injected,
+not an actual restart rehearsal. Production and real funds remain blocked.
+
 ## Historical verdict — 2026-10-02
 
 **Release blocked.** Committed-runtime and separately reviewed candidate identity:
