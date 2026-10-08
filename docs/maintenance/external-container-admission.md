@@ -66,6 +66,12 @@ The guard requires:
   the sanitized invalid-evidence boundary even if their approval digest matches;
 - a never-started (`created`, not running) container with the exact approved image ID;
 - `ReadonlyRootfs=true`, `Privileged=false`, `CapDrop=["ALL"]`, no added capabilities;
+- explicit `HostConfig.PidMode=""`, Docker's default private PID namespace;
+  host and `container:<id>` namespaces, missing evidence and malformed values refuse
+  even with matching approval. Shared namespaces can expose other processes' filesystem
+  roots through `/proc/<pid>/root`, outside the approved image/mount projection. A
+  private namespace contains this cross-process route only; it does not attest runtime
+  pseudo-filesystems or guarantee complete executable closure;
 - explicit `HostConfig.RestartPolicy.Name="no"` and integer `MaximumRetryCount=0`;
   missing/malformed evidence and `always`, `unless-stopped` or `on-failure` policies
   refuse even if the configuration digest matches independent approval. Docker-managed
@@ -106,7 +112,8 @@ Do not configure an independent automatic restart route that bypasses admission.
 
 Collected [offline tests](../../tests/test_custody_external_launcher.py) inject the trusted
 Docker boundary. They verify reported image/command/configuration/network/security/layer
-drift, mount constraints, repeated checks, strict pins/JSON, sanitized authority failures,
+drift, mount constraints, private PID namespace admission, repeated checks, strict
+pins/JSON, sanitized authority failures,
 clean child environment and exact-ID start ordering. An actual isolated Python subprocess
 verifies CLI refusal before a mutable `sitecustomize.py` can execute. These are not real
 Docker file-mutation, complete service generation, witness-contention or deployment tests.

@@ -79,6 +79,11 @@ def launch(container_id: str, image_id: str, config_sha256: str) -> int:
             host = value["HostConfig"]
             if not isinstance(host, dict):
                 raise ValueError
+            # Shared PID namespaces can expose another process's filesystem via
+            # /proc/<pid>/root, outside this image's mount/layer approval.
+            # Docker reports the default private namespace as an empty string.
+            if host.get("PidMode") != "":
+                raise LaunchError("container private PID namespace is required")
             restart = host.get("RestartPolicy")
             if (not isinstance(restart, dict)
                     or restart.get("Name") != "no"

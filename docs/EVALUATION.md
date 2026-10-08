@@ -221,6 +221,39 @@ transport bypass. Engine tests remain offline/injected. Protected installation,
 complete image closure, external-image witness binding, real Docker mutation and
 claim/run/seal/crash acceptance remain open; production and real funds remain blocked.
 
+### Maintenance increment — private PID namespace admission (2026-10-08)
+
+**Implemented narrowly offline; Batch 0 remains blocked.** On clean publication base
+`1c16690`, an independently matching configuration pin allowed both host and shared
+`container:<id>` PID namespaces through the external launcher. Two collected red
+regressions reached the injected start action. Shared process namespaces can expose
+other processes' filesystem roots through `/proc/<pid>/root`, outside the approved
+image and mount projection; actual access depends on host permissions/security policy.
+Both inspections now require explicit `HostConfig.PidMode=""`, Docker's default
+private PID namespace. Missing, malformed and unsupported values refuse with a
+sanitized exit 1 before diff/start. A matching approval cannot exempt this constraint.
+
+The focused launcher module returned **91 passed**. Coverage includes both shared
+namespace modes, missing/type-confused evidence, between-inspection drift, and the
+unchanged exact-candidate one-start/exit-status control. The clean Python **3.12.3**
+complete suite returned **1,613 passed, 77 subtests passed** in 109.32 seconds, with no
+skips. Static/index, CI-isolation and exact publication evidence accompany the
+maintenance commit report. No financial worker, schema, witness or dependency changed.
+
+**Work-item grounding:** Batch 0 external executable authority, O4/O3 and supporting
+O1; deployment/startup owns `scripts/custody_external_launcher.py` and its collected
+`tests/test_custody_external_launcher.py`. The scheduled maintainer acts under the
+operator's bounded one-issue authorization. The non-Atlas settlement hypothesis,
+transitional custody and independent artifact/release approval remain unchanged.
+See the [external-container admission contract](maintenance/external-container-admission.md).
+
+This contains a shared-process filesystem route only, not complete executable closure
+or runtime pseudo-filesystem attestation. Docker evidence is offline/injected; no real
+shared-namespace access or approved claim/run/seal generation was exercised. Protected
+installation/exclusive Docker administration, complete image closure, external-image
+witness binding and real mutation/crash/restore acceptance remain open. Production and
+real funds remain blocked.
+
 ## Historical verdict — 2026-10-02
 
 **Release blocked.** Committed-runtime and separately reviewed candidate identity:

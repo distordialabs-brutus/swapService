@@ -32,6 +32,7 @@ def candidate():
                    "WorkingDir": "/opt/swapService", "User": "1000:1000"},
         "HostConfig": {"ReadonlyRootfs": True, "Privileged": False,
                        "CapDrop": ["ALL"], "CapAdd": None, "Tmpfs": {},
+                       "PidMode": "",
                        "RestartPolicy": {"Name": "no", "MaximumRetryCount": 0},
                        "Mounts": [
                            {"Type": "bind", "Source": "/protected/custody", "Target": "/var/lib/swapservice",
@@ -169,6 +170,84 @@ def test_unsafe_container_is_rejected_even_with_matching_config_pin(monkeypatch,
                         json.dumps([value]) if args[0] == "inspect" else "")
     with pytest.raises(launcher.LaunchError):
         launcher.launch(CONTAINER, IMAGE, approved_config(value))
+
+
+@pytest.mark.parametrize("pid_mode", ["host", "container:" + "c" * 64])
+def test_shared_pid_namespace_refuses_even_with_matching_approval(monkeypatch, capsys, pid_mode):
+    launcher = load_launcher()
+    value = candidate()
+    value["HostConfig"]["PidMode"] = pid_mode
+    calls = []
+
+    def engine(args, *, attach=False):
+        calls.append(args)
+        if args[0] == "inspect":
+            return json.dumps([value])
+        if args[0] == "diff":
+            return ""
+        return 0
+
+    monkeypatch.setattr(launcher, "_engine", engine)
+    assert launcher.main(["--container", CONTAINER, "--approved-image", IMAGE,
+                          "--approved-config", approved_config(value)]) == 1
+    assert capsys.readouterr().err == (
+        "custody launcher refused: container private PID namespace is required\n"
+    )
+    assert [args[0] for args in calls] == ["inspect"]
+
+
+@pytest.mark.parametrize("pid_mode", ["missing", None, [], {}, False, 0, "private"])
+def test_missing_or_malformed_pid_evidence_is_not_private(monkeypatch, capsys, pid_mode):
+    launcher = load_launcher()
+    value = candidate()
+    if pid_mode == "missing":
+        del value["HostConfig"]["PidMode"]
+    else:
+        value["HostConfig"]["PidMode"] = pid_mode
+    calls = []
+
+    def engine(args, *, attach=False):
+        calls.append(args)
+        if args[0] == "inspect":
+            return json.dumps([value])
+        if args[0] == "diff":
+            return ""
+        pytest.fail("invalid PID namespace evidence reached execution")
+
+    monkeypatch.setattr(launcher, "_engine", engine)
+    assert launcher.main(["--container", CONTAINER, "--approved-image", IMAGE,
+                          "--approved-config", approved_config(value)]) == 1
+    assert capsys.readouterr().err == (
+        "custody launcher refused: container private PID namespace is required\n"
+    )
+    assert [args[0] for args in calls] == ["inspect"]
+
+
+@pytest.mark.parametrize("pid_mode", ["host", "container:" + "c" * 64])
+def test_pid_namespace_drift_between_checks_never_starts(monkeypatch, capsys, pid_mode):
+    launcher = load_launcher()
+    value = candidate()
+    approval = approved_config(value)
+    calls = []
+
+    def engine(args, *, attach=False):
+        calls.append(args)
+        if args[0] == "inspect":
+            seen = copy.deepcopy(value)
+            if len(calls) == 3:
+                seen["HostConfig"]["PidMode"] = pid_mode
+            return json.dumps([seen])
+        if args[0] == "diff":
+            return ""
+        pytest.fail("changed PID namespace reached execution")
+
+    monkeypatch.setattr(launcher, "_engine", engine)
+    assert launcher.main(["--container", CONTAINER, "--approved-image", IMAGE,
+                          "--approved-config", approval]) == 1
+    assert capsys.readouterr().err == (
+        "custody launcher refused: container configuration does not match independent approval\n"
+    )
+    assert [args[0] for args in calls] == ["inspect", "diff", "inspect"]
 
 
 @pytest.mark.parametrize("policy", [
