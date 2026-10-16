@@ -79,6 +79,11 @@ def launch(container_id: str, image_id: str, config_sha256: str) -> int:
             host = value["HostConfig"]
             if not isinstance(host, dict):
                 raise ValueError
+            # OCI annotations can configure the trusted runtime (for example,
+            # runc's host systemd scope), not merely label the approved image.
+            annotations = host.get("Annotations")
+            if annotations is not None and (not isinstance(annotations, dict) or annotations):
+                raise LaunchError("container runtime annotations are not disabled")
             # Shared PID namespaces can expose another process's filesystem via
             # /proc/<pid>/root, outside this image's mount/layer approval.
             # Docker reports the default private namespace as an empty string.

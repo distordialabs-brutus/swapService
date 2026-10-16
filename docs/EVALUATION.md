@@ -1,5 +1,47 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
+## Maintenance increment — refuse candidate-supplied runtime annotations (2026-10-16)
+
+**Implemented narrowly offline; Batch 0 remains blocked.** The first unresolved
+priority is external pre-execution artifact authority. A matching independent
+configuration pin previously admitted nonempty `HostConfig.Annotations`, which Moby
+passes into the OCI specification. runc recognizes potentially unsafe annotation
+keys, including host-systemd properties, outside the approved image and bind projection.
+Ten collected red regressions reached injected start with nonempty or type-confused
+annotation evidence. Both inspections now require an absent field, JSON null or an
+empty object; other evidence refuses before later diff/start with a sanitized message.
+Absence supports Docker versions that omit the optional field. Matching approval does
+not exempt this constraint. See the [external-container contract](maintenance/external-container-admission.md#runtime-annotation-restriction).
+
+The sixteen focused cases cover runtime-specific and generic keys, malformed shapes,
+second-inspection drift, all three disabled forms and exact-ID one-start/child-exit
+controls. Clean Python **3.12.3** gates passed in two exports whose Git tree identities
+matched their intended indexes:
+
+| Gate | Isolated HEAD plus this repair | Shared tree including earlier unpublished repairs |
+|---|---|---|
+| Launcher and annotation tests | **107 passed** | **356 passed** |
+| Complete suite | **1,629 passed, 77 subtests passed**, no skips, 106.41 seconds | **1,878 passed, 77 subtests passed**, no skips, 108.52 seconds |
+| CI isolation shards | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** |
+| Compilation, dependency consistency, Markdown links, intended-index literal inventory and whitespace | Passed; **274 active inventory lines** | Passed; **274 active inventory lines** |
+
+Final documentation recording is rechecked against the exact publication index.
+Earlier unpublished repairs remain preserved and excluded from this narrow candidate.
+The base is separately authorized local-only-vision policy commit `e5d0b5b`, so the
+candidate contains no tracked `vision.md` and does not bypass the protective hook.
+Commit, push and exact-SHA CI results accompany the maintenance report; local gates
+are not remote CI or release acceptance. No financial worker, dependency, custody
+schema or witness behavior changed.
+
+**Work-item grounding:** Batch 0, O4/O3 with supporting O1; deployment/startup owns
+`scripts/custody_external_launcher.py` and collected annotation tests. The scheduled
+maintainer acts under bounded one-issue authorization. Non-Atlas settlement,
+transitional custody and independent artifact/release authority remain unchanged.
+This is candidate-supplied OCI annotation containment, not complete executable closure.
+Tests use an injected engine, not actual Docker/runtime/systemd behavior. Protected
+deployment, other daemon/runtime injection, external-image witness binding and real
+mutation/concurrency/crash/restore acceptance remain open. Production and funds remain blocked.
+
 ## Current exact-source assessment — 2026-10-07
 
 **Release and real funds remain blocked.** This assessment covers detached exact source

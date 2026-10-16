@@ -52,6 +52,29 @@ arguments. The launcher never prints inspected evidence or Docker inspection err
 After approval it attaches to the service's normal output, whose existing secret-safe
 logging obligations remain separate.
 
+## Runtime annotation restriction
+
+Both inspections require `HostConfig.Annotations` to be absent, JSON null or an
+empty object. Nonempty objects and all other types refuse, even with independently
+matching configuration approval. Absence is accepted for Docker versions that omit
+this optional field; present annotations are never silently filtered or rewritten.
+The exact representation remains part of the configuration digest.
+
+Annotations are not necessarily passive metadata: [Moby passes this map into the
+OCI specification](https://github.com/moby/moby/blob/d74daf1a/daemon/oci_linux.go),
+and [runc identifies potentially unsafe annotation keys](https://github.com/opencontainers/runc/blob/v1.2.0/features.go),
+including `bundle`, `org.criu.config` and the `org.systemd.property.` prefix.
+For example, systemd properties can configure a host-created scope when the systemd
+cgroup driver is used. A pinned image, read-only root and conventional runtime name
+do not exclude such candidate-supplied runtime configuration. This guard rejects the
+whole map rather than maintaining an incomplete runtime-specific key denylist.
+
+This contains candidate-supplied OCI annotations only. Daemon-generated annotations,
+trusted runtime/host configuration, protected deployment, complete executable closure,
+external-image witness binding and real Docker acceptance remain separate obligations.
+The collected tests inject inspection evidence; they do not prove a real host-systemd
+change, runtime exploit or approved claim/run/seal generation.
+
 ## Container constraints
 
 Prepare the candidate without starting it. The image must contain the repository,
