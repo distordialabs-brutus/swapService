@@ -52,6 +52,27 @@ arguments. The launcher never prints inspected evidence or Docker inspection err
 After approval it attaches to the service's normal output, whose existing secret-safe
 logging obligations remain separate.
 
+## Extra-host gateway restriction
+
+Both inspections require `HostConfig.ExtraHosts` to be absent, JSON null or a
+string array with no entry whose address (the portion after its first `:`) is
+`host-gateway`. Matching independent approval does not exempt the restriction.
+Explicit literal IPv4/IPv6 mappings and disabled forms remain supported and pinned;
+a hostname literally named `host-gateway` with a literal IP is not indirection.
+Malformed field shapes or non-string members refuse without exposing evidence.
+
+[Moby's network initialization](https://github.com/moby/moby/blob/d74daf1a/daemon/container_operations.go)
+replaces that special address with the daemon's `HostGatewayIPs` during startup.
+Pinning `rpc.internal:host-gateway` therefore does not pin the resulting `/etc/hosts`
+address: a changed daemon setting can redirect an approved hostname without changing
+inspection approval or the image's writable-layer diff. Use independently approved
+literal addresses instead of this daemon-resolved token.
+
+This contains one late-bound host-address substitution, not all daemon-generated
+DNS/hostname values or complete executable authority. Protected daemon administration,
+endpoint identity/freshness and real Docker acceptance remain separate obligations.
+Collected engine tests are offline/injected, not a real gateway-change rehearsal.
+
 ## Runtime annotation restriction
 
 Both inspections require `HostConfig.Annotations` to be absent, JSON null or an

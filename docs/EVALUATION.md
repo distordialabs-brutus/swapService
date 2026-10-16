@@ -1,5 +1,47 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
+## Maintenance increment — refuse daemon-resolved extra-host gateways (2026-10-17)
+
+**Implemented narrowly offline; Batch 0 remains blocked.** The first unresolved
+priority remains external pre-execution artifact authority. Two collected red
+regressions reached injected start with matching approval and `HostConfig.ExtraHosts`
+containing a `host-gateway` address. Moby substitutes the daemon's `HostGatewayIPs`
+during startup; the pinned token does not bind the resulting `/etc/hosts` address.
+Both inspections now reject that address token, malformed field shapes and non-string
+members. Absent/null/empty evidence and approved literal IPv4/IPv6 mappings remain
+supported. Tests distinguish a hostname named `host-gateway` from the special address,
+cover second-inspection drift and preserve exact-ID one-start/child-exit behavior.
+See the [external-container contract](maintenance/external-container-admission.md#extra-host-gateway-restriction).
+
+Earlier dirty repairs are preserved and excluded from the publication candidate.
+No dependency, worker, custody schema or witness behavior changes. The scheduled
+maintainer acts under bounded one-issue authorization; deployment/startup owns
+`scripts/custody_external_launcher.py` and its collected tests. Work-item grounding
+is Batch 0, O4/O3 with supporting O1; non-Atlas settlement, transitional custody and
+independent artifact/release authority remain unchanged.
+
+This is late-bound host-address containment only. Other daemon-generated DNS and
+hostname values, protected deployment, complete executable closure, external-image
+witness binding and real Docker mutation/concurrency/crash/restore acceptance remain
+open. Tests inject the engine boundary; no Docker container, live chain or funds were
+used. Production and real funds remain blocked.
+
+Clean Python **3.12.3** verification passed with the Node.js renderer available and
+no skipped tests. The publication candidate was exported from a disposable index;
+its independently indexed export had the exact same Git tree identity.
+
+| Gate | Isolated HEAD plus this repair | Shared tree including earlier unpublished repairs |
+|---|---|---|
+| Launcher module | **110 passed** | **359 passed** |
+| Complete suite | **1,648 passed, 77 subtests passed**, 109.07 seconds | **1,897 passed, 77 subtests passed**, 110.91 seconds |
+| CI isolation shards | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** |
+| Compilation, dependency consistency, Markdown links and intended-index token inventory | Passed; **274 active inventory lines** | Passed; **274 active inventory lines** |
+
+Candidate whitespace passed. Read-only review found no code blocker in this narrow
+increment. Final documentation recording is rechecked against the exact publication
+index and existing pre-commit policy. Commit, push and exact-SHA CI evidence accompany
+the maintenance report; local checks do not establish remote CI or release acceptance.
+
 ## Maintenance increment — refuse candidate-supplied runtime annotations (2026-10-16)
 
 **Implemented narrowly offline; Batch 0 remains blocked.** The first unresolved

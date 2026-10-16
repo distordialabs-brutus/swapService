@@ -24,6 +24,119 @@ def load_launcher():
     return module
 
 
+@pytest.mark.parametrize("extra_hosts", [
+    ["rpc.internal:host-gateway"],
+    ["rpc.internal:192.0.2.10", "witness.internal:host-gateway"],
+])
+def test_extra_hosts_gateway_indirection_refuses_matching_approval(monkeypatch, capsys, extra_hosts):
+    launcher = load_launcher()
+    value = candidate()
+    value["HostConfig"]["ExtraHosts"] = extra_hosts
+    calls = []
+
+    def engine(args, *, attach=False):
+        calls.append((args, attach))
+        if args[0] == "inspect":
+            return json.dumps([value])
+        if args[0] == "diff":
+            return ""
+        assert args == ["start", "--attach", CONTAINER] and attach
+        return 7
+
+    monkeypatch.setattr(launcher, "_engine", engine)
+    assert launcher.main(["--container", CONTAINER, "--approved-image", IMAGE,
+                          "--approved-config", approved_config(value)]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "custody launcher refused: container extra-host gateway indirection is not disabled\n"
+    assert [args[0] for args, _ in calls] == ["inspect"]
+
+
+@pytest.mark.parametrize("extra_hosts", [False, 0, 0.0, "rpc:host-gateway", {}, [None], [False], [[]]])
+def test_malformed_extra_hosts_refuse_without_exposing_evidence(monkeypatch, capsys, extra_hosts):
+    launcher = load_launcher()
+    value = candidate()
+    value["HostConfig"]["ExtraHosts"] = extra_hosts
+    calls = []
+
+    def engine(args, *, attach=False):
+        calls.append(args)
+        if args[0] == "inspect":
+            return json.dumps([value])
+        if args[0] == "diff":
+            return ""
+        pytest.fail("invalid extra-host evidence reached execution")
+
+    monkeypatch.setattr(launcher, "_engine", engine)
+    assert launcher.main(["--container", CONTAINER, "--approved-image", IMAGE,
+                          "--approved-config", approved_config(value)]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "custody launcher refused: container extra-host gateway indirection is not disabled\n"
+    assert [args[0] for args in calls] == ["inspect"]
+
+
+@pytest.mark.parametrize("extra_hosts", [["rpc:host-gateway"], ["rpc:192.0.2.11"], [None]])
+def test_extra_hosts_drift_between_checks_refuses(monkeypatch, capsys, extra_hosts):
+    launcher = load_launcher()
+    value = candidate()
+    value["HostConfig"]["ExtraHosts"] = ["rpc:192.0.2.10"]
+    calls = []
+
+    def engine(args, *, attach=False):
+        calls.append(args)
+        if args[0] == "inspect":
+            seen = copy.deepcopy(value)
+            if len(calls) == 3:
+                seen["HostConfig"]["ExtraHosts"] = extra_hosts
+            return json.dumps([seen])
+        if args[0] == "diff":
+            return ""
+        pytest.fail("changed extra-host evidence reached execution")
+
+    monkeypatch.setattr(launcher, "_engine", engine)
+    assert launcher.main(["--container", CONTAINER, "--approved-image", IMAGE,
+                          "--approved-config", approved_config(value)]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == (
+        "custody launcher refused: container configuration does not match independent approval\n"
+    )
+    assert [args[0] for args in calls] == ["inspect", "diff", "inspect"]
+
+
+@pytest.mark.parametrize("extra_hosts", [
+    "missing", None, [], ["rpc:192.0.2.10"], ["rpc:2001:db8::10"],
+    ["host-gateway:192.0.2.10", "witness:2001:db8::11"],
+])
+def test_literal_or_disabled_extra_hosts_preserve_start_and_exit(monkeypatch, capsys, extra_hosts):
+    launcher = load_launcher()
+    value = candidate()
+    if extra_hosts == "missing":
+        value["HostConfig"].pop("ExtraHosts", None)
+    else:
+        value["HostConfig"]["ExtraHosts"] = extra_hosts
+    calls = []
+
+    def engine(args, *, attach=False):
+        calls.append((args, attach))
+        if args[0] == "inspect":
+            assert args == ["inspect", "--type=container", CONTAINER] and not attach
+            return json.dumps([value])
+        if args[0] == "diff":
+            assert args == ["diff", CONTAINER] and not attach
+            return ""
+        assert args == ["start", "--attach", CONTAINER] and attach
+        return 7
+
+    monkeypatch.setattr(launcher, "_engine", engine)
+    assert launcher.main(["--container", CONTAINER, "--approved-image", IMAGE,
+                          "--approved-config", approved_config(value)]) == 7
+    captured = capsys.readouterr()
+    assert captured.out == captured.err == ""
+    assert [args[0] for args, _ in calls] == ["inspect", "diff", "inspect", "diff", "start"]
+
+
 def candidate():
     return {
         "Id": CONTAINER, "Image": IMAGE,

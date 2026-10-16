@@ -79,6 +79,14 @@ def launch(container_id: str, image_id: str, config_sha256: str) -> int:
             host = value["HostConfig"]
             if not isinstance(host, dict):
                 raise ValueError
+            # Docker substitutes host-gateway from daemon configuration at start;
+            # pinning the token does not pin the resulting /etc/hosts addresses.
+            extra_hosts = host.get("ExtraHosts")
+            if extra_hosts is not None and (
+                    not isinstance(extra_hosts, list)
+                    or not all(isinstance(entry, str) for entry in extra_hosts)
+                    or any(entry.partition(":")[2] == "host-gateway" for entry in extra_hosts)):
+                raise LaunchError("container extra-host gateway indirection is not disabled")
             # OCI annotations can configure the trusted runtime (for example,
             # runc's host systemd scope), not merely label the approved image.
             annotations = host.get("Annotations")
