@@ -1,6 +1,6 @@
 # swapService — Distordia strategy and development alignment
 
-[Repository vision](../vision.md) · [Architecture](../docs/STATE_MACHINES.md) · [Authoritative development plan](../docs/plans/2026-09-25-recovery-admission-and-capacity-fairness.md)
+Local-only repository vision (`vision.md`, not distributed) · [Architecture](../docs/STATE_MACHINES.md) · [Authoritative development plan](../docs/plans/2026-09-25-recovery-admission-and-capacity-fairness.md)
 
 ## Authority tree and portable master summary
 

@@ -2,7 +2,7 @@
 
 ## Governing vision and portfolio traceability
 
-Read [the repository vision](../../vision.md) and [Distordia alignment/dependency map](../DISTORDIA_ALIGNMENT.md) before assigning work. Authority is master Distordia strategy/customer evidence → portfolio roadmap/strategy decisions → repository vision → this development plan → tasks/code/tests/external evidence and human release.
+Read the local-only repository vision (`vision.md`, not distributed with this repository) and [Distordia alignment/dependency map](../DISTORDIA_ALIGNMENT.md) before assigning work. Authority is master Distordia strategy/customer evidence → portfolio roadmap/strategy decisions → repository vision → this development plan → tasks/code/tests/external evidence and human release.
 
 **Portfolio purpose:** primary O4 attributable settlement and bounded risk, supported by O3
 reproducible provenance and O1 inspectable/open evidence contracts. O5 remains an external-

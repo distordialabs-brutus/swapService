@@ -1,4 +1,6 @@
 # Local files
+# Private strategy context; keep on disk, never track or publish.
+/vision.md
 Nexus API docs
 sol_testclient.py
 
