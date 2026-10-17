@@ -194,3 +194,20 @@ claim/run/seal generation and the full mutation/concurrency/crash matrix. Direct
 `python swapService.py` remains unchanged and is not an externally attested launch path.
 Production and real funds remain blocked. See [the evaluation](../EVALUATION.md) and
 [the prioritized plan](../plans/2026-09-25-recovery-admission-and-capacity-fairness.md).
+
+## Strict bind-option evidence
+
+On both inspections, each bind's `BindOptions.ReadOnlyNonRecursive` must be
+absent, JSON null or the exact boolean `false`. Numeric zero (including `0.0`
+and negative floating zero), `true` and all other shapes refuse even when the
+configuration approval matches. Python's equality between zero and `False`
+is not evidence of a Docker boolean. Other nonrecursive/private declaration and
+observed-mount checks remain mandatory; no evidence is normalized or rewritten.
+
+The [focused bind-option tests](../../tests/test_custody_external_bind_options.py)
+cover both custody and secrets mounts, malformed matching-approved evidence,
+second-inspection drift and every pair of supported disabled forms with exact-ID
+one-start/child-exit controls. These are injected inspection tests, not proof of
+a numeric option accepted by a real Docker daemon, a mount exploit or complete
+pre-execution authority. Protected deployment and actual Docker acceptance remain
+separate obligations.

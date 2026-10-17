@@ -1,5 +1,48 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
+## Maintenance increment — strict bind-option boolean evidence (2026-10-17)
+
+**Implemented narrowly offline; Batch 0 remains blocked.** The first unresolved
+priority remains external pre-execution artifact authority. Four collected red
+regressions reached injected start with matching approval when either custody or
+secrets `BindOptions.ReadOnlyNonRecursive` was numeric `0` or `0.0`. Python's
+boolean/numeric equality incorrectly admitted malformed evidence. Both inspections
+now accept only absence, null or exact boolean `false` for this optional field;
+other existing nonrecursive/private bind checks are unchanged. See the
+[strict bind-option contract](maintenance/external-container-admission.md#strict-bind-option-evidence).
+
+Earlier uncommitted repairs are preserved and excluded from this publication
+candidate. No dependency, worker, custody schema or witness behavior changes.
+The scheduled maintainer acts under bounded one-issue authorization; deployment/
+startup owns `scripts/custody_external_launcher.py` and the focused collected tests.
+Work-item grounding is Batch 0, O4/O3 with supporting O1. Non-Atlas settlement,
+transitional custody and independent artifact/release authority remain unchanged.
+
+This is malformed-evidence type validation, not a demonstrated Docker mount
+exploit or complete pre-execution authority. Tests inject the engine boundary;
+no container, live chain or funds were used. Protected deployment, complete image
+closure, external-image witness binding and real Docker mutation/concurrency/
+crash/restore acceptance remain open. Production and real funds remain blocked.
+
+Clean Python **3.12.3** gates passed with Node.js renderer coverage and no skipped
+tests. The isolated candidate and shared-tree exports were independently indexed
+to exactly their intended Git trees.
+
+| Gate | Isolated HEAD plus this repair | Shared tree including earlier unpublished repairs |
+|---|---|---|
+| Four external-launcher modules | **191 passed** | **440 passed** |
+| Complete suite | **1,713 passed, 77 subtests passed**, 107.97 seconds | **1,962 passed, 77 subtests passed**, 111.27 seconds |
+| CI isolation shards | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** |
+| Compilation, dependency consistency, Markdown links and intended-index token inventory | Passed; **274 active inventory lines** | Passed; **274 active inventory lines** |
+
+The 35 focused new cases cover both mount destinations, numeric and other malformed
+evidence, second-inspection drift and every pair of supported disabled forms with
+exact-ID one-start/child-exit controls. Candidate whitespace and the existing
+pre-commit policy passed; final diff inspected. Final documentation recording is
+rechecked against the exact publication index. Commit, push and exact-SHA CI evidence
+accompany the maintenance report; local checks do not establish remote CI, actual
+Docker enforcement or release acceptance.
+
 ## Maintenance increment — refuse automatic healthcheck execution (2026-10-17)
 
 **Implemented narrowly offline; Batch 0 remains blocked.** The first unresolved

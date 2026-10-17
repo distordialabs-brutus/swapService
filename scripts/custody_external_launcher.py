@@ -150,7 +150,8 @@ def launch(container_id: str, image_id: str, config_sha256: str) -> int:
                         or not isinstance(options, dict)
                         or options.get("NonRecursive") is not True
                         or options.get("Propagation") != "rprivate"
-                        or options.get("ReadOnlyNonRecursive") not in (None, False)
+                        or (options.get("ReadOnlyNonRecursive") is not None
+                            and options["ReadOnlyNonRecursive"] is not False)
                         or mount.get("Propagation", "rprivate") != "rprivate"):
                     raise LaunchError("container bind mount policy is inconsistent")
                 destinations.add(destination)
