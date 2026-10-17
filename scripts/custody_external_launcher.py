@@ -76,6 +76,17 @@ def launch(container_id: str, image_id: str, config_sha256: str) -> int:
                              ensure_ascii=True, allow_nan=False).encode("ascii")
             if hashlib.sha256(raw).hexdigest() != config_sha256:
                 raise LaunchError("container configuration does not match independent approval")
+            config = value["Config"]
+            if not isinstance(config, dict):
+                raise ValueError
+            # The daemon schedules healthcheck execs independently of this one
+            # admitted entrypoint. A pinned probe is still an automatic extra
+            # command, potentially concurrent with custody admission/recovery.
+            healthcheck = config.get("Healthcheck")
+            if healthcheck is not None and (
+                    not isinstance(healthcheck, dict)
+                    or healthcheck.get("Test") != ["NONE"]):
+                raise LaunchError("container automatic healthcheck is not disabled")
             host = value["HostConfig"]
             if not isinstance(host, dict):
                 raise ValueError

@@ -1,5 +1,46 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
+## Maintenance increment — refuse automatic healthcheck execution (2026-10-17)
+
+**Implemented narrowly offline; Batch 0 remains blocked.** The first unresolved
+priority remains external pre-execution artifact authority. Two collected red
+regressions reached injected start despite matching approval containing enabled
+`Config.Healthcheck.Test` commands. Moby's daemon schedules these as independent
+container execs; the single guarded entrypoint is not their admission boundary.
+Both inspections now require object-shaped `Config` and absent/null healthcheck
+or exact `Test=["NONE"]`. Enabled, malformed and ambiguous default objects refuse
+without exposing private evidence. Disabled probes preserve exact-ID one-start
+ordering and child exit status. See the [healthcheck contract](maintenance/external-container-admission.md#automatic-healthcheck-restriction).
+
+Earlier uncommitted repairs are preserved and excluded from this publication
+candidate. No dependency, worker, custody schema or witness behavior changes.
+Work-item grounding is Batch 0, O4/O3 with supporting O1; deployment/startup owns
+`scripts/custody_external_launcher.py` and the collected healthcheck regressions.
+The scheduled maintainer acts under bounded one-issue authorization. Non-Atlas
+settlement, transitional custody and independent release authority are unchanged.
+
+This contains daemon-scheduled healthcheck execution only. Protected deployment,
+administrator exec bypass, complete executable closure, external-image witness
+binding and real Docker mutation/concurrency/crash/restore acceptance remain open.
+Tests inject the engine boundary; no container, live chain or funds were used.
+Production and real funds remain blocked.
+
+Clean Python **3.12.3** gates passed with the Node.js renderer available and no
+skipped tests. The isolated candidate excludes all earlier uncommitted repairs;
+both exports independently re-indexed to exactly their intended Git trees.
+
+| Gate | Isolated HEAD plus this repair | Shared tree including earlier unpublished repairs |
+|---|---|---|
+| Launcher and healthcheck modules | **140 passed** | **389 passed** |
+| Complete suite | **1,678 passed, 77 subtests passed**, 108.55 seconds | **1,927 passed, 77 subtests passed**, 107.33 seconds |
+| CI isolation shards | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** |
+| Compilation, dependency consistency, Markdown links and intended-index token inventory | Passed; **274 active inventory lines** | Passed; **274 active inventory lines** |
+
+Candidate whitespace passed and the final diff was inspected. Final documentation
+recording is rechecked against the exact publication index and existing pre-commit
+policy. Commit, push and exact-SHA CI evidence accompany the maintenance report;
+local checks do not establish remote CI, actual Docker enforcement or release acceptance.
+
 ## Maintenance increment — refuse daemon-resolved extra-host gateways (2026-10-17)
 
 **Implemented narrowly offline; Batch 0 remains blocked.** The first unresolved

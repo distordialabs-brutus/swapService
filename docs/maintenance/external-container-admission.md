@@ -52,6 +52,29 @@ arguments. The launcher never prints inspected evidence or Docker inspection err
 After approval it attaches to the service's normal output, whose existing secret-safe
 logging obligations remain separate.
 
+## Automatic healthcheck restriction
+
+Both inspections require object-shaped `Config` evidence and `Config.Healthcheck`
+to be absent, JSON null or an object whose `Test` is exactly `["NONE"]`. Enabled
+`CMD`/`CMD-SHELL` probes, malformed values and ambiguous empty/default test objects
+refuse even with matching independent approval. Prepare images/containers without
+healthchecks or explicitly disable an inherited image probe with `--no-healthcheck`.
+The daemon's merged container `Config`, not just the image recipe, is inspected;
+the full configuration remains part of the existing approval digest.
+
+[Moby's health monitor](https://github.com/moby/moby/blob/d74daf1a/daemon/health.go)
+schedules probes and uses `ContainerExecStart` to run their commands independently
+of the guarded entrypoint. A pinned healthcheck command is still a second automatic
+execution path, potentially concurrent with custody startup, recovery or witness
+admission. A long interval or start period is not disabled execution. Keep monitoring
+outside container exec, using the separately approved read-only observability path.
+
+This contains daemon-scheduled healthcheck commands, not administrator `docker exec`,
+all runtime injection or complete executable authority. Exclusive protected daemon
+administration, external image/witness binding and real Docker acceptance remain
+required. The collected tests inject engine responses; no real health monitor or
+claim/run/seal generation was exercised.
+
 ## Extra-host gateway restriction
 
 Both inspections require `HostConfig.ExtraHosts` to be absent, JSON null or a
