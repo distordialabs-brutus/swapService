@@ -1,5 +1,48 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
+## Maintenance increment — refuse candidate-requested writable cgroups (2026-10-18)
+
+**Implemented narrowly offline; Batch 0 remains blocked.** The first unresolved
+priority remains external pre-execution artifact authority. Eighteen collected red
+regressions reached injected start with matching independent approval despite bare,
+enabling, contradictory or noncanonical `writable-cgroups` security options. Moby
+can clear the cgroup mount's read-only flag independently of the read-only root and
+dropped capabilities. Both inspections now reject every occurrence of that key
+except canonical `writable-cgroups=false`. Key absence and other approved security
+options retain their existing behavior. See the
+[writable-cgroup contract](maintenance/external-container-admission.md#writable-cgroup-restriction).
+
+Earlier uncommitted repairs are preserved and excluded from this publication
+candidate. No dependency, custody schema, financial worker or witness behavior
+changes. Work-item grounding is Batch 0, O4/O3 with supporting O1; deployment/startup
+owns the launcher and collected regressions. The scheduled maintainer acts under
+bounded one-issue authorization. Non-Atlas settlement, transitional custody and
+independent artifact/release authority remain unchanged.
+
+This contains explicit candidate-requested writable cgroups only. Daemon user-
+namespace/rootless mount handling, host permissions, complete executable closure,
+protected deployment, external-image witness binding and real Docker mutation/
+concurrency/crash/restore acceptance remain open. Tests inject the engine boundary;
+no real Docker container, live chain or funds were used. Production remains blocked.
+
+Clean Python **3.12.3** gates passed with Node.js renderer coverage and no skipped
+tests. The isolated publication candidate excludes all earlier uncommitted repairs;
+both exports were independently indexed to exactly their intended Git trees.
+
+| Gate | Isolated HEAD plus this repair | Shared tree including earlier unpublished repairs |
+|---|---|---|
+| Five external-launcher modules | **218 passed** | **467 passed** |
+| Complete suite | **1,740 passed, 77 subtests passed**, 124.74 seconds | **1,989 passed, 77 subtests passed**, 124.91 seconds |
+| CI isolation shards | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** |
+| Compilation, dependency consistency, Markdown links and intended-index token inventory | Passed; **274 active inventory lines** | Passed; **274 active inventory lines** |
+
+The 27 focused new cases cover matching-pin refusal, contradictory option order,
+second-inspection drift and disabled exact-ID one-start/child-exit controls.
+Candidate whitespace passed and the final diff was inspected. Final documentation
+recording is rechecked against the exact publication index and existing pre-commit
+policy. Commit, push and exact-SHA CI evidence accompany the maintenance report;
+local checks do not establish real Docker enforcement or release acceptance.
+
 ## Maintenance increment — strict bind-option boolean evidence (2026-10-17)
 
 **Implemented narrowly offline; Batch 0 remains blocked.** The first unresolved

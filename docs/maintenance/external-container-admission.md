@@ -119,6 +119,27 @@ external-image witness binding and real Docker acceptance remain separate obliga
 The collected tests inject inspection evidence; they do not prove a real host-systemd
 change, runtime exploit or approved claim/run/seal generation.
 
+## Writable-cgroup restriction
+
+On both inspections, every `HostConfig.SecurityOpt` string with the key
+`writable-cgroups` must be exactly `writable-cgroups=false`. Bare enabled options,
+true values, contradictory duplicates and noncanonical forms (including deprecated
+colon separators) refuse even with matching approval. Absence of that key preserves
+existing behavior; other independently approved security options remain pinned.
+
+[Moby's security-option parser](https://github.com/moby/moby/blob/d74daf1a/daemon/daemon_unix.go)
+accepts the bare flag and boolean-valued options, in order. Its
+[OCI mount construction](https://github.com/moby/moby/blob/d74daf1a/daemon/oci_linux.go)
+clears the cgroup mount's read-only flag when enabled, even without a privileged
+container. A read-only root, dropped capabilities and a private cgroup namespace
+therefore do not exclude this explicitly requested writable runtime filesystem.
+
+This contains candidate-requested writable cgroups, not all effective cgroup mount
+policy: daemon user-namespace/rootless handling, host permissions, runtime contents,
+protected deployment and real Docker enforcement remain external prerequisites.
+Collected tests inject engine evidence; they do not establish a real cgroup write,
+complete executable closure or an approved claim/run/seal generation.
+
 ## Container constraints
 
 Prepare the candidate without starting it. The image must contain the repository,

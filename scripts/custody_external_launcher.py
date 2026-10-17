@@ -90,6 +90,15 @@ def launch(container_id: str, image_id: str, config_sha256: str) -> int:
             host = value["HostConfig"]
             if not isinstance(host, dict):
                 raise ValueError
+            # This option clears the cgroup mount's read-only flag during OCI
+            # construction, independently of ReadonlyRootfs and capabilities.
+            # Reject every enabling/ambiguous occurrence, not merely the last.
+            security_options = host.get("SecurityOpt")
+            if isinstance(security_options, list) and any(
+                    isinstance(option, str)
+                    and option.partition("=" if "=" in option else ":")[0] == "writable-cgroups"
+                    and option != "writable-cgroups=false" for option in security_options):
+                raise LaunchError("container writable cgroups are not disabled")
             # Docker substitutes host-gateway from daemon configuration at start;
             # pinning the token does not pin the resulting /etc/hosts addresses.
             extra_hosts = host.get("ExtraHosts")
