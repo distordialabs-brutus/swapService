@@ -52,6 +52,28 @@ arguments. The launcher never prints inspected evidence or Docker inspection err
 After approval it attaches to the service's normal output, whose existing secret-safe
 logging obligations remain separate.
 
+## User-namespace opt-out restriction
+
+Both inspections require explicit `HostConfig.UsernsMode=""`, Docker's conventional
+mode retaining daemon user-namespace policy. `host`, missing/null/type-confused
+values and unsupported modes refuse even with matching independent approval. A
+changed second inspection refuses before the second diff or start. The full field
+remains part of the existing configuration approval digest.
+
+[Moby's namespace construction](https://github.com/moby/moby/blob/d74daf1a/daemon/oci_linux.go)
+only applies the daemon's UID/GID mappings when
+[`UsernsMode.IsPrivate()`](https://github.com/moby/moby/blob/d74daf1a/api/types/container/hostconfig.go)
+is true; `host` explicitly opts out. A read-only root and dropped capabilities do
+not prevent that candidate-requested loss of identity confinement. Configure any
+required remapping independently in the protected daemon, not through an approved
+per-container opt-out.
+
+This does **not** prove remapping is enabled: empty mode still uses the protected
+daemon's configured mapping, which may be absent. Host permissions, initial user
+identity, bind content, complete executable authority, external-image witness
+binding and real Docker acceptance remain separate requirements. Collected tests
+inject engine evidence and do not establish actual user-namespace enforcement.
+
 ## Automatic healthcheck restriction
 
 Both inspections require object-shaped `Config` evidence and `Config.Healthcheck`

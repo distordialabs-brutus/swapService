@@ -90,6 +90,10 @@ def launch(container_id: str, image_id: str, config_sha256: str) -> int:
             host = value["HostConfig"]
             if not isinstance(host, dict):
                 raise ValueError
+            # A candidate must not disable a protected daemon's UID/GID remapping.
+            # Empty mode retains daemon policy; it does not prove remapping is on.
+            if host.get("UsernsMode") != "":
+                raise LaunchError("container user namespace opt-out is not disabled")
             # Preserve the exact admitted container's inspection/layer evidence
             # after exit or startup failure; daemon cleanup bypasses this guard.
             if host.get("AutoRemove") is not False:

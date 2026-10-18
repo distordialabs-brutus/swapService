@@ -1,5 +1,47 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
+## Maintenance increment — refuse user-namespace remapping opt-out (2026-10-18)
+
+**Implemented narrowly offline; Batch 0 remains blocked.** External pre-execution
+artifact authority remains the first unresolved priority. A collected red regression
+reached injected start despite matching independent approval and `UsernsMode=host`.
+Moby omits daemon UID/GID mappings for that mode, allowing the candidate to opt out
+of protected daemon identity policy. Both inspections now require explicit
+`HostConfig.UsernsMode=""`; missing, null, malformed and unsupported modes refuse.
+See the [user-namespace contract](maintenance/external-container-admission.md#user-namespace-opt-out-restriction).
+
+The scheduled maintainer acts under bounded one-issue authorization. Deployment/
+startup owns the launcher and focused tests; work-item grounding is Batch 0,
+O4/O3 with supporting O1. Non-Atlas settlement, transitional custody and independent
+artifact/release authority are unchanged. No financial worker, dependency, custody
+schema or witness behavior changes. Earlier uncommitted repairs are preserved and
+excluded from this narrow publication candidate.
+
+Empty mode retains daemon policy; it does not prove user-ID remapping is enabled.
+Protected daemon configuration, host permissions, complete executable closure,
+external-image witness binding and real Docker mutation/concurrency/crash/restore
+acceptance remain open. Tests inject engine evidence; no Docker container, chain or
+funds are used. Production remains blocked.
+
+Clean Python **3.12.3** gates passed with Node.js renderer coverage and no skipped
+tests. The isolated candidate excludes all earlier uncommitted repairs; both exports
+were independently indexed to exactly their intended Git trees.
+
+| Gate | Isolated HEAD plus this repair | Shared tree including earlier unpublished repairs |
+|---|---|---|
+| Seven external-launcher modules | **258 passed** | **507 passed** |
+| Complete suite | **1,780 passed, 77 subtests passed** | **2,029 passed, 77 subtests passed** |
+| CI isolation shards | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** |
+| Compilation, dependency consistency, Markdown links and intended-index token inventory | Passed; **274 active inventory lines** | Passed; **274 active inventory lines** |
+
+The 23 focused cases cover matching-pin host/missing/malformed/unsupported refusal,
+second-inspection drift and exact-ID one-start/child-exit controls. Candidate
+whitespace passed, the final diff was inspected, and the existing pre-commit policy
+accepted the isolated index. Final documentation recording is rechecked against the
+exact publication index. Commit, push and exact-SHA CI evidence accompany the
+maintenance report; local tests do not establish real Docker enforcement or release
+acceptance.
+
 ## Maintenance increment — retain admitted-container evidence (2026-10-18)
 
 **Implemented narrowly offline; Batch 0 remains blocked.** The first unresolved
