@@ -52,6 +52,31 @@ arguments. The launcher never prints inspected evidence or Docker inspection err
 After approval it attaches to the service's normal output, whose existing secret-safe
 logging obligations remain separate.
 
+## Prior startup failure restriction
+
+Both inspections require object-shaped `State` with explicit `Error=""`, in
+addition to `Status="created"` and `Running=false`. Nonempty errors, missing/null
+and type-confused error values refuse before any later diff or start, without
+printing the potentially private daemon error. `State` remains outside the
+configuration digest; matching independent approval cannot exempt this check, and
+a change on the second inspection must still refuse.
+
+[Moby's startup path](https://github.com/moby/moby/blob/d74daf1a/daemon/start.go)
+records `State.SetError(retErr)` after a failed start. Networking, mounts, OCI
+construction and task creation can precede that failure; `SetRunning` occurs only
+after a successful task start. A candidate can therefore still report `created`
+after startup side effects. Do not automatically retry that container through the
+pristine-candidate guard. Preserve its evidence for independently authorized
+investigation; this launcher neither clears errors nor creates replacements.
+
+This is containment of observed prior startup failure, not a complete audit of
+execution history or protection from trusted-administrator evidence mutation.
+Empty error text does not certify that no earlier side effects occurred. Protected
+exclusive daemon administration, complete executable authority, external-image
+witness binding and actual Docker failed-start/crash/restore acceptance remain
+separate requirements. Collected tests inject engine evidence, not a real failed
+OCI startup or claim/run/seal generation.
+
 ## User-namespace opt-out restriction
 
 Both inspections require explicit `HostConfig.UsernsMode=""`, Docker's conventional

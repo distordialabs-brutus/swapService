@@ -1,5 +1,50 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
+## Maintenance increment — refuse previously failed startup candidates (2026-10-19)
+
+**Implemented narrowly offline; Batch 0 remains blocked.** External pre-execution
+artifact authority remains the first unresolved priority. A collected red regression
+reached injected start with matching independent approval, `Status=created` and a
+nonempty `State.Error`. Moby records failed-start errors even when setup/task
+creation has already occurred and `SetRunning` was not reached. Both inspections
+now require object-shaped state and explicit `Error=""`; missing/null/malformed
+and nonempty evidence refuses without printing private daemon details. State is
+outside the approval projection, so read-two error drift is checked independently
+of the matching digest. See the [prior-startup-failure contract](maintenance/external-container-admission.md#prior-startup-failure-restriction).
+
+The scheduled maintainer acts under bounded one-issue authorization. Deployment/
+startup owns the launcher and focused tests; work-item grounding is Batch 0,
+O4/O3 with supporting O1. Non-Atlas settlement, transitional custody and independent
+artifact/release authority are unchanged. No worker, dependency, custody schema or
+witness behavior changes. Earlier dirty repairs are preserved and excluded from
+this narrow publication candidate.
+
+This contains observed prior failure only. Empty error text does not establish
+complete execution history or prevent trusted-administrator evidence mutation.
+Protected exclusive daemon administration, complete executable closure, external-
+image witness binding and real Docker failed-start/mutation/crash/restore acceptance
+remain open. Tests inject engine evidence; no container, chain or funds are used.
+Production remains blocked.
+
+The 31 new cases cover prior errors, malformed/missing evidence on both
+inspections, state shape, unchanged approval identity, no later diff/start, sanitized
+refusal and exact-ID one-start/child-exit controls. Clean Python **3.12.3** gates
+passed with Node.js renderer coverage and no skipped tests. Both exports were
+independently indexed to exactly their intended Git trees.
+
+| Gate | Isolated HEAD plus this repair | Shared tree including earlier unpublished repairs |
+|---|---|---|
+| Eight external-launcher modules | **289 passed** | **538 passed** |
+| Complete suite | **1,811 passed, 77 subtests passed**, 109.76 seconds | **2,060 passed, 77 subtests passed**, 108.67 seconds |
+| CI isolation shards | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** |
+| Compilation, dependency consistency, Markdown links and intended-index token inventory | Passed; **274 active inventory lines** | Passed; **274 active inventory lines** |
+
+Shared results include earlier unpublished repairs and are not the publication
+candidate. Candidate whitespace passed; final diff, documentation-only result
+recording and existing pre-commit policy are checked against the exact publication
+index. Commit, push and exact-SHA CI evidence accompany the maintenance report;
+local tests do not establish real Docker enforcement or release acceptance.
+
 ## Maintenance increment — refuse user-namespace remapping opt-out (2026-10-18)
 
 **Implemented narrowly offline; Batch 0 remains blocked.** External pre-execution

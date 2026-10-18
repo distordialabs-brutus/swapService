@@ -158,7 +158,7 @@ def candidate():
             {"Type": "bind", "Source": "/protected/custody", "Destination": "/var/lib/swapservice", "RW": True},
             {"Type": "bind", "Source": "/protected/secrets", "Destination": "/run/swapservice-secrets", "RW": False},
         ],
-        "State": {"Status": "created", "Running": False},
+        "State": {"Status": "created", "Running": False, "Error": ""},
         "NetworkSettings": {"Networks": {"bridge": {"Aliases": None}}},
         "Platform": "linux", "AppArmorProfile": "docker-default",
         "ProcessLabel": "", "MountLabel": "",

@@ -133,6 +133,12 @@ def launch(container_id: str, image_id: str, config_sha256: str) -> int:
                 # A daemon restart would skip admission and reuse a previously
                 # executed container rather than a pristine created candidate.
                 raise LaunchError("container automatic restart policy is not disabled")
+            # Docker can retain status=created after failed OCI startup, after
+            # setup or runtime code already ran. Do not authorize another attempt
+            # or disclose the daemon's potentially private failure details.
+            state = value["State"]
+            if not isinstance(state, dict) or state.get("Error") != "":
+                raise LaunchError("container prior startup failure is not excluded")
             if (value["State"]["Status"] != "created"
                     or value["State"]["Running"] is not False
                     or host["ReadonlyRootfs"] is not True
