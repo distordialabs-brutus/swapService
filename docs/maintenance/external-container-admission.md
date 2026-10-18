@@ -140,6 +140,28 @@ protected deployment and real Docker enforcement remain external prerequisites.
 Collected tests inject engine evidence; they do not establish a real cgroup write,
 complete executable closure or an approved claim/run/seal generation.
 
+## Automatic removal restriction
+
+Both inspections require explicit boolean `HostConfig.AutoRemove=false`. Enabled,
+missing, null and type-confused evidence refuse even with matching independent
+approval. Prepare the candidate without `--rm`; approved execution must not authorize
+its own evidence cleanup. The exact disabled field remains part of the approval digest.
+
+[Moby's exit monitor](https://github.com/moby/moby/blob/d74daf1a/daemon/monitor.go)
+removes containers with this policy after exit; its
+[start failure cleanup](https://github.com/moby/moby/blob/d74daf1a/daemon/start.go)
+also honors automatic removal. That can erase the exact container's inspection and
+writable-layer evidence outside the guard, including after an unsuccessful run.
+Retain the stopped candidate for independently authorized evidence collection and
+cleanup instead. Retention does not authorize restarting an executed container.
+
+This contains candidate-requested automatic evidence deletion only. It does not
+provide durable evidence export or prevent trusted administrators, host failures,
+log rotation or external cleanup from removing evidence. Complete executable closure,
+protected deployment, external-image witness binding and real Docker acceptance
+remain open. Collected tests inject engine responses; they do not exercise actual
+daemon cleanup or an approved claim/run/seal generation.
+
 ## Container constraints
 
 Prepare the candidate without starting it. The image must contain the repository,

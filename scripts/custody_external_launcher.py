@@ -90,6 +90,10 @@ def launch(container_id: str, image_id: str, config_sha256: str) -> int:
             host = value["HostConfig"]
             if not isinstance(host, dict):
                 raise ValueError
+            # Preserve the exact admitted container's inspection/layer evidence
+            # after exit or startup failure; daemon cleanup bypasses this guard.
+            if host.get("AutoRemove") is not False:
+                raise LaunchError("container automatic removal is not disabled")
             # This option clears the cgroup mount's read-only flag during OCI
             # construction, independently of ReadonlyRootfs and capabilities.
             # Reject every enabling/ambiguous occurrence, not merely the last.

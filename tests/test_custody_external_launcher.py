@@ -143,7 +143,7 @@ def candidate():
         "Path": "/usr/local/bin/python3", "Args": ["/opt/swapService/swapService.py"],
         "Config": {"Env": ["STATE_DB_PATH=/var/lib/swapservice/custody.db"],
                    "WorkingDir": "/opt/swapService", "User": "1000:1000"},
-        "HostConfig": {"ReadonlyRootfs": True, "Privileged": False,
+        "HostConfig": {"ReadonlyRootfs": True, "Privileged": False, "AutoRemove": False,
                        "CapDrop": ["ALL"], "CapAdd": None, "Tmpfs": {},
                        "PidMode": "",
                        "RestartPolicy": {"Name": "no", "MaximumRetryCount": 0},

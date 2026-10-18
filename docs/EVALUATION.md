@@ -1,5 +1,45 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
+## Maintenance increment — retain admitted-container evidence (2026-10-18)
+
+**Implemented narrowly offline; Batch 0 remains blocked.** The first unresolved
+priority remains external pre-execution artifact authority. A collected red regression
+reached injected start with matching independent approval and `HostConfig.AutoRemove=true`.
+The daemon can remove that exact container after exit or startup failure, erasing
+inspection/layer evidence outside the admission guard. Both inspections now require
+explicit boolean `AutoRemove=false`; enabled, missing, null and type-confused evidence
+refuse. See the [automatic-removal contract](maintenance/external-container-admission.md#automatic-removal-restriction).
+
+Earlier uncommitted repairs are preserved and excluded from this narrow publication
+candidate. No financial worker, dependency, custody schema or witness behavior changes.
+Work-item grounding is Batch 0, O4/O3 with supporting O1; deployment/startup owns the
+launcher and focused tests. The scheduled maintainer acts under bounded one-issue
+authorization. Non-Atlas settlement, transitional custody and independent artifact/
+release authority remain unchanged.
+
+This contains candidate-requested automatic evidence deletion only; it does not supply
+durable evidence export or prevent administrator/host/external cleanup. Complete
+executable closure, protected deployment, external-image witness binding and real
+Docker mutation/concurrency/crash/restore acceptance remain open. Tests inject engine
+responses; no container, chain or funds are used. Production remains blocked.
+
+Clean Python **3.12.3** gates passed with Node.js renderer coverage and no skipped
+tests. Both exports were independently indexed to exactly their intended Git trees.
+
+| Gate | Isolated HEAD plus this repair | Shared tree including earlier unpublished repairs |
+|---|---|---|
+| Six external-launcher modules | **235 passed** | **484 passed** |
+| Complete suite | **1,757 passed, 77 subtests passed**, 146.07 seconds | **2,006 passed, 77 subtests passed**, 149.68 seconds |
+| CI isolation shards | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** |
+| Compilation, dependency consistency, Markdown links and intended-index token inventory | Passed; **274 active inventory lines** | Passed; **274 active inventory lines** |
+
+Focused cases cover matching-pin enabled/missing/malformed refusal, second-inspection
+drift and retained exact-ID one-start/child-exit controls. Candidate whitespace passed;
+the final diff was inspected. Final documentation recording is rechecked against the
+exact publication index and existing pre-commit policy. Commit, push and exact-SHA CI
+evidence accompany the maintenance report; local checks do not establish actual
+Docker evidence retention or release acceptance.
+
 ## Maintenance increment — refuse candidate-requested writable cgroups (2026-10-18)
 
 **Implemented narrowly offline; Batch 0 remains blocked.** The first unresolved
