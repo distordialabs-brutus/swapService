@@ -1,5 +1,51 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
+## Maintenance increment — refuse supplementary group additions (2026-10-20)
+
+**Implemented narrowly offline; Batch 0 remains blocked.** External executable
+admission remains the first unresolved priority. Published base `8d15b62` already
+requires non-root primary numeric UID:GID and supported AppArmor; those fixes are
+not repeated. A read-only review of the exact cumulative owner launcher/test
+candidate preceded this new semantic policy. Its earlier controls are preserved
+and excluded from this one-issue publication candidate. A collected RED test
+reached injected start with matching approval and `HostConfig.GroupAdd=["0"]`.
+Both inspections now require explicit null or empty-array `GroupAdd`; missing,
+nonempty and malformed evidence refuses without disclosing group values. See the
+[group addition contract](maintenance/external-container-admission.md#supplementary-group-addition-restriction).
+
+This prevents candidate-requested supplementary access grants only. Empty
+`GroupAdd` does not establish absence of image-derived supplementary groups or
+attest effective credentials. Daemon remapping, host/bind permissions, complete
+protected executable closure, semantic host policy, mandatory image/witness binding,
+coherent restore and real Docker acceptance remain open. Tests inject the engine
+boundary; no container, chain, funds, credentials or custody generation is used.
+Production remains blocked.
+
+The scheduled maintainer acts under bounded one-issue authorization. Deployment/
+startup owns the launcher and collected `tests/test_custody_external_groups.py`;
+work-item grounding is Batch 0, O4/O3 with supporting O1. Non-Atlas settlement,
+transitional custody and independent artifact/release authority remain unchanged.
+No financial worker, dependency, schema or witness behavior changes. The new
+focused tests cover matching-approved root/named/non-root grants, missing/malformed
+evidence, second-read drift and both disabled forms with exact-ID one-start/exit
+controls. Clean Python **3.12.3** gates passed with Node.js renderer coverage and
+no skipped tests. Each fresh export was independently indexed to exactly its
+intended Git tree; the isolated candidate excludes earlier unpublished owner
+repairs.
+
+| Gate | Isolated published base plus this repair | Shared tree including owner repairs |
+|---|---|---|
+| Eleven external-launcher modules | **406 passed** | **655 passed** |
+| Complete suite | **1,928 passed, 77 subtests passed**, 107.28 seconds | **2,177 passed, 77 subtests passed**, 109.11 seconds |
+| CI isolation shards | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** |
+| Compilation, dependency consistency, Markdown links and intended-index token inventory | Passed; **274 active inventory lines** | Passed; **274 active inventory lines** |
+
+The exact isolated candidate passed whitespace and the unchanged pre-commit
+policy. Final documentation-only result recording, diff and intended-index checks
+are repeated before publication. Original owner deltas and staging were preserved.
+Commit, push and exact-SHA CI evidence accompany the maintenance report; green
+offline checks are not real Docker or release acceptance.
+
 ## Maintenance increment — explicit non-root primary runtime identity (2026-10-19)
 
 **Implemented narrowly offline; Batch 0 remains blocked.** External executable

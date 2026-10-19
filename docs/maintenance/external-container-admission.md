@@ -1,5 +1,29 @@
 # External container admission primitive
 
+## Supplementary group addition restriction
+
+Both inspections require explicit `HostConfig.GroupAdd` evidence, either JSON
+null or an empty array. Nonempty group lists (numeric IDs or names), missing and
+malformed/type-confused evidence refuse even with matching independent approval.
+The full host configuration remains pinned: any second-read change, including
+between the two disabled forms, refuses before another diff or start. The launcher
+never resolves, filters or rewrites group grants, and refusal discloses no values.
+
+[Moby's user construction](https://github.com/moby/moby/blob/d74daf1a/daemon/oci_linux.go)
+resolves `HostConfig.GroupAdd` and appends these groups to the OCI process's
+`AdditionalGids`, independently of its primary UID/GID. An approved non-root
+`Config.User`, dropped capabilities and a read-only root do not exclude these
+candidate-requested supplementary access grants. Prepare the candidate without
+`--group-add`; older/malformed evidence omitting the field deliberately fails closed.
+
+This contains **candidate-requested group additions only**. Image account/group
+membership, effective credentials, daemon remapping and host/bind permissions still
+require independent review. Empty `GroupAdd` does not prove that the process has
+no supplementary groups. Complete protected executable authority, mandatory
+image/witness binding and real Docker enforcement remain open. The
+[focused tests](../../tests/test_custody_external_groups.py) inject engine evidence;
+no real container, chain, funds or custody generation is exercised.
+
 ## Non-root primary runtime identity restriction
 
 Both inspections require explicit `Config.User` in canonical ASCII decimal

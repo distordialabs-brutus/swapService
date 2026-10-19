@@ -103,6 +103,10 @@ def launch(container_id: str, image_id: str, config_sha256: str) -> int:
             host = value["HostConfig"]
             if not isinstance(host, dict):
                 raise ValueError
+            # Primary UID:GID does not exclude candidate-requested supplementary
+            # grants. Do not resolve or approve additional group names/IDs here.
+            if "GroupAdd" not in host or host["GroupAdd"] not in (None, []):
+                raise LaunchError("container supplementary group additions are not disabled")
             # A candidate must not disable a protected daemon's UID/GID remapping.
             # Empty mode retains daemon policy; it does not prove remapping is on.
             if host.get("UsernsMode") != "":
