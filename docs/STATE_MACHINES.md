@@ -14,27 +14,33 @@ claims remain open. The alignment map supplies batch ownership, upstream prerequ
 gates. Each material task must name those fields alongside exact production paths and collected
 acceptance tests.
 
-**Current source scope (2026-10-07):** exact source
-`2c4ed319d251836f01dfb83de68da71b1c6c6a23` implements one configured classic SPL token ↔ Nexus
-token pair. Published startup containment holds four inconsistent restored-source families before
-workers: retained ordinary refund/quarantine states, ready rows with debit-submission metadata,
-ready rows with capacity siblings, and ready rows with terminal siblings. The published sealed-
-custody witness and later in-process fingerprint increments bind the root entrypoint, running
-interpreter, conventional foundational native mappings, the installed `solders` extension, its
-selected root/flat/token/RPC/optional wrapper sources and selected RPC wire wrappers. Fresh offline
-collection found 1,522 tests; all passed with 77 subtests. This is finite in-process drift
-containment, not complete trusted pre-execution artifact identity. Production and real funds remain
-blocked.
+**Current source scope (2026-10-19):** exact published source
+`ba09cc59ba26e63f5ebf1ed15414fb5f475bf4a3` implements one configured classic SPL token ↔ Nexus
+token pair. Published startup containment still holds four inconsistent restored-source families before
+workers: retained ordinary refund/quarantine states, ready rows with debit-submission metadata, ready
+rows with capacity siblings and ready rows with terminal siblings. The sealed-custody witness and finite
+in-process fingerprint remain unchanged.
 
-**Current release blockers:** an external immutable launcher/image must verify every executable byte
-before repository imports or other side effects; coherent restore/bootstrap authority and an all-
-status evidence audit remain incomplete; heartbeat owner/address/schema/pair/custody/terms and node
-health/sync/freshness are unbound; malformed oldest capacity evidence still starves a younger valid
-hold; witness/hold operations and target acceptance remain open. Exact image continuity does not
-prove that the approved image contains complete liabilities or correct historical authorization.
+The optional external launcher now has eight additional Docker-reported controls: no candidate OCI
+annotations, no daemon-resolved host-gateway extra-hosts, no automatic healthcheck or removal, no
+user-namespace opt-out, no prior-start error, strict `ReadOnlyNonRecursive` boolean evidence and no
+enabling list-shaped `writable-cgroups` option. Injected positive/negative/drift tests accept those narrow
+boundaries only. Fresh matching-approval probes still reach injected start with shared IPC/devices,
+host cgroup/UTS, alternate runtime/init/links, empty masked/read-only paths, malformed/incomplete
+security options, container-shared/host networking, unconfined AppArmor, root runtime user and broad
+bind sources. A broader four-file owner candidate contains additional controls but remains uncommitted,
+was read only here and is not published architecture.
+
+**Current release blockers:** protected external artifact authority and semantic host policy remain
+incomplete; direct repository startup is still reachable and no production caller binds the launcher image/
+configuration to the one-use witness; coherent restore/bootstrap authority and an all-status evidence
+audit remain incomplete; heartbeat owner/address/schema/pair/custody/terms and node health/sync/freshness
+are unbound; malformed oldest capacity evidence still starves a younger valid hold; witness/hold operations
+and target acceptance remain open. Exact image continuity does not prove complete liabilities or correct
+historical authorization. Production and real funds remain blocked.
 
 See [EVALUATION.md](EVALUATION.md), the
-[October 2 review](DEVELOPMENT_REVIEW_2026-10-02.md), the
+[external-container admission contract](maintenance/external-container-admission.md), the
 [sealed-custody architecture note](maintenance/sealed-custody-admission.md), the
 [current repair plan](plans/2026-09-25-recovery-admission-and-capacity-fairness.md), and the
 [historical A/B/C acceptance report](RECOVERY_INPUT_CAP_ACCEPTANCE.md).
@@ -90,6 +96,24 @@ wire wrappers. This rejects drift in the finite selected set before witness-perm
 still runs after repository imports and does not cover the complete transitive dependency/bytecode/
 stdlib/shared-library/mapped-memory closure. An externally enforced immutable artifact and audited
 bootstrap/restore certificate ceremony remain required.
+
+The standalone external launcher is currently a separate optional state machine:
+
+```mermaid
+flowchart LR
+    Pins[Independent container/image/config pins] --> I1[inspect + semantic subset]
+    I1 --> D1[empty writable-layer diff]
+    D1 --> I2[repeat inspect + subset]
+    I2 --> D2[repeat empty diff]
+    D2 --> Start[docker start --attach]
+```
+
+It neither calls nor is called by the witness protocol. The approved container image/configuration is
+absent from `Certificate`, and direct `swapService.py` execution can reach witness claim without passing
+this launcher. Batch 0 must therefore compose both state machines under one externally protected authority:
+launcher admission before repository effects, exact image/configuration in the one-use certificate,
+claim/run/seal once, and no direct or automatic-restart route. A changed candidate, stale permit, second
+process, response loss or crash at any boundary must remain refused/held with no duplicate financial action.
 
 Genesis equality identifies a chain but does not prove node readiness. Current admission still needs
 Solana health/root freshness, Nexus synchronization/tip freshness, and exact heartbeat owner/address/

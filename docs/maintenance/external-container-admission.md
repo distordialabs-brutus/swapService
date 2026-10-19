@@ -17,6 +17,33 @@ operator-writable checkout does not establish independent authority. Runtime cre
 and repository code must not be able to change the launcher, pins or Docker configuration.
 No image, container or approval is created by this tool.
 
+### Reviewed published boundary at `ba09cc59`
+
+The current published launcher rejects candidate annotations, host-gateway substitution, enabled/malformed
+healthchecks, numeric `ReadOnlyNonRecursive`, enabling list-shaped `writable-cgroups`, automatic removal,
+user-namespace opt-out and prior-start errors in addition to its earlier pins/restart/PID/mount checks.
+These controls were accepted only against injected Docker evidence.
+
+Matching independently approved evidence still reaches the injected start boundary with host/shared IPC,
+host devices/cgroup rules/driver requests, host cgroup and UTS namespaces, alternate runtime, daemon init,
+legacy links, empty masked/read-only path lists, malformed or incomplete security options, container-shared
+or host networking, unconfined AppArmor, root runtime user and `/` as the writable custody source. The
+launcher is not called by `swapService.py`, `src/main.py` or the witness client; its image/configuration
+pins are absent from the witness certificate. Do not install the direct Python/systemd route described by
+older documentation.
+
+A broader owner-only four-file candidate contains private IPC/cgroup/UTS, explicit device evidence,
+`runc`, no daemon init/links, baseline system paths, no-new-privileges, no container-shared networking and
+bounded strict JSON capture. It remains uncommitted and is not this document's published contract. Review
+those exact cumulative bytes before integration; do not reconstruct them from this summary. Even that
+candidate does not decide host/custom network, AppArmor/seccomp, runtime-user or bind-source policy and
+does not make launch mandatory or witness-bound.
+
+No operator may treat a matching configuration digest as an exception to semantic policy. Batch 0 exit
+requires one independently protected launcher/interpreter/Docker/runc/image/approval closure, explicit
+allowed values and field types, one witness-bound sole route and real-engine mutation/contention/crash/
+failed-start readback. Coherent restore remains a separate P0 financial-authority gate.
+
 Exclusive trusted Docker administration must span inspection through start: Docker does not
 provide an atomic inspect/diff/start compare-and-swap. Another Docker administrator can
 bypass the tool or change evidence after the final check. Repeated inspections contain

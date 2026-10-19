@@ -13,14 +13,20 @@ slashing, regulatory and adoption claims remain open. The alignment map supplies
 upstream prerequisites and human gates. Every batch below must carry these qualifications plus its
 exact production paths and collected acceptance tests.
 
-**Current assessment lineage:** exact source
-`2c4ed319d251836f01dfb83de68da71b1c6c6a23`, matching `origin/main`, now publishes the sealed-
-custody runtime and selected in-process artifact-drift increments. Fresh offline collection found
-1,522 tests; all passed with 77 subtests. Ten custody modules passed 667 tests and ten recovery/
-capacity modules passed 414 tests plus 52 subtests. These results accept the finite selected drift
-and recovery containments only. They do not close trusted pre-execution artifact identity, complete
-restore authority, service/node freshness, witness operations, capacity fairness, hold resolution
-or live acceptance. Production and real funds remain blocked.
+**Current assessment lineage:** exact published source
+`ba09cc59ba26e63f5ebf1ed15414fb5f475bf4a3`, matching `origin/main`, adds eight narrow
+Docker-reported controls to the optional external launcher. They reject candidate annotations,
+host-gateway indirection, healthchecks, numeric bind-option evidence, enabling list-shaped writable-
+cgroup options, automatic removal, user-namespace opt-out and prior-start error evidence. Fresh
+matching-approval probes still reach injected start through 18 namespace/device/runtime/system-path/
+network/security/user/source cases. A broader owner-only four-file candidate contains additional
+controls but remains uncommitted, was read only in this review and is not published behavior. The
+tracked-vision hook conflict is resolved by the published local-only policy; no vision content enters
+this candidate. Protected pre-execution authority, semantic host policy, mandatory witness-bound launch,
+complete restore authority, service/node freshness, capacity progress, witness/hold operations and live
+acceptance remain open. Production and real funds remain blocked. See the
+[current evaluation](../EVALUATION.md) and
+[external-container contract](../maintenance/external-container-admission.md).
 
 ## Decision and scope
 
@@ -48,7 +54,7 @@ receipt enablement, live transaction, commit, or publication authorization.
 
 | Batch | Status at reviewed candidate | Evidence and remaining exit |
 |---|---|---|
-| 0 — executable artifact identity | **Blocked / P0; finite containment accepted offline** | Current in-process evidence binds all repository `src/*.py`, root `swapService.py`, requirements, the running Linux interpreter, conventional executable libpython/libc/libm/loader mappings, the installed `solders` extension, selected root/flat/token/RPC/optional wrappers and selected RPC request/response/error wrappers. Repository imports still execute first; other transitive Solana/HTTP/stdlib/bytecode/shared-library artifacts, mapped-memory identity and independent pre-execution attestation remain open. |
+| 0 — executable artifact identity | **Blocked / P0; eight published increments accepted narrowly** | Published `ba09cc59` closes eight Docker-reported routes but still starts 18 matching-approved namespace/device/runtime/system-path/network/security/user/source fixtures. A broader exact owner candidate is uncommitted. Protected launcher/toolchain authority, semantic host policy, sole-route witness binding and real-Docker mutation/contention/crash evidence remain open. |
 | 1 — restore/image admission | **Partial / P0** | Four retained-row conflict containments, the empty-DB latch, recovery boundary and exact-image witness are green offline. External approval must establish financial coherence; exact bytes cannot discover an incomplete/pre-fix approved image, and no all-status coherent-restore audit exists. |
 | 2 — durable startup outcome | **Implemented narrowly offline** | Claimed/running/held witness plus local receipt suppress stale healthy dashboard values. Independent-process contention/crash coverage, artifact authority and deployment acceptance remain open. |
 | 3 — eligible capacity FIFO | **Open; defect freshly reproduced** | An older malformed refund hold retained full principal and made zero sends, but two runs still blocked a younger valid fitting hold and increased its attempt count to 3. |
@@ -63,14 +69,20 @@ receipt enablement, live transaction, commit, or publication authorization.
 
 **Priority: P0 executable integrity.**
 
-The current in-process fingerprint now includes the root entrypoint, repository sources, running
-interpreter and a finite selected native/solders manifest. It still cannot prove the approved
-executable: repository imports and root code run before the checker, while unselected transitive
-artifacts, bytecode, standard-library/shared-library code and mapped memory remain outside the
-manifest. Define an external trusted launcher or immutable deployment image whose independently
-approved digest covers the complete execution closure before repository code runs. The witness
-certificate must bind that authority; changing any pre-admission byte cannot produce a side effect
-before refusal.
+The current in-process fingerprint includes the root entrypoint, repository sources, running
+interpreter and a finite selected native/solders manifest. The optional external launcher adds two
+inspect/diff rounds and the eight accepted published controls, but matching approval is not a semantic
+policy. Direct repository startup remains reachable, the launcher has no production caller and the
+witness certificate does not bind its container image/configuration.
+
+Preserve the current strict pins, duplicate-key parsing, clean Docker child environment, repeated
+inspections, empty upper-layer checks, exact created state, disabled restart/auto-remove/healthcheck,
+private PID/userns opt-out refusal and strict mount controls. Review the owner's broader cumulative
+launcher/test candidate as one exact unit rather than recoding its IPC/device/runtime/init/link,
+cgroup/UTS/system-path/network/no-new-privileges and bounded-evidence controls. After integration,
+define an external trusted launcher or immutable deployment image whose independently approved digest
+covers the complete execution closure before repository code runs. Bind that exact authority to the
+one-use witness and make it the sole supported custody start path.
 
 Acceptance:
 
@@ -78,7 +90,14 @@ Acceptance:
 - inject a pre-import side effect into `swapService.py` and require that it never executes;
 - change interpreter/image identity and require refusal before witness claim, database open or chain I/O;
 - boot an exact approved artifact, then complete, run and seal one generation; and
-- prove the artifact verifier/launcher is outside the mutable artifact it attests.
+- prove the artifact verifier/launcher is outside the mutable artifact it attests;
+- with matching approval, reject every demonstrated shared namespace/device/runtime/system-path/network/
+  security/user/bind-source case and every malformed evidence shape before `diff` or `start`;
+- race two independent launcher/witness processes and an administrator mutation across inspect/diff/start,
+  claim, complete and seal; every loser or stale candidate performs no repository/DB/witness/chain effect;
+- inject response loss and kill before/after start/claim/complete/seal; no container restarts or financial
+  action repeats, and unresolved authority remains durably held; and
+- execute the same matrix on the selected real Docker/runc/host policy with effective readback.
 
 ### Batch 1 — prove a complete or conservatively held restore
 
@@ -293,14 +312,111 @@ replace the role labels below at kickoff.
 
 | Batch | Objective and production ownership | Prerequisite / pinned source-interface dependency | Human authority boundary | Negative / concurrency / recovery exit |
 |---|---|---|---|---|
-| 0 — executable authority | O4/O3/O1; deployment launcher/image plus `swapService.py`, `src/custody_admission.py` and complete runtime closure | Published `2c4ed319` sealed-witness and finite-fingerprint behavior is the compatibility baseline; pin an independent launcher/immutable-image authority and its complete closure manifest before implementation. The current in-process digest is not that authority. | Independent artifact approver selects the immutable digest; runtime/operator credentials cannot issue or rewrite it | Mutate every root/module/dependency/interpreter/launcher byte, including pre-import effects; race two processes on one image/permit; kill before/after claim/complete/seal. New default-collected external-launcher module must prove refusal before lock/DB/witness/chain and one exact run/seal. |
+| 0 — executable authority | O4/O3/O1; deployment launcher/image plus `swapService.py`, `src/custody_admission.py`, `scripts/custody_external_launcher.py` and complete runtime closure | Published `ba09cc59` witness/fingerprint and eight launcher increments are the compatibility baseline. Review the exact owner candidate; then pin protected launcher/interpreter/Docker/runc/image/approval authority, semantic host policy and one witness-bound sole route. | Independent artifact approver selects and protects immutable digest/policy; runtime/operator credentials cannot issue or rewrite it | Reject all 18 matching-approved probe families and byte/identity drift before side effects; real processes/admin mutation contend on one image/permit; kill/lose acknowledgement before/after start/claim/complete/seal. One exact generation runs/seals; every loser remains side-effect-free/held. |
 | 1 — restore admission | O4/O3; recovery owner for `src/state_db.py`, `src/startup_recovery.py`, `src/solana_client.py`, `src/nexus_client.py` and migration/backup format | Batch 0 external executable admission plus a versioned, independently approved coherent restore/bootstrap identity covering the SQLite image, schema, configuration, witness generation and all policy/capacity/submission/fee/terminal evidence. | Operator separately approves audited new bootstrap or coherent restore; absent history has no send authority | Parameterize every nonterminal status and required field with absent/wrong/conflicting evidence; race audit with scanner/workers; exercise empty, unrelated-row partial, source/capacity/terminal/cap-only, pre-fix, online backup, DB+WAL and total loss. Require zero transport/full liability or exact original intent once. |
 | 2 — durable startup outcome | O4/O3; witness/runtime/dashboard in `src/custody_witness.py`, `src/custody_admission.py`, `src/main.py`, `src/dashboard.py` | Batch 0 executable identity and Batch 1 coherent restore admission; preserve the published `ready → claimed → running → ready(next generation)` witness states and exact-image/configuration interfaces. | Independent witness administrator owns bootstrap/hold recovery; service runtime owns only one-use transitions | Use distinct OS processes/connections to contend on claim/complete/hold/seal; kill at each boundary; read from a third connection. Exactly one owner may run, stale green state is forbidden and no claimed/held generation revives automatically. |
-| 3 — capacity progress | O4; state/workers/dashboard in `src/state_db.py`, `src/solana_client.py`, `src/dashboard.py` | Batch 1 complete state audit and the accepted frozen-policy, liability, reservation and capacity-hold schemas at `2c4ed319`; malformed/conflicting evidence must move classifications without changing principal or inventing send authority. | Human disposition requires frozen evidence and audit; no direct send/SQL edit | Put malformed/conflicting/unknown oldest rows ahead of same/cross-kind valid holds, beyond worker limits; race refund/quarantine workers; restart and vary cap/age. Younger valid intent sends once; blocked principal/evidence stays unchanged and outside eligible FIFO. |
+| 3 — capacity progress | O4; state/workers/dashboard in `src/state_db.py`, `src/solana_client.py`, `src/dashboard.py` | Batch 1 complete state audit and the accepted frozen-policy, liability, reservation and capacity-hold schemas at `ba09cc59`; malformed/conflicting evidence must move classifications without changing principal or inventing send authority. | Human disposition requires frozen evidence and audit; no direct send/SQL edit | Put malformed/conflicting/unknown oldest rows ahead of same/cross-kind valid holds, beyond worker limits; race refund/quarantine workers; restart and vary cap/age. Younger valid intent sends once; blocked principal/evidence stays unchanged and outside eligible FIFO. |
 | 4 — dashboard | O4/O3; `src/dashboard.py` plus witness/read-only state APIs | Batches 1–3 state and liability interfaces plus the accepted read-only snapshot and live-lease match; observers consume only those APIs and never open a writable recovery path. | Read-only observers gain no financial authority | Missing/corrupt DB and witness mismatch remain unknown; witness transitions around one snapshot cannot yield stale green; reads across restart create/change no DB/WAL/SHM bytes. |
 | 5 — service/node admission | O4 with O2 prerequisite and O3 provenance; `src/custody_chain.py`, `src/nexus_client.py`, `src/main.py` and exact endpoints | Batch 0 pre-execution boundary plus jointly pinned heartbeat address/owner/schema/pair/custody/terms and authoritative Solana health/root and Nexus sync/mode/network/tip APIs for the exact configured endpoints. | Operator pins address/owner/schema/pair/custody/terms and freshness policy | Wrong/stale/unsynced/wrong-typed evidence, query failure and identity change between reads refuse before DB/recovery. Exact authorized target fixtures must prove health/root and sync/mode/network/tip freshness. |
-| 6 — witness/hold operations | O3/O4; evidence exporter, deployment runbook and operator-resolution tool | Batch 2 independent-process witness exit, Batch 3 durable hold classifications, Batch 4 read-only evidence API and Batch 5 exact chain-evidence contract; preserve the narrower witness/snapshot controls already accepted at `2c4ed319`, and pin independent TLS/anti-rollback administration and attributable role identities. | Distinct bootstrap/restore/disposition roles with attributable rationale; permanent retention is an explicit human policy | Export is read-only; TLS/anti-rollback rehearsal survives crash; resolution races workers, verifies exact chain evidence and either finalizes once with cap/fee effects or leaves the quantified hold unchanged. |
+| 6 — witness/hold operations | O3/O4; evidence exporter, deployment runbook and operator-resolution tool | Batch 2 independent-process witness exit, Batch 3 durable hold classifications, Batch 4 read-only evidence API and Batch 5 exact chain-evidence contract; preserve the narrower witness/snapshot controls accepted at `ba09cc59`, and pin independent TLS/anti-rollback administration and attributable role identities. | Distinct bootstrap/restore/disposition roles with attributable rationale; permanent retention is an explicit human policy | Export is read-only; TLS/anti-rollback rehearsal survives crash; resolution races workers, verifies exact chain evidence and either finalizes once with cap/fee effects or leaves the quantified hold unchanged. |
 | 7 — external acceptance | O5 with O4; exact immutable release artifact and approved Solana/Nexus test infrastructure | Accepted exits for Batches 0–6, one exact externally attested artifact, authorized isolated target infrastructure, pinned provider/wallet/node/service revisions and a no-production-funds test plan. | Explicit target-activity authorization and separate human release decision | Unsupported versions, pagination truncation, finality mismatch, concurrent arrivals, timeout-after-acceptance, crashes at every durable boundary, coherent restore and total loss pass on devnet/testnet. No production funds. |
+
+## Product, operator and developer-experience lane
+
+This lane is separate from release prerequisites. Read-only fixture-backed work may proceed while funds
+remain blocked, but no enhancement may create approval, mutate custody state or soften a correctness gate.
+Priorities reflect expected decision value, risk/dependency leverage and bounded effort. Benefits and
+success targets are hypotheses until measured with authorized operators or users.
+
+### Enhancement E1 — secret-safe external-candidate inspection report
+
+**Rank and benefit:** highest operator value / high safety leverage / small-to-medium effort. Reduce
+manual digest/policy review error and let independent reviewers reproduce one candidate verdict without
+turning repository tooling into artifact approval.
+
+**Objective/evidence/outcome:** O3/O4; non-Atlas operator hypothesis. Advance inspectable executable
+provenance, not custody release or measured demand.
+
+**Owner, paths and prerequisites:** deployment/startup owner. Create a separate read-only
+`scripts/custody_external_inspect.py` with `tests/test_custody_external_inspect.py`; document its
+protected-domain use in `docs/maintenance/external-container-admission.md` and `SETUP.md`. Share only
+pure canonical projection/policy code after launcher parity is proved. Prerequisites are one exact
+accepted Batch 0 policy and a protected read-only Docker inspection boundary. The tool must not import
+the service, open custody DB/witness state or depend on runtime credentials.
+
+**Human authority:** at kickoff, name an independent artifact approver and deployment maintainer. The
+approver selects/protects digest and policy exceptions. The tool may render a digest, redacted field
+names, policy verdict and diagnostics; it may not create/sign/write an approval, start/update/delete a
+container, print environment values or claim release.
+
+**Bounded RED/GREEN and acceptance:**
+
+1. RED: collect a valid fixture plus duplicate/malformed/recursive/non-finite/oversized/invalid-UTF-8/
+   stalled evidence; every accepted launcher negative; all 18 matching-approved open families; secret
+   environment values; stale approval and changed second read.
+2. GREEN: implement one read-only canonical report and cross-check its digest/policy verdict against an
+   independent fixture implementation and the launcher's accepted projection.
+3. Concurrency/stale: two report processes observe changing evidence without mixed reads, a passing stale
+   verdict or any Docker write verb.
+4. Restart/recovery: interrupt before/after each read; rerun is deterministic or explicitly incomplete,
+   with no durable approval or hidden resumable authority.
+5. Execute the focused modules plus the full gate. Target: two reviewers reproduce the same verdict,
+   every required negative is visible and zero secret values are emitted. Stop/redesign if report output
+   becomes a credential, needs write authority or disagrees with launcher policy.
+
+### Enhancement E2 — read-only issue export and accessible triage
+
+**Rank and benefit:** high operator value / medium safety leverage / medium effort. Make quantified holds
+and incomplete admission easier to locate and hand to an authorized resolver without adding a resolution
+button.
+
+**Objective/evidence/outcome:** O4/O3; non-Atlas operator hypothesis. Improve liability/uncertainty
+legibility, not disposition authority.
+
+**Owner, paths and prerequisites:** dashboard/operator owner; `src/dashboard.py`,
+`tests/test_custody_dashboard.py`, `tests/test_dashboard_recovery_admission.py`, `README.md` and
+`SETUP.md`. Use one shared read-only HTML/JSON/CSV projection over the accepted SQLite snapshot and
+witness-before/after consistency. Batch 1/3 schemas remain prerequisites for claiming complete coverage.
+
+**Human authority:** at kickoff, name dashboard maintainer, operator evaluator and security/redaction
+reviewer. Read-only observers may export stable redacted evidence. Only a separately authorized resolver
+may disposition a hold through future Batch 6 tooling. No endpoint may retry, write SQL or expose secrets.
+
+**Bounded RED/GREEN and acceptance:**
+
+1. RED: positive fixtures for every hold family; negatives for missing/corrupt DB, malformed evidence,
+   secret fields, unknown amounts and witness mismatch.
+2. GREEN: stable filtered JSON/CSV, copy-safe composite source identities, evidence age/completeness and
+   keyboard focus/ordering, using the same projection as HTML.
+3. Concurrency/stale: bracket a writer/witness transition around export; return one coherent snapshot or
+   explicit stale/incomplete, never mixed healthy values.
+4. Restart/recovery: repeat with missing DB, retained WAL and restored fixtures; source DB/WAL/SHM bytes
+   remain unchanged and incomplete evidence never becomes zero/complete.
+5. Target: a keyboard-only fixture locates/exports one blocked obligation; every hold reports exact integer
+   principal or explicit unknown, state, age and reason. Stop/defer if stable redaction or measurable
+   diagnosis benefit cannot be shown with authorized operators.
+
+### Enhancement E3 — privacy-reviewed user status discovery design
+
+**Rank and benefit:** potentially high user value / high privacy and identity dependency / defer
+implementation. Let an authorized sender distinguish pending, held and finalized work without exposing
+another user's obligation.
+
+**Objective/evidence/outcome:** O4/O5; non-Atlas user hypothesis. Improve settlement legibility; no
+privacy-safe authority contract or demand is measured.
+
+**Owner, paths and prerequisites:** dashboard/API owner records design only in this maintained plan and
+`docs/SECURITY.md`; there is no authorized production path in this phase. Before coding, name exact
+`src/dashboard.py` and collected test paths. Prerequisites are Batch 5 service identity, a human privacy/
+authorization decision, stable composite source identity and Batch 7 target acceptance.
+
+**Human authority and acceptance:** at kickoff, name security/privacy, service and release owners. A
+source identifier alone is not authorization. RED design fixtures accept one exact-source lookup and
+reject enumeration, cross-user, sibling ambiguity, malformed credentials, wrong deployment and stale
+service. Any later GREEN implementation is the narrowest read-only revision-bound projection. Concurrent
+identity/lifecycle changes return one revision or explicit stale; partial restore/total loss returns
+unavailable. Stop if authority requires client-unsafe secrets, cannot prevent enumeration or depends on
+mutable display identity.
 
 Current offline commands are recorded in [the evaluation](../EVALUATION.md). Add the missing
 matrix rows to default pytest collection rather than accepting standalone probes.

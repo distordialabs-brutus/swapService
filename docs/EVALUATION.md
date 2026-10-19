@@ -1,5 +1,105 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
+## Current exact-source assessment — 2026-10-19
+
+**Release and real funds remain blocked.** This assessment covers detached source
+`ba09cc59ba26e63f5ebf1ed15414fb5f475bf4a3`, matching local `HEAD` and `origin/main`, against
+prior reviewed source `b31a27c2b5dc509fe0ddd9877f9a3c09d90e16e1`. Nine published commits include one
+repository-policy change that removes `vision.md` from tracking and eight narrow external-launcher
+maintenance increments. No financial worker, custody schema, witness state, dependency or chain
+contract changed. No Docker container, chain/provider request, credential use, transaction, deployment, commit,
+push or release action was performed in this review.
+
+Strategic scope remains **O4 attributable settlement and bounded risk**, supported by **O3 reproducible
+provenance** and **O1 inspectable evidence contracts**. Exact service identity is an O2 prerequisite;
+O5 reliance remains unvalidated. Settlement is a non-Atlas hypothesis and inherits no marine Class A
+evidence. The one-pair operator-custodial bridge remains transitional SD-002. Nothing here proves
+non-custody, enforceable slashing/collateral, regulatory status, adoption or permission to move funds.
+
+### Accepted published progress since `b31a27c`
+
+The launcher now rejects, on both injected inspections and even under a matching configuration digest:
+
+1. nonempty candidate OCI annotations;
+2. daemon-resolved `host-gateway` extra-host addresses;
+3. enabled or malformed container healthchecks;
+4. numeric/type-confused `BindOptions.ReadOnlyNonRecursive` evidence;
+5. list-shaped security options that enable or ambiguously spell `writable-cgroups`;
+6. Docker automatic removal;
+7. per-container user-namespace remapping opt-out; and
+8. a created candidate with nonempty, absent or malformed prior-start `State.Error` evidence.
+
+These are finite Docker-reported containment increments. Focused collected tests cover the supported
+positive, matching-approved negative and second-read drift cases. Automatic removal refusal also retains
+the exact stopped candidate for later evidence collection, but does not create a durable evidence export.
+Empty `UsernsMode` prevents candidate opt-out but does not prove that daemon user remapping is enabled.
+An empty prior-start error is not a complete execution-history attestation.
+
+The local vision hook conflict is no longer a documentation-publication blocker: commit `e5d0b5b`
+removed `vision.md` from the tracked tree, added the root path to `.gitignore` and updated architecture
+references to the local-only lineage. The unchanged pre-commit hook now accepts an index because
+`git ls-files -- vision.md` is empty; the file was not recreated or included in this candidate. The
+historical vision remains strategy context through prior source and the portable alignment summary.
+
+### Exact current boundary and owner-only candidate
+
+A fresh injected-engine probe with independently matching digests ran 26 cases. All eight newly
+published negatives refused before `diff` or `start`. Eighteen matching-approved cases still completed
+`inspect → diff → inspect → diff → start`: host IPC; host device, cgroup-rule and driver-request access;
+host cgroup and UTS namespaces; alternate runtime; daemon init; legacy links; empty masked/read-only
+system-path lists; malformed string-shaped `SecurityOpt`; no `no-new-privileges`; container-shared and
+host networking; unconfined AppArmor; root runtime user; and `/` as the writable custody bind source.
+This is an injected boundary demonstration, not proof that every malformed fixture is emitted by a real
+Docker daemon. It does prove that matching approval is not semantic safety policy.
+
+The original owner checkout, read only in this review, contains a broader cumulative four-file candidate
+on top of `ba09cc59`: 2,255 insertions and 102 deletions across
+`scripts/custody_external_launcher.py`, `tests/test_custody_external_launcher.py`, this evaluation and
+`docs/maintenance/external-container-admission.md`. Its current launcher/test SHA-256 values are
+`f11f1280…` and `2c53033b…`. Inspection shows private IPC/cgroup/UTS requirements, explicit empty device
+evidence, conventional `runc`, disabled daemon init and legacy links, baseline masked/read-only paths,
+`no-new-privileges`, refusal of container-shared networking and byte/deadline-bounded strict JSON evidence.
+Those owner bytes were neither copied nor executed here. They are useful uncommitted containment, not
+published behavior, and must be reviewed as one exact cumulative candidate. Host/custom networking,
+AppArmor/seccomp, runtime user and host bind-source policy remain broader semantic decisions even there.
+
+### Current issue register and release order
+
+| Priority | Boundary | Current verdict and exact exit |
+|---|---|---|
+| P0 | Published external executable authority | **Blocked.** Preserve the eight new controls, then review/integrate the exact cumulative owner candidate. Close the 18 demonstrated published start paths, malformed evidence shapes and the complete launcher/interpreter/Docker/daemon/image-store/`runc`/hook/approval closure before repository side effects. Real-engine readback remains mandatory. |
+| P0 | Mandatory protected launch and witness binding | **Open.** `SETUP.md` historically invoked `python3 swapService.py` directly, the external launcher has no production caller, and witness certificates do not bind its image/configuration authority. One independently installed route must be the only supported custody start path; exact authority and one-use witness generation must be one admission. Every bypass, loser, mutation, stale permit, response loss and crash must produce zero repository/database/witness/chain side effect. |
+| P0 | Coherent restore authorization | **Open.** Exact image bytes do not prove complete historical policy, liabilities, reservations, submissions, fees or terminals. Implement one closed all-status startup audit plus independently approved bootstrap/coherent-restore identity. Partial, stale, pre-fix, source/capacity/terminal/cap-only, online-backup, DB+WAL and total-loss cases retain full quantified liability and call no transport unless exact original intent is restored once. |
+| High | Semantic host policy | **Open.** Define allowed network/endpoints, AppArmor, seccomp, no-new-privileges, daemon user-remapping state, runtime user and narrowly rooted custody/secrets sources. Validate exact field types, positive supported values, matching-approved forbidden values, second-read drift and real-engine effective readback. A digest records a choice; it does not make an unsafe value safe. |
+| High | Service/node admission | **Open.** Exact heartbeat address/owner/schema/pair/custody/terms and Solana health/root plus Nexus `synchronized`, `syncing`, mode/network and tip freshness remain unbound before mutable startup. |
+| High | Capacity and held-work operations | **Open.** Malformed oldest capacity evidence can still starve younger eligible work; non-capacity holds lack one evidence-bound audited resolution protocol. Preserve full principal and remote identity; no direct send or SQL edit is accepted. |
+| External | Target acceptance and human release | **Open.** One immutable candidate still needs authorized real-Docker mutation/contention/failed-start/crash/claim/run/seal and Solana/Nexus test-infrastructure pagination/finality/accepted-but-unparsed/restore/total-loss/operator rehearsal. Human release is separate. |
+
+Preserve all accepted restart/PID/mount, witness, retained-source, exact-money, unknown-outcome and
+read-only dashboard controls. Do not recode the broader owner candidate increment by increment. First
+review its exact cumulative bytes; then implement only the unresolved semantic policy, mandatory
+protected launch/witness binding and coherent restore slices. A green suite cannot close external exits.
+
+### Product, operator and developer-experience lane
+
+No enhancement shipped in this range. Retain three bounded hypotheses without weakening release gates:
+
+1. **E1 secret-safe external-candidate inspection report (highest value):** a separate read-only tool
+   renders canonical digest, redacted policy fields and explicit pass/refuse reasons without issuing an
+   approval or invoking a Docker write verb. Two independent reviewers must reproduce one fixture verdict
+   with zero environment values. Stop if report output becomes an approval credential or needs write access.
+2. **E2 read-only issue export and accessible triage:** stable redacted JSON/CSV and keyboard workflow over
+   the accepted read-only snapshot, with exact/unknown liability and evidence-age labels for every hold
+   family. Source DB/WAL/SHM bytes must remain unchanged. Stop if redaction or diagnosis benefit cannot be
+   demonstrated with authorized operators.
+3. **E3 privacy-reviewed user status discovery design:** defer implementation until exact service identity,
+   authorization/privacy and target acceptance exist. A source identifier alone is not authority; reject
+   enumeration, cross-user, ambiguous-sibling, stale-service and incomplete-restore cases.
+
+The [maintained plan](plans/2026-09-25-recovery-admission-and-capacity-fairness.md) owns exact paths,
+human kickoff authority, RED/GREEN sequences, concurrency/stale/restart/recovery acceptance and stop
+gates. These are non-Atlas hypotheses and validation targets, not measured demand.
+
 ## Maintenance increment — refuse previously failed startup candidates (2026-10-19)
 
 **Implemented narrowly offline; Batch 0 remains blocked.** External pre-execution

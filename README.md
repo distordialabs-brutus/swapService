@@ -4,7 +4,18 @@ A custodial, bidirectional bridge for **one operator-configured Solana SPL token
 
 The bridge uses a **1:1 whole-token backing/conversion model before fees and conservative decimal rounding**. It is not a market-price exchange, a multi-pair router, or a general cross-chain adapter. The current Solana transfer implementation uses the classic SPL Token program; configurable mint selection does not imply native-SOL or Token-2022 support.
 
-> **Release safety:** local engineering checks do not establish production readiness. The current source requires an independently witnessed sealed custody image before startup, but complete executable-artifact, service-identity, node-freshness, bootstrap/restore and live-chain gates remain open. Real funds remain blocked. See the [current evaluation](docs/EVALUATION.md), [2026-10-02 development review](docs/DEVELOPMENT_REVIEW_2026-10-02.md), and [sealed-custody architecture](docs/maintenance/sealed-custody-admission.md).
+> **Release safety:** local engineering checks do not establish production readiness. Published source
+> `ba09cc59` adds eight narrow Docker-reported admission controls, but matching-approved shared
+> IPC/devices, host cgroup/UTS, alternate runtime/init/links, disabled system-path confinement,
+> container-shared/host networking, incomplete security policy, root runtime identity and broad bind
+> sources still reach the injected start boundary. A broader owner-only launcher candidate remains
+> uncommitted and is not accepted published behavior. The launcher is optional and not bound to the
+> one-use custody witness; coherent restore, service/node freshness and live-chain gates also remain
+> open. **Do not transfer tokens, publish a mapping to initiate a swap, or start custody processing.**
+> See the [current evaluation](docs/EVALUATION.md),
+> [maintained plan](docs/plans/2026-09-25-recovery-admission-and-capacity-fairness.md),
+> [external-container contract](docs/maintenance/external-container-admission.md), and
+> [sealed-custody architecture](docs/maintenance/sealed-custody-admission.md).
 
 ## Documentation
 
@@ -15,7 +26,7 @@ The bridge uses a **1:1 whole-token backing/conversion model before fees and con
 | Asset/client integrations | [ASSET_STANDARD.md](ASSET_STANDARD.md) |
 | Developers | [runtime state machines](docs/STATE_MACHINES.md), [engineering guidance](.github/copilot-instructions.md) |
 | Security and release decisions | [SECURITY.md](docs/SECURITY.md), [EVALUATION.md](docs/EVALUATION.md) |
-| Current and previous verification | [2026-10-02 development review](docs/DEVELOPMENT_REVIEW_2026-10-02.md), [2026-09-30 review](docs/DEVELOPMENT_REVIEW_2026-09-30.md), [2026-09-28 review](docs/DEVELOPMENT_REVIEW_2026-09-28.md) |
+| Current assessment and historical verification | [current evaluation](docs/EVALUATION.md), [maintained plan](docs/plans/2026-09-25-recovery-admission-and-capacity-fairness.md), [2026-10-02 review](docs/DEVELOPMENT_REVIEW_2026-10-02.md) |
 
 Dated review/audit reports retain their original snapshots, token examples and test counts. They are historical evidence, not a substitute for checking the current code and deployment.
 
@@ -41,52 +52,56 @@ Supported legacy aliases, such as `USDC_MINT` and `NEXUS_USDD_TREASURY_ACCOUNT`,
 
 Do not change a deployed pair over an existing custody database, heartbeat or unresolved liabilities as though it were a label change. Pair migration needs a separately verified custody and recovery plan. The provider-v2 schema in [ASSET_STANDARD.md](ASSET_STANDARD.md) is a **planned extension**, not current multi-pair support.
 
-## Verify the deployment before sending
+## Protocol reference while the release gate is red
 
-Never copy a vault, mint or treasury address from an unrelated deployment. Obtain the operator's actual registration and independently verify:
+The two flow descriptions below preserve identities and message shapes for code review, tests and
+incident analysis. They are **not transfer instructions**. No deployment is release-approved: do not
+send Solana or Nexus tokens, activate a mapping asset or start this service with custody credentials.
+A future real-value guide requires one immutable candidate, completed release exits and an explicit
+human release decision.
+
+A provider record is expected to identify:
 
 - Solana network, `solana_vault_mint` and `solana_vault_address`;
 - Nexus network, `nexus_token_register_address` and `nexus_treasury_address`;
 - `memo_prefix`, current minimums and fees, and the token precision on each side;
 - the operator's identity/contact, record `status` and freshness of `last_poll_timestamp`.
 
-An `online` status or recent heartbeat is a liveness signal, **not proof of solvency, completed recovery or release approval**. A displayed ticker alone does not establish token identity.
+An `online` status or recent heartbeat is only a liveness signal; it is **not proof of solvency,
+completed recovery or release approval**. A displayed ticker alone does not establish token identity.
 
-With the operator tooling configured, a published record can be inspected with:
+For synthetic or review configuration, the read-only tooling can inspect a named record:
 
 ```bash
 python3 register_service.py --inspect <REGISTRATION_ASSET_NAME>
 ```
 
-Operators can preview their own configured record without publishing it:
+This helper requires relevant review configuration and confers no authority to transfer or start
+custody processing. In the record schema, `min_to_nexus` is denominated in the **Solana input token**,
+while `min_to_solana` is denominated in the **Nexus input token**. Flat fees are named for the
+**output chain**. See [ASSET_STANDARD.md](ASSET_STANDARD.md) for field names and limits; its asset
+commands are protocol reference, not permission to activate a flow.
 
-```bash
-python3 register_service.py --show --json
-```
+## Solana token → Nexus token (non-executable protocol shape)
 
-These helpers require the relevant configuration. The public record's `min_to_nexus` is denominated in the **Solana input token**, while `min_to_solana` is denominated in the **Nexus input token**. Flat fees are named for the **output chain**. See [ASSET_STANDARD.md](ASSET_STANDARD.md) for actual field names and schema limits.
-
-## Solana token → Nexus token
-
-1. Verify the deployment and ensure your destination is a Nexus account for the **configured immutable token register**. A matching ticker is insufficient.
-2. Use a Solana wallet/tool that can include a memo in the token-transfer transaction.
-3. Send the configured SPL token to the verified service vault token account, with an amount meeting the deployment's effective minimum.
-4. Include the configured memo prefix immediately followed by your Nexus destination account.
+A protocol-conforming input would bind the configured SPL mint, its service vault token account, an
+amount satisfying deployment policy and a memo formed from the deployment-specific prefix plus a
+destination Nexus account for the **configured immutable token register**.
 
 ```text
 Token:       <CONFIGURED_SOLANA_TOKEN_MINT>
-Destination: <VERIFIED_SERVICE_VAULT_TOKEN_ACCOUNT>
-Memo:        <DEPLOYMENT_MEMO_PREFIX><YOUR_NEXUS_TOKEN_ACCOUNT>
+Destination: <SERVICE_VAULT_TOKEN_ACCOUNT>
+Memo:        <DEPLOYMENT_MEMO_PREFIX><NEXUS_TOKEN_ACCOUNT>
 Amount:      <AMOUNT_IN_SOLANA_TOKEN_UNITS>
 ```
 
-For a deployment using the default prefix, the memo is `nexus:<YOUR_NEXUS_TOKEN_ACCOUNT>`. The prefix is not universally fixed: use the operator's published value.
+The historical default prefix produces `nexus:<NEXUS_TOKEN_ACCOUNT>`; the prefix is not universally fixed.
 
 The service validates the deposit, finality, memo and Nexus account's token register, computes the net output with the configured fees/precision, and tracks the outbound Nexus transaction through confirmation. Submission alone is not settlement.
 
-Solana-side refund and quarantine mechanisms exist for eligible failed deposits, but **a timeout or incomplete lookup does not guarantee an immediate refund**. Ambiguous outcomes can remain held for authoritative resolution. A refund, when made, returns to the original SPL source token account, not automatically to a wallet-owner address. Do not repeat a transfer merely because processing is delayed.
+Solana-side refund and quarantine mechanisms exist for eligible failed deposits, but **a timeout or incomplete lookup does not guarantee an immediate refund**. Ambiguous outcomes can remain held for authoritative resolution. A refund, when made, returns to the original SPL source token account, not automatically to a wallet-owner address. Repeating a transfer after a delay could duplicate exposure; the flow remains non-executable until release acceptance.
 
-## Nexus token → Solana token
+## Nexus token → Solana token (non-executable protocol shape)
 
 > **Payout-budget control:** all automated Solana token sends—including Nexus→Solana
 > payouts, Solana refunds and quarantine sends—reserve the configured rolling cap in
@@ -94,10 +109,10 @@ Solana-side refund and quarantine mechanisms exist for eligible failed deposits,
 > capacity. A timeout or missing returned signature becomes an operator hold, not a
 > retry or cap release. Target-chain crash/finality acceptance is still required.
 
-1. Use an **existing token-account address for the configured Solana mint**. The payout path does not resolve a wallet-owner address to its ATA and does not create missing token accounts.
-2. Send the configured Nexus token from your token account to the verified service treasury, respecting the deployment's effective minimum. Normal holders use the account-debit flow, not a token-creator supply-debit example.
-3. Capture the complete transfer/debit transaction ID and publish or update a Nexus asset owned by the same signature chain that sent the funds.
-4. The mapping asset must contain these exact fields:
+The protocol expects an existing token-account address for the configured Solana mint; it does not
+resolve a wallet-owner address to its ATA or create missing token accounts. Its source side is an
+account debit of the configured Nexus token to the service treasury. The associated transaction-level
+mapping is owned by the same signature chain as that debit and has this historical schema:
 
 ```json
 {
@@ -106,18 +121,24 @@ Solana-side refund and quarantine mechanisms exist for eligible failed deposits,
 }
 ```
 
-See [ASSET_STANDARD.md](ASSET_STANDARD.md) for supported asset creation/update commands. The service matches `txid_toService` **and asset owner**. Mapping is transaction-level; internal Nexus source accounting separately preserves each exact `(txid, contract_id)` credit. Do not invent a new mapping field to replace that existing protocol.
+Do not create or update such an asset to initiate a transfer while the release gate is red. The service
+matches `txid_toService` **and asset owner**. Internal Nexus source accounting separately preserves
+each exact `(txid, contract_id)` credit; this reference schema does not authorize a replacement flow.
 
-Once the mapping and destination are valid, the service freezes the payout terms and submits the net Solana transfer. It finalizes only after successful finalized transfer evidence matches the source identity, configured vault/mint, recipient and frozen output. A memo or finalized signature alone is insufficient.
+The designed behavior freezes payout terms before submitting a net Solana transfer. Finalization
+requires successful finalized transfer evidence matching source identity, configured vault/mint,
+recipient and frozen output; a memo or finalized signature alone is insufficient.
 
 - Missing/invalid mapping, unresolved outcomes or missing destination accounts can require an operator hold.
 - `REFUND_TIMEOUT_SEC` is an observation/hold threshold, **not a promise of an automatic Nexus refund**.
 - Automatic Nexus refunds and treasury-to-quarantine transfers remain disabled. A separate, exact-source, authorized operator workflow exists; it is not an automatic retry path.
-- Do not overwrite a reusable mapping with the next transaction ID while a previous swap still depends on it. Keep the relevant mapping discoverable until that swap is resolved, or use separate assets.
+- Changing a reusable mapping while unresolved work depends on it can destroy discovery evidence. This
+  is documented for analysis, not as an instruction to publish mappings before release.
 
 ## Fees, minimums and dust
 
-There is no universal minimum expressed in a particular ticker. Check the selected deployment's effective terms before every transfer.
+There is no universal minimum expressed in a particular ticker. A future release-approved deployment
+would require independent evaluation of its exact effective terms; this documentation authorizes no transfer.
 
 - `FEE_FLAT_TO_NEXUS` governs Nexus output; `FEE_FLAT_TO_SOLANA` governs Solana output.
 - `FEE_BPS` applies a percentage fee to the input of each direction.
@@ -191,10 +212,11 @@ Keep it local or follow the authentication/TLS requirements in [SETUP.md](SETUP.
 
 ## Operator and developer entry points
 
-- [Installation, custody setup, registration and startup](SETUP.md)
+- [Operator setup and startup reference](SETUP.md) — non-production reference; custody startup remains blocked
 - [Configuration and legacy aliases](CONFIG.md)
 - [Security controls and deployment restrictions](docs/SECURITY.md)
 - [Current engineering evaluation and remaining release gates](docs/EVALUATION.md)
+- [Maintained correctness/release and product/UX plan](docs/plans/2026-09-25-recovery-admission-and-capacity-fairness.md)
 - [Nexus API reference material](Nexus%20API%20docs/) — check it against the intended node version; vendored documentation is not proof of live API semantics.
 
 Run local automated verification in an environment with the declared dependencies installed:
