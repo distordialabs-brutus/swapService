@@ -84,6 +84,14 @@ def launch(container_id: str, image_id: str, config_sha256: str) -> int:
             config = value["Config"]
             if not isinstance(config, dict):
                 raise ValueError
+            # Pin numeric primary IDs instead of resolving image account names
+            # or defaulting to root. Restrict the supported range before int()
+            # conversion; matching approval cannot exempt a root identity.
+            runtime_user = config.get("User")
+            if (not isinstance(runtime_user, str)
+                    or re.fullmatch(r"[1-9][0-9]{0,9}:[1-9][0-9]{0,9}", runtime_user) is None
+                    or any(int(part) > 2147483647 for part in runtime_user.split(":"))):
+                raise LaunchError("container non-root numeric runtime identity is required")
             # The daemon schedules healthcheck execs independently of this one
             # admitted entrypoint. A pinned probe is still an automatic extra
             # command, potentially concurrent with custody admission/recovery.

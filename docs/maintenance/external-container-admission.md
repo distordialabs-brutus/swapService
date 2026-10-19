@@ -1,5 +1,32 @@
 # External container admission primitive
 
+## Non-root primary runtime identity restriction
+
+Both inspections require explicit `Config.User` in canonical ASCII decimal
+`UID:GID` form, with **both IDs between 1 and 2147483647 inclusive**. Empty or
+missing identities, names, UID-only forms, root UID or primary GID, signs, leading
+zeros, whitespace, Unicode digits, out-of-range numbers and non-string evidence
+refuse even with matching independent approval. This is an intentionally narrow
+supported identity format, not a claim that every other spelling is invalid Docker
+syntax. The complete `Config` remains pinned; second-read changes, including a
+change to another otherwise supported identity, refuse before later diff/start.
+
+[Moby's user construction](https://github.com/moby/moby/blob/d74daf1a/daemon/oci_linux.go)
+resolves `Config.User` into the OCI process UID/GID. Explicit numeric primary IDs
+avoid relying on account-name/default-primary-group resolution for this check.
+An approved read-only root and dropped capabilities do not make an initial root
+identity non-root. Independently prepare ownership/permissions for the approved
+numeric identity; the guard never repairs the image or bind sources.
+
+This checks **Docker-reported primary IDs**, not effective runtime credentials,
+supplementary groups (including image group membership and `HostConfig.GroupAdd`),
+daemon UID/GID remapping, host/bind permissions or later identity transitions.
+The protected daemon/runtime and image account databases remain external trust.
+No-new-privileges and other existing controls must be retained; complete executable
+authority, semantic host policy, mandatory witness-bound launch and actual Docker
+acceptance remain open. Collected tests inject engine evidence; no container,
+chain, funds or custody generation is exercised.
+
 ## Supported AppArmor profile restriction
 
 Both inspections require explicit top-level `AppArmorProfile="docker-default"`.

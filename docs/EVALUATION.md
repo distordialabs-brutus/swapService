@@ -1,5 +1,50 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
+## Maintenance increment — explicit non-root primary runtime identity (2026-10-19)
+
+**Implemented narrowly offline; Batch 0 remains blocked.** External executable
+admission is still the first unresolved priority. Published base `7502cb0` contains
+the completed AppArmor repair; it is not repeated here. The exact cumulative owner
+launcher/test candidate was reviewed read-only, and its earlier controls remain
+preserved and excluded from this one-issue publication candidate. A collected RED
+regression reached injected start with matching approval and `Config.User="0:0"`.
+Both inspections now require canonical ASCII numeric `UID:GID`, each in the
+supported non-root range 1 through 2147483647. Missing, ambiguous, malformed and
+root primary identities refuse without printing candidate values. See the
+[primary runtime identity contract](maintenance/external-container-admission.md#non-root-primary-runtime-identity-restriction).
+
+This is Docker-reported **primary** identity containment, not effective credential
+or supplementary-group attestation. Image group membership, `GroupAdd`, daemon
+remapping, host/bind permissions, seccomp/network/source policy, protected complete
+executable closure, mandatory image/witness binding, coherent restore and real
+Docker acceptance remain open. Tests inject the engine boundary; no container,
+chain, funds, credentials or custody generation is used. Production remains blocked.
+
+The scheduled maintainer acts under bounded one-issue authorization. Deployment/
+startup owns `scripts/custody_external_launcher.py` and the new collected
+`tests/test_custody_external_runtime_user.py`; work-item grounding is Batch 0,
+O4/O3 with supporting O1. Non-Atlas settlement, transitional custody and independent
+artifact/release authority remain unchanged. No financial worker, dependency,
+schema or witness behavior changes. Offline verification passed in clean Python
+**3.12.3** environments with Node.js renderer coverage and no skipped tests. Each
+export was independently indexed to exactly the intended Git tree. The isolated
+candidate excludes all earlier unpublished owner repairs.
+
+| Gate | Isolated published base plus this repair | Shared tree including owner repairs |
+|---|---|---|
+| Ten external-launcher modules | **378 passed** | **627 passed** |
+| Complete suite | **1,900 passed, 77 subtests passed**, 152.31 seconds | **2,149 passed, 77 subtests passed**, 150.10 seconds |
+| CI isolation shards | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** |
+| Compilation, dependency consistency, Markdown links and intended-index token inventory | Passed; **274 active inventory lines** | Passed; **274 active inventory lines** |
+
+The new focused module covers matching-approved root/missing/malformed identities,
+ASCII/range boundaries, second-read drift and exact-ID one-start/child-exit controls.
+Read-only review found no blocker in this narrow offline scope. Final documentation
+recording, whitespace, exact candidate diff and existing pre-commit policy are
+checked before publication. The original index and owner test bytes were preserved.
+Commit, push and exact-SHA CI evidence accompany the maintenance report; a green
+offline suite is not real Docker or release acceptance.
+
 ## Maintenance increment — supported AppArmor profile policy (2026-10-19)
 
 **Implemented narrowly offline; Batch 0 remains blocked.** The latest published
