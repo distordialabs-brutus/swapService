@@ -1,5 +1,51 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
+## Maintenance increment — supported AppArmor profile policy (2026-10-19)
+
+**Implemented narrowly offline; Batch 0 remains blocked.** The latest published
+assessment at `640da45` retains external executable authority as the first unresolved
+priority and explicitly identifies matching-approved unconfined AppArmor as open.
+The exact cumulative owner launcher/test candidate was read-only reviewed first;
+its existing controls are preserved, not reconstructed or implicitly published.
+This one-issue repair adds only the still-missing profile-name policy on top of the
+published base. Both inspections now require `AppArmorProfile="docker-default"`.
+The first red tests reached injected start with matching approvals for empty and
+`unconfined` profiles; these now refuse before diff/start. See the
+[profile policy contract](maintenance/external-container-admission.md#supported-apparmor-profile-restriction).
+
+The scheduled maintainer acts under bounded one-issue authorization. Deployment/
+startup owns the launcher and collected `tests/test_custody_external_apparmor.py`;
+work-item grounding is Batch 0, O4/O3 with supporting O1. Non-Atlas settlement,
+transitional custody and independent release authority remain unchanged. No
+financial worker, schema, witness or dependency behavior changes. The newer remote
+documentation was fast-forwarded and owner edits reconciled without loss.
+
+This requires one supported Docker-reported name, not the registered profile bytes,
+host AppArmor enablement or effective runtime enforcement. Unreviewed custom
+profiles and unsupported hosts fail closed. Complete protected executable closure,
+seccomp/network/user/bind-source policy, mandatory witness-bound launch, coherent
+restore and actual Docker acceptance remain open. Tests inject engine evidence;
+no container, chain, funds or custody generation is used. Production remains blocked.
+
+The 30 collected cases cover matching-approved unsupported/malformed names,
+missing evidence, second-read drift, secret-safe refusal/no later diff/start and
+exact-ID one-start/child-exit controls. Clean Python **3.12.3** gates passed with
+Node.js renderer coverage and no skipped tests. Both exports were independently
+indexed to exactly their intended Git trees; the publication candidate excludes
+all earlier unpublished owner repairs.
+
+| Gate | Isolated published base plus this repair | Shared tree including owner repairs |
+|---|---|---|
+| Nine external-launcher modules | **319 passed** | **568 passed** |
+| Complete suite | **1,841 passed, 77 subtests passed**, 109.35 seconds | **2,090 passed, 77 subtests passed**, 109.92 seconds |
+| CI isolation shards | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** |
+| Compilation, dependency consistency, Markdown links and intended-index token inventory | Passed; **274 active inventory lines** | Passed; **274 active inventory lines** |
+
+Final candidate diff, whitespace and existing pre-commit policy are checked against
+that isolated index, including this documentation-only results recording. Commit,
+push and exact-SHA CI evidence accompany the maintenance report; local engineering
+checks do not establish actual Docker enforcement or release acceptance.
+
 ## Current exact-source assessment — 2026-10-19
 
 **Release and real funds remain blocked.** This assessment covers detached source

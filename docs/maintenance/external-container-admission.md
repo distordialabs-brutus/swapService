@@ -1,5 +1,23 @@
 # External container admission primitive
 
+## Supported AppArmor profile restriction
+
+Both inspections require explicit top-level `AppArmorProfile="docker-default"`.
+Empty, `unconfined`, custom, missing and malformed profile evidence refuses, even
+when the present value has an independently matching configuration digest. A
+second-read change refuses before another diff or start; the profile remains part
+of the existing approval projection. This intentionally excludes hosts without
+AppArmor support and unreviewed custom profiles rather than treating an approval
+digest as a policy exception. Refusals never print the candidate's profile value.
+
+This is a finite **Docker-reported profile-name policy**, not attestation of the
+registered profile's bytes, the host's AppArmor enablement or actual runtime
+application/enforcement. Independently protect and verify host/kernel/daemon
+policy, including the registered `docker-default` profile. Seccomp, network,
+runtime-user and host bind-source policy, complete executable authority, mandatory
+witness-bound launch and real Docker acceptance remain open. Collected tests inject
+engine evidence; no container or custody generation is exercised.
+
 ## Status and trust boundary
 
 This is one narrow Batch 0 increment, **not deployment or release acceptance**. The

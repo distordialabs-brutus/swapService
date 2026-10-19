@@ -76,6 +76,11 @@ def launch(container_id: str, image_id: str, config_sha256: str) -> int:
                              ensure_ascii=True, allow_nan=False).encode("ascii")
             if hashlib.sha256(raw).hexdigest() != config_sha256:
                 raise LaunchError("container configuration does not match independent approval")
+            # A matching digest records the candidate's choice; it cannot
+            # authorize unconfined or unreviewed custom AppArmor policy. This
+            # checks the reported name, not the protected host's profile bytes.
+            if value["AppArmorProfile"] != "docker-default":
+                raise LaunchError("container supported AppArmor profile is required")
             config = value["Config"]
             if not isinstance(config, dict):
                 raise ValueError
