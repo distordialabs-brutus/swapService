@@ -1,5 +1,28 @@
 # External container admission primitive
 
+## Canonical non-root bind-source restriction
+
+Both inspections require custody and secrets bind sources to be strings spelling
+canonical, non-root absolute paths. `/`, relative/empty paths, NULs, repeated or
+trailing slashes and `.`/`..` path components refuse even with independently
+matching approval. This intentionally rejects noncanonical spellings rather than
+normalizing them. The launcher must not resolve a daemon host's paths against its
+own filesystem. Declared and observed sources still require exact agreement; the
+full source evidence stays pinned, so second-read changes refuse before another
+diff or start. Refusal never prints inspected source values.
+
+This closes the demonstrated host-root bind path and ambiguous lexical spellings
+only. **It is not a narrowly rooted source allowlist**: canonical paths such as
+`/etc` or `/home` are not made safe by this check. Symlinks, inode/content continuity,
+host ownership/permissions, source-subtree policy and exclusive protected daemon
+administration still require independent verification. Read-only secrets and
+nonrecursive binds do not make arbitrary host contents approved image bytes.
+The [focused tests](../../tests/test_custody_external_bind_sources.py) inject engine
+evidence and preserve exact-ID one-start/child-exit controls; no real Docker mount
+or chain is exercised. Complete executable authority, mandatory image/witness
+binding, coherent restore and real-engine acceptance remain open. Production and
+real funds remain blocked.
+
 ## Host network namespace restriction
 
 Both inspections refuse `HostConfig.NetworkMode="host"` even with matching

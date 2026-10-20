@@ -188,6 +188,12 @@ def launch(container_id: str, image_id: str, config_sha256: str) -> int:
                 if (mount["Type"] != "bind" or destination in destinations
                         or not isinstance(mount["Source"], str)
                         or not mount["Source"].startswith("/")
+                        # Never expose the daemon host root. Require lexical
+                        # canonicality instead of normalizing a path whose host
+                        # symlinks/filesystem this process cannot safely resolve.
+                        or "\x00" in mount["Source"]
+                        or any(part in {"", ".", ".."}
+                               for part in mount["Source"].split("/")[1:])
                         or destination not in {"/var/lib/swapservice", "/run/swapservice-secrets"}
                         or type(mount["RW"]) is not bool
                         or (destination == "/run/swapservice-secrets" and mount["RW"])):

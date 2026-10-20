@@ -1,5 +1,57 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
+## Maintenance increment — reject host-root bind sources (2026-10-21)
+
+**Implemented narrowly offline; Batch 0 remains blocked.** The first unresolved
+priority is external executable authority. Published base `ffa6c0a` already refuses
+host networking and candidate seccomp overrides; those fixes are not repeated.
+The exact cumulative owner launcher/test candidate was reviewed read-only, with
+its earlier controls preserved and excluded from this narrow publication. A RED
+regression reached injected start with independently matching approval and `/`
+as the writable custody bind source. Both inspections now require canonical,
+non-root absolute source spellings on custody and secrets binds: root, empty or
+relative paths, NULs, empty components, `.` and `..` components refuse. Sources
+are never normalized or resolved against the launcher's filesystem. Declared and
+observed sources must still agree exactly. See the
+[bind-source contract](maintenance/external-container-admission.md#canonical-non-root-bind-source-restriction).
+
+This is **lexical source-path containment**, not a narrowly rooted host-source
+allowlist. Other broad canonical sources, symlinks, inode/content continuity,
+permissions and actual Docker mount enforcement remain external gates. Protected
+complete executable closure, mandatory image/witness binding, coherent restore
+and real-engine acceptance remain open. Production and real funds remain blocked.
+Tests inject engine evidence; no container, chain, credentials, funds or custody
+generation is used.
+
+The scheduled maintainer acts under bounded one-issue authorization. Deployment/
+startup owns the launcher and collected `tests/test_custody_external_bind_sources.py`;
+work-item grounding is Batch 0, O4/O3 with supporting O1. Non-Atlas settlement,
+transitional custody and independent artifact/release authority remain unchanged.
+No financial worker, dependency, schema or witness behavior changes. The publication
+candidate contains only this increment on the published base, not earlier owner
+repairs. Focused coverage includes both mounts, matching-approved root/alias and
+malformed evidence, declared/observed disagreement, second-read drift and canonical
+non-root exact-ID one-start/child-exit controls. Read-only review found no blocker
+in this narrow scope.
+
+Clean Python **3.12.3** gates passed with Node.js renderer coverage and no
+skipped tests. Full suites ran serially to avoid the shared legacy dashboard
+fixtures. Both fresh exports were independently indexed to exactly their intended
+Git trees; the isolated candidate excludes prior owner repairs.
+
+| Gate | Published base plus this repair | Shared tree including owner repairs |
+|---|---|---|
+| Fourteen external-launcher modules | **527 passed** | **775 passed** |
+| Complete suite | **2,049 passed, 77 subtests passed**, 105.20 seconds | **2,297 passed, 77 subtests passed**, 106.87 seconds |
+| CI isolation shards | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** |
+| Compilation, dependency consistency, Markdown links and intended-index token inventory | Passed; **274 active inventory lines** | Passed; **274 active inventory lines** |
+
+The new focused module passed **60 cases** in both candidates. Candidate
+whitespace passed. Final documentation-only recording, exact diff, intended-index
+checks and the unchanged pre-commit policy are rechecked before publication.
+Commit, push and exact-SHA CI evidence accompany the maintenance report; offline
+checks do not establish real Docker enforcement or release acceptance.
+
 ## Maintenance increment — refuse host network namespace sharing (2026-10-20)
 
 **Implemented narrowly offline; Batch 0 remains blocked.** External executable
