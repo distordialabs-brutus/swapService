@@ -145,6 +145,7 @@ def candidate():
                    "WorkingDir": "/opt/swapService", "User": "1000:1000"},
         "HostConfig": {"ReadonlyRootfs": True, "Privileged": False, "AutoRemove": False,
                        "UsernsMode": "", "GroupAdd": None,
+                       "SecurityOpt": ["no-new-privileges"],
                        "CapDrop": ["ALL"], "CapAdd": None, "Tmpfs": {},
                        "PidMode": "",
                        "RestartPolicy": {"Name": "no", "MaximumRetryCount": 0},

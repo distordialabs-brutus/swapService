@@ -1,5 +1,34 @@
 # External container admission primitive
 
+## Candidate seccomp override restriction
+
+Both inspections require explicit string-array `HostConfig.SecurityOpt` evidence
+with **no option whose key is `seccomp`**. Every occurrence refuses, regardless
+of order or independently matching approval: `seccomp=unconfined`, `seccomp=builtin`,
+custom/inline profiles, empty values and deprecated `seccomp:<value>` forms.
+Key parsing follows Moby: `=` takes precedence if present, otherwise `:`.
+Missing/null/type-confused arrays or non-string members also fail closed. The
+complete array stays pinned, so any second-read change refuses before later
+diff/start. Refusal prints no inspected profile or option values.
+
+[Moby's option parser](https://github.com/moby/moby/blob/d74daf1a/daemon/daemon_unix.go)
+assigns each candidate seccomp option to the container profile. Its
+[OCI seccomp construction](https://github.com/moby/moby/blob/d74daf1a/daemon/seccomp_linux.go)
+prioritizes that profile over the daemon default. Even `builtin` selects Moby's
+built-in profile instead of an independently protected custom daemon policy (see
+[the pinned constant](https://github.com/moby/moby/blob/d74daf1a/daemon/config/config.go)).
+Prepare the candidate without any `--security-opt seccomp=...`; this guard does
+not rewrite options or issue approvals.
+
+This contains **candidate-requested seccomp overrides only**, not effective
+filtering. Independently protect and verify daemon/kernel policy: the daemon can
+itself default to unconfined, and an unsupported kernel can omit the default
+filter. Absence of an override does not attest those settings or runtime filter
+bytes. Complete executable authority, mandatory image/witness binding, other
+semantic host policy, coherent restore and real Docker effective readback remain
+open. The [focused tests](../../tests/test_custody_external_seccomp.py) inject
+engine evidence; no real container, chain, funds or custody generation is used.
+
 ## Supplementary group addition restriction
 
 Both inspections require explicit `HostConfig.GroupAdd` evidence, either JSON

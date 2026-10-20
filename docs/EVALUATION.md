@@ -1,5 +1,55 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
+## Maintenance increment — refuse candidate seccomp overrides (2026-10-20)
+
+**Implemented narrowly offline; Batch 0 remains blocked.** External executable
+admission remains the first unresolved priority. Published base `9868f96` already
+requires supported AppArmor, non-root primary IDs and no candidate group additions;
+those completed fixes are not repeated. The exact cumulative owner launcher/test
+candidate was reviewed read-only first and its earlier repairs remain preserved,
+not implicitly published. A collected RED test reached injected start with matching
+approval and `SecurityOpt=["no-new-privileges", "seccomp=unconfined"]`.
+Both inspections now require string-array security options with no `seccomp` key,
+including `builtin`, custom/inline, empty and deprecated colon forms. A matching
+digest cannot authorize overriding the protected daemon's seccomp policy. See the
+[seccomp override contract](maintenance/external-container-admission.md#candidate-seccomp-override-restriction).
+
+This removes candidate-requested seccomp authority only. The protected daemon may
+itself be unconfined; an unsupported kernel can omit default filtering. No effective
+filter or host-policy attestation is claimed. Complete protected executable closure,
+mandatory image/witness binding, remaining semantic host policy, coherent restore
+and real Docker acceptance remain open. Production and real funds remain blocked.
+Tests inject engine evidence; no container, chain, funds or custody generation is used.
+
+The scheduled maintainer acts under bounded one-issue authorization. Deployment/
+startup owns the launcher and collected `tests/test_custody_external_seccomp.py`;
+work-item grounding is Batch 0, O4/O3 with supporting O1. Non-Atlas settlement,
+transitional custody and independent artifact/release authority remain unchanged.
+No financial worker, dependency, schema or witness behavior changes. The isolated
+publication candidate excludes all prior owner repairs. Clean Python **3.12.3**
+verification passed with Node.js renderer coverage and no skipped tests. Each
+fresh export was independently indexed to exactly its intended Git tree.
+
+| Gate | Isolated published base plus this repair | Shared tree including owner repairs |
+|---|---|---|
+| Twelve external-launcher modules | **453 passed** | **702 passed** |
+| Complete suite | **1,975 passed, 77 subtests passed**, 106.49 seconds | **2,224 passed, 77 subtests passed**, 107.77 seconds |
+| CI isolation shards | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** |
+| Compilation, dependency consistency, Markdown links and intended-index token inventory | Passed; **274 active inventory lines** | Passed; **274 active inventory lines** |
+
+The new focused module covers matching-approved overrides, malformed evidence,
+second-read drift, ordering/duplicate options and exact-ID one-start/child-exit
+controls. An initial concurrent pair of full suites collided on the legacy
+dashboard's fixed port/database; both complete suites and all gates then passed
+serially. No unrelated fixture or production behavior was changed. The pinned
+Moby constant is `builtin`, not `default`; tests conservatively reject both.
+
+Final documentation-only result recording, exact diff, whitespace, intended-index
+checks and the unchanged pre-commit policy are repeated before publication.
+Original owner deltas and staging are preserved. Commit, push and exact-SHA CI
+evidence accompany the maintenance report; green offline checks do not establish
+real Docker enforcement or release acceptance.
+
 ## Maintenance increment — refuse supplementary group additions (2026-10-20)
 
 **Implemented narrowly offline; Batch 0 remains blocked.** External executable

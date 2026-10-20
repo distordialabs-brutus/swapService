@@ -137,6 +137,15 @@ def launch(container_id: str, image_id: str, config_sha256: str) -> int:
             annotations = host.get("Annotations")
             if annotations is not None and (not isinstance(annotations, dict) or annotations):
                 raise LaunchError("container runtime annotations are not disabled")
+            # Candidate seccomp options override the protected daemon policy;
+            # even "builtin" can replace its custom profile. Match Moby's key
+            # parsing (equals takes precedence over the deprecated colon form).
+            seccomp_options = host.get("SecurityOpt")
+            if (not isinstance(seccomp_options, list)
+                    or not all(isinstance(option, str) for option in seccomp_options)
+                    or any(option.partition("=" if "=" in option else ":")[0] == "seccomp"
+                           for option in seccomp_options)):
+                raise LaunchError("container seccomp override is not permitted")
             # Shared PID namespaces can expose another process's filesystem via
             # /proc/<pid>/root, outside this image's mount/layer approval.
             # Docker reports the default private namespace as an empty string.
