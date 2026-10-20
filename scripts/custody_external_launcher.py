@@ -137,6 +137,11 @@ def launch(container_id: str, image_id: str, config_sha256: str) -> int:
             annotations = host.get("Annotations")
             if annotations is not None and (not isinstance(annotations, dict) or annotations):
                 raise LaunchError("container runtime annotations are not disabled")
+            # Host networking shares the daemon host's network namespace and
+            # local services; a configuration pin cannot authorize that access.
+            # Other network modes still need independently enforced endpoint policy.
+            if host.get("NetworkMode") == "host":
+                raise LaunchError("container host networking is not permitted")
             # Candidate seccomp options override the protected daemon policy;
             # even "builtin" can replace its custom profile. Match Moby's key
             # parsing (equals takes precedence over the deprecated colon form).

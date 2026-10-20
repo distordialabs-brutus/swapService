@@ -1,5 +1,55 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
+## Maintenance increment — refuse host network namespace sharing (2026-10-20)
+
+**Implemented narrowly offline; Batch 0 remains blocked.** External executable
+admission remains the first unresolved priority. Published base `5ab774e` already
+refuses candidate seccomp overrides, supplementary groups, root primary IDs and
+unsupported AppArmor profiles; those fixes are not repeated. The exact cumulative
+owner launcher/test candidate was reviewed read-only before this semantic-policy
+increment. Its earlier repairs remain preserved, not implicitly published. A
+collected RED test reached injected start with independently matching approval
+and `HostConfig.NetworkMode="host"`. Both inspections now refuse that host-sharing
+mode independently of approval. See the
+[host-network contract](maintenance/external-container-admission.md#host-network-namespace-restriction).
+
+This removes candidate-requested sharing of the daemon host's network namespace
+only. It does not define approved custom networks/endpoints, attest daemon DNS,
+routing, proxies, ports or firewall policy, or establish real Docker enforcement.
+Protected complete executable closure, mandatory image/witness binding, narrowly
+rooted bind sources, coherent restore and target acceptance remain open. Production
+and real funds remain blocked. Tests inject engine evidence; no container, chain,
+funds, credentials or custody generation is used.
+
+The scheduled maintainer acts under bounded one-issue authorization. Deployment/
+startup owns the launcher and collected `tests/test_custody_external_host_network.py`;
+work-item grounding is Batch 0, O4/O3 with supporting O1. Non-Atlas settlement,
+transitional custody and independent artifact/release authority remain unchanged.
+No financial worker, dependency, schema or witness behavior changes. The isolated
+publication candidate excludes all prior owner repairs. The shared-tree owner
+network-positive matrix removes only its now-forbidden host case; remaining
+owner controls and tests are retained. A newly prepended contract supersedes the
+historical host-network allowance without publishing the earlier owner candidate.
+
+Focused coverage exercises matching-approved host mode with both endpoint shapes,
+second-read mode-only/topology drift and approved non-host exact-ID one-start/
+child-exit controls. Clean Python **3.12.3** verification passed with Node.js
+renderer coverage and no skipped tests. Full suites ran serially to avoid shared
+legacy dashboard fixtures. Both fresh exports were independently indexed to exactly
+their intended Git trees; the isolated candidate excludes the earlier owner work.
+
+| Gate | Isolated published base plus this repair | Shared tree including owner repairs |
+|---|---|---|
+| Thirteen external-launcher modules | **467 passed** | **715 passed** |
+| Complete suite | **1,989 passed, 77 subtests passed**, 150.36 seconds | **2,237 passed, 77 subtests passed**, 158.36 seconds |
+| CI isolation shards | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** |
+| Compilation, dependency consistency, Markdown links and intended-index token inventory | Passed; **274 active inventory lines** | Passed; **274 active inventory lines** |
+
+Final documentation-only result recording, whitespace, intended-index checks,
+exact diff and unchanged pre-commit policy are rechecked before publication.
+Commit, push and exact-SHA CI evidence accompany the maintenance report; green
+offline checks are not actual Docker enforcement or release acceptance.
+
 ## Maintenance increment — refuse candidate seccomp overrides (2026-10-20)
 
 **Implemented narrowly offline; Batch 0 remains blocked.** External executable

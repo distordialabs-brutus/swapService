@@ -1,5 +1,26 @@
 # External container admission primitive
 
+## Host network namespace restriction
+
+Both inspections refuse `HostConfig.NetworkMode="host"` even with matching
+independent approval. Sharing the daemon host's network namespace exposes host
+interfaces and local services outside the container's own network namespace;
+a pinned configuration is not permission to take that authority. The full host
+configuration and endpoint projection stay pinned, so second-read changes refuse
+before a later diff or start. No network values are printed or rewritten.
+
+This is **candidate-selected host-network sharing containment only**. Other
+approved non-host modes keep their existing behavior; this rule is not an
+allowlist for custom networks or endpoints. DNS, routing, proxies, published
+ports, daemon-generated files, host firewall policy and effective enforcement
+remain external gates. See [Docker's host-network description](https://docs.docker.com/engine/network/drivers/host/).
+The [focused tests](../../tests/test_custody_external_host_network.py) inject
+engine evidence, cover matching-approved refusal, second-read drift and exact-ID
+one-start/child-exit controls. No real Docker container or chain request is used.
+Complete executable authority, mandatory image/witness binding, narrowly rooted
+bind sources, coherent restore and real-engine acceptance remain open; production
+and real funds remain blocked.
+
 ## Candidate seccomp override restriction
 
 Both inspections require explicit string-array `HostConfig.SecurityOpt` evidence
