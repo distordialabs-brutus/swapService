@@ -14,30 +14,37 @@ claims remain open. The alignment map supplies batch ownership, upstream prerequ
 gates. Each material task must name those fields alongside exact production paths and collected
 acceptance tests.
 
-**Current source scope (2026-10-19):** exact published source
-`ba09cc59ba26e63f5ebf1ed15414fb5f475bf4a3` implements one configured classic SPL token ↔ Nexus
-token pair. Published startup containment still holds four inconsistent restored-source families before
-workers: retained ordinary refund/quarantine states, ready rows with debit-submission metadata, ready
-rows with capacity siblings and ready rows with terminal siblings. The sealed-custody witness and finite
-in-process fingerprint remain unchanged.
+**Current source scope (2026-10-21):** exact published source
+`64995d777007e67fd8598a564d8a8c3bf1500c75` matches the verified remote tip and implements one
+configured classic SPL token ↔ Nexus token pair. Published startup containment still holds four
+inconsistent restored-source families before workers: retained ordinary refund/quarantine states, ready
+rows with debit-submission metadata, ready rows with capacity siblings and ready rows with terminal
+siblings. The sealed-custody witness and finite in-process fingerprint did not change in this range.
 
-The optional external launcher now has eight additional Docker-reported controls: no candidate OCI
-annotations, no daemon-resolved host-gateway extra-hosts, no automatic healthcheck or removal, no
-user-namespace opt-out, no prior-start error, strict `ReadOnlyNonRecursive` boolean evidence and no
-enabling list-shaped `writable-cgroups` option. Injected positive/negative/drift tests accept those narrow
-boundaries only. Fresh matching-approval probes still reach injected start with shared IPC/devices,
-host cgroup/UTS, alternate runtime/init/links, empty masked/read-only paths, malformed/incomplete
-security options, container-shared/host networking, unconfined AppArmor, root runtime user and broad
-bind sources. A broader four-file owner candidate contains additional controls but remains uncommitted,
-was read only here and is not published architecture.
+The optional external launcher now has 15 narrowly accepted Docker-reported controls. In addition to
+the earlier annotation, host-gateway, healthcheck, bind-option, writable-cgroup, auto-remove, userns and
+prior-start-error refusals, it requires `docker-default` AppArmor, canonical non-root primary UID:GID,
+no supplementary groups, no candidate seccomp override, no host networking and canonical non-root bind
+source spellings, plus canonical zero `State.StartedAt` evidence on both inspections. The timestamp rule
+contains contradictory injected evidence; it does not attest complete execution history. These controls
+do not attest effective host policy. Fresh injected probes still reach
+start with an independently matching custom network and canonical but broadly located `/etc` and `/home`
+bind sources.
 
-**Current release blockers:** protected external artifact authority and semantic host policy remain
-incomplete; direct repository startup is still reachable and no production caller binds the launcher image/
-configuration to the one-use witness; coherent restore/bootstrap authority and an all-status evidence
-audit remain incomplete; heartbeat owner/address/schema/pair/custody/terms and node health/sync/freshness
-are unbound; malformed oldest capacity evidence still starves a younger valid hold; witness/hold operations
-and target acceptance remain open. Exact image continuity does not prove complete liabilities or correct
-historical authorization. Production and real funds remain blocked.
+A separately hashed four-file dirty overlay reviewed against old base `93ed7dd9` adds bounded strict evidence capture plus private
+IPC/cgroup/UTS, no devices, `runc`, disabled daemon init/links, minimum system paths,
+no-new-privileges and no container-shared networking. It passed 2,297 offline tests but remains
+unpublished historical candidate evidence, not a current-tip candidate or this architecture's implemented
+runtime. The fresh custom-network and broad-source results remain evidence for old-base published and
+overlay trees; current source did not change the relevant network/source logic.
+
+**Current release blockers:** protected external artifact authority and an explicit network/endpoint/
+host-source policy remain incomplete; direct repository startup is still reachable and no production
+caller binds the launcher image/configuration to the one-use witness; coherent restore/bootstrap authority
+and an all-status evidence audit remain incomplete; heartbeat owner/address/schema/pair/custody/terms and
+node health/sync/freshness are unbound; malformed oldest capacity evidence still starves a younger valid
+hold; witness/hold operations and target acceptance remain open. Exact image continuity does not prove
+complete liabilities or correct historical authorization. Production and real funds remain blocked.
 
 See [EVALUATION.md](EVALUATION.md), the
 [external-container admission contract](maintenance/external-container-admission.md), the

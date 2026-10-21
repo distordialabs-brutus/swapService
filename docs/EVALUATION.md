@@ -1,5 +1,93 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
+## Consolidated current assessment — 2026-10-21
+
+**Verdict: release blocked; real funds blocked.** Exact published source
+`64995d777007e67fd8598a564d8a8c3bf1500c75` matches the verified `origin/main` tip.
+Since the 2026-10-19 documentation base `640da45c2112b9ba7e6b424cd7eb699aba35f9eb`,
+seven bounded launcher increments added supported AppArmor, canonical non-root primary
+UID:GID, no supplementary groups, no candidate seccomp override, no host network and
+canonical non-root bind-source spelling, followed by canonical zero `State.StartedAt`
+evidence on both inspections. Together with the eight previously accepted controls,
+the published launcher now has **15 narrow Docker-reported refusals**. These
+are offline containment, not effective host policy, executable attestation or release.
+
+A four-file dirty overlay was reviewed separately against old base `93ed7dd9` and was
+not copied into this documentation candidate. Its exact patch changes `docs/EVALUATION.md`,
+`docs/maintenance/external-container-admission.md`,
+`scripts/custody_external_launcher.py` and
+`tests/test_custody_external_launcher.py`; it adds bounded byte/deadline evidence
+capture, strict JSON-number/nesting refusal, no-new-privileges, system-path minima,
+`runc`, disabled daemon init/legacy links, private IPC/cgroup/UTS, no host-device
+requests and no container-shared networking. The candidate passed its complete
+offline suite at that base, but is historical candidate evidence, not a current-tip
+candidate or published behavior. Rebase and review its exact bytes before integration.
+
+### Current issue register
+
+| ID / lane | Status and exact boundary | Required exit |
+|---|---|---|
+| C0 executable authority — O3/O4, P0 | **Open.** The launcher remains optional and self-unattested; `swapService.py`, its import closure, interpreter, Docker/runc, image store, approval pins and daemon policy are not one externally protected pre-execution authority. | Independently protect the complete launcher/toolchain/image/approval closure; make it the sole witness-bound start route; prove pre-import mutation, two-process contention, administrator drift, lost response and kill/restart behavior before repository, DB, witness or chain effects. |
+| C0 semantic host policy — O3/O4, P0 | **Open.** Fresh matching-approval probes reached `inspect → diff → inspect → diff → start` for a custom network and canonical but broadly located `/etc`/`/home` bind sources on the old-base published and dirty-overlay trees. The current commit does not change those policy paths. Lexical canonicality is not a source-root policy; approval pinning is not endpoint, symlink, inode/content, permission or effective-kernel attestation. | A named artifact/deployment approver defines exact network/endpoint and host-source roots plus exception policy. Prove positive, negative, malformed, drift and effective real-engine readback; stop if policy cannot be enforced independently of repository/runtime credentials. |
+| C1 coherent restore — O4, P0 | **Open.** Published financial runtime did not change in this range. Empty-DB and selected retained-row holds remain useful containment, but no all-status restore identity proves that policy, capacity, submission, fee, terminal and liability evidence is complete. | One startup-owned transactional audit and independently approved bootstrap/coherent-restore identity; parameterize every selectable status and required evidence field across partial/stale/pre-fix/source-only/capacity-only/terminal-only/cap-only/DB+WAL/online-backup/total-loss cases. Zero transport or exact original intent once. |
+| C2 service/node admission — O2 prerequisite/O4, High | **Open.** Genesis pins and fatal heartbeat parsing do not bind exact service address/owner/schema/pair/custody/terms or authoritative Solana health/root and Nexus synchronized/syncing/mode/network/tip freshness. | Refuse wrong-typed, stale, conflicting or changing evidence before DB/recovery; then run authorized exact-target fixtures. |
+| C3 progress and operator authority — O3/O4, High | **Open.** Malformed oldest capacity evidence can still starve younger eligible work; non-capacity holds lack a complete evidence-bound disposition protocol. | Move non-retryable evidence atomically outside eligible FIFO without changing principal; add read-only evidence export and attributable prepare/authorize/execute/readback/finalize or explicit permanent-retention policy. |
+| C4 external reliance — O5, external stop gate | **Not evidenced.** No real Docker, Solana or Nexus request, credential, financial action, deployment or operator rehearsal ran. | Only after C0–C3 and Batches 0–6 pass, use one immutable candidate on separately authorized isolated infrastructure; independent humans decide target activity and release. |
+
+### Verification at exact sources
+
+Commands were executed from disposable detached worktrees with the existing virtual
+environment and no dependency installation or upgrade:
+
+```text
+python -m pytest -q
+python -m pytest -q tests/test_custody_external_launcher.py tests/test_custody_external_*.py
+python -m pytest -q tests/test_recovery_safety.py
+python -m pytest -q tests/test_recovery_safety.py tests/test_solana_sdk_boundary.py
+python -m pytest -q tests/test_swap_receipts.py tests/test_payout_review_regressions.py tests/test_solana_sdk_boundary.py
+python -m pip check
+python -m compileall -q src *.py tests
+python scripts/check_markdown_links.py
+python scripts/check_token_pair_inventory.py
+git diff --check 640da45c2112b9ba7e6b424cd7eb699aba35f9eb..HEAD
+```
+
+| Candidate | Result |
+|---|---|
+| Published remote tip `64995d7…` with this staged documentation | **2,083 passed, 77 subtests passed**; focused launcher **561 passed**; new timestamp module **34 passed**; isolation **35 + 52 subtests**, **36 + 52 subtests**, and **85 passed**. Dependency, compile, Markdown-link, 274-line index-aware token-inventory, whitespace and installed pre-commit gates passed. |
+| Exact-source CI | Run `39564313327`, checkout SHA `64995d7…`, job `Test and static checks`: **success**. This certifies the published source, not the uncommitted documentation candidate or external semantics. |
+| Four-file dirty overlay over old base `93ed7dd9…` | **2,297 passed, 77 subtests passed**; focused launcher **775 passed** at the old base. It remains unpublished historical candidate evidence and is not described as current. |
+| Fresh falsification | Old-base published and dirty-overlay trees both started the injected fake engine for matching-approved custom-network and broad-canonical-bind scenarios. No real Docker operation was invoked; the current source did not change those policy paths. |
+
+### Two planning lanes and product assessment
+
+**Correctness/security/release lane:** retain all 15 published controls; rebase and
+review the old-base dirty overlay as one exact cumulative unit rather than recoding it; then close
+semantic host policy, protected sole-route witness binding, coherent restore,
+service/node admission, capacity progress and audited hold resolution before external
+acceptance. The seven increments after `640da45c` are shipped and must not remain as
+new-work tasks.
+
+**Product/operator lane:** no enhancement shipped in this range. E1 secret-safe
+candidate inspection remains the highest-value bounded slice; E2 read-only accessible
+hold export/triage follows the accepted state schema; E3 user status discovery remains
+deferred behind identity/privacy and target acceptance. Capability is intentionally
+one-pair and operator-custodial; usability is release-blocked; interoperability is
+limited to pinned classic SPL/Nexus v1 contracts; performance has only local-suite
+evidence; accessibility has only the planned keyboard/export target; operator DX has
+read-only dashboard evidence but no complete evidence export or resolution ceremony.
+Do not add feature breadth to compensate for these gates.
+
+This repository serves O4 bounded attributable settlement, supported by O3 reproducible
+provenance and O1 inspectable contracts. Exact service identity is an O2 prerequisite;
+O5 reliance remains unvalidated. The customer/operator hypothesis is outside the Atlas
+and inherits no marine S1 Class A evidence. The current bridge is transitional custody,
+not proof of non-custody, enforceable escrow/slashing, regulatory status or adoption.
+Named humans retain artifact, restore/bootstrap, hold-disposition, target-activity and
+release authority. See [the architecture](STATE_MACHINES.md),
+[external-container contract](maintenance/external-container-admission.md) and
+[maintained plan](plans/2026-09-25-recovery-admission-and-capacity-fairness.md).
+
 ## Maintenance increment — refuse contradictory prior-start timestamps (2026-10-21)
 
 **Implemented narrowly offline; Batch 0 remains blocked.** External executable

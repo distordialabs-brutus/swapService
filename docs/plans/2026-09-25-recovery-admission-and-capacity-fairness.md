@@ -14,17 +14,21 @@ upstream prerequisites and human gates. Every batch below must carry these quali
 exact production paths and collected acceptance tests.
 
 **Current assessment lineage:** exact published source
-`ba09cc59ba26e63f5ebf1ed15414fb5f475bf4a3`, matching `origin/main`, adds eight narrow
-Docker-reported controls to the optional external launcher. They reject candidate annotations,
-host-gateway indirection, healthchecks, numeric bind-option evidence, enabling list-shaped writable-
-cgroup options, automatic removal, user-namespace opt-out and prior-start error evidence. Fresh
-matching-approval probes still reach injected start through 18 namespace/device/runtime/system-path/
-network/security/user/source cases. A broader owner-only four-file candidate contains additional
-controls but remains uncommitted, was read only in this review and is not published behavior. The
-tracked-vision hook conflict is resolved by the published local-only policy; no vision content enters
-this candidate. Protected pre-execution authority, semantic host policy, mandatory witness-bound launch,
-complete restore authority, service/node freshness, capacity progress, witness/hold operations and live
-acceptance remain open. Production and real funds remain blocked. See the
+`64995d777007e67fd8598a564d8a8c3bf1500c75` matches the verified `origin/main` tip. Fifteen
+narrow Docker-reported launcher refusals are now published: the prior eight plus supported AppArmor,
+canonical non-root UID:GID, no supplementary groups, no candidate seccomp override, no host networking
+and canonical non-root bind-source spelling, followed by canonical zero `State.StartedAt` evidence on both
+inspections. Retire those seven latest increments as shipped; preserve their tests and qualifications rather
+than reopening them as tasks. The timestamp rule contains contradictory injected evidence only; it is not
+complete execution-history attestation. A broader four-file dirty overlay reviewed at old base `93ed7dd9` adds
+bounded strict evidence capture, private IPC/cgroup/UTS, no devices, `runc`, disabled init/links,
+system-path minima, no-new-privileges and no container-shared networking. It passed 2,297 tests but is
+unpublished historical candidate evidence, not a current-tip candidate. Fresh injected probes started the
+old-base published and overlay trees with a custom network and broad canonical `/etc`/`/home` bind sources;
+current source did not change those policy paths. Protected pre-execution authority, explicit
+network/endpoint/source-root policy, mandatory witness-bound launch, complete restore authority,
+service/node freshness, capacity progress, witness/hold operations and live acceptance remain open.
+Production and real funds remain blocked. See the
 [current evaluation](../EVALUATION.md) and
 [external-container contract](../maintenance/external-container-admission.md).
 
@@ -54,7 +58,7 @@ receipt enablement, live transaction, commit, or publication authorization.
 
 | Batch | Status at reviewed candidate | Evidence and remaining exit |
 |---|---|---|
-| 0 — executable artifact identity | **Blocked / P0; eight published increments accepted narrowly** | Published `ba09cc59` closes eight Docker-reported routes but still starts 18 matching-approved namespace/device/runtime/system-path/network/security/user/source fixtures. A broader exact owner candidate is uncommitted. Protected launcher/toolchain authority, semantic host policy, sole-route witness binding and real-Docker mutation/contention/crash evidence remain open. |
+| 0 — executable artifact identity | **Blocked / P0; 15 published increments accepted narrowly** | Published `64995d7` adds canonical zero prior-start timestamp evidence to the six AppArmor/user/group/seccomp/host-network/root-source routes without changing witness composition. The old-base four-file dirty overlay passed offline but is neither current-tip nor published. Custom-network and broad-canonical-source policy remain open. Protected launcher/toolchain authority, explicit network/endpoint/source-root policy, sole-route witness binding and real-Docker mutation/contention/crash evidence remain open. |
 | 1 — restore/image admission | **Partial / P0** | Four retained-row conflict containments, the empty-DB latch, recovery boundary and exact-image witness are green offline. External approval must establish financial coherence; exact bytes cannot discover an incomplete/pre-fix approved image, and no all-status coherent-restore audit exists. |
 | 2 — durable startup outcome | **Implemented narrowly offline** | Claimed/running/held witness plus local receipt suppress stale healthy dashboard values. Independent-process contention/crash coverage, artifact authority and deployment acceptance remain open. |
 | 3 — eligible capacity FIFO | **Open; defect freshly reproduced** | An older malformed refund hold retained full principal and made zero sends, but two runs still blocked a younger valid fitting hold and increased its attempt count to 3. |
@@ -71,18 +75,24 @@ receipt enablement, live transaction, commit, or publication authorization.
 
 The current in-process fingerprint includes the root entrypoint, repository sources, running
 interpreter and a finite selected native/solders manifest. The optional external launcher adds two
-inspect/diff rounds and the eight accepted published controls, but matching approval is not a semantic
-policy. Direct repository startup remains reachable, the launcher has no production caller and the
-witness certificate does not bind its container image/configuration.
+inspect/diff rounds and 15 accepted published controls, but matching approval is not a semantic policy.
+Direct repository startup remains reachable, the launcher has no production caller and the witness
+certificate does not bind its container image/configuration.
 
 Preserve the current strict pins, duplicate-key parsing, clean Docker child environment, repeated
-inspections, empty upper-layer checks, exact created state, disabled restart/auto-remove/healthcheck,
-private PID/userns opt-out refusal and strict mount controls. Review the owner's broader cumulative
-launcher/test candidate as one exact unit rather than recoding its IPC/device/runtime/init/link,
-cgroup/UTS/system-path/network/no-new-privileges and bounded-evidence controls. After integration,
-define an external trusted launcher or immutable deployment image whose independently approved digest
-covers the complete execution closure before repository code runs. Bind that exact authority to the
-one-use witness and make it the sole supported custody start path.
+inspections, empty upper-layer checks, exact created state and all 15 published semantic refusals. Rebase
+and review the owner's old-base broader launcher/test overlay as one exact unit rather than treating it as
+current-tip evidence or recoding its
+IPC/device/runtime/init/link, cgroup/UTS/system-path/network/no-new-privileges and bounded-evidence
+controls. The next implementation slice must first name an independent artifact approver and deployment
+maintainer, freeze the owner patch hash and define exact allowed custom-network/endpoints and custody/
+secrets host-source roots. RED cases cover omitted/wrong types, broad-but-canonical paths, symlink/inode/
+content replacement, endpoint drift and administrator mutation; GREEN enforces the selected policy before
+the second diff/start without printing values. Then define an external trusted launcher or immutable
+deployment image whose independently approved digest covers the complete execution closure before
+repository code runs. Bind that exact authority to the one-use witness and make it the sole supported
+custody start path. Stop rather than add exceptions if protected ownership or effective readback cannot
+be demonstrated.
 
 Acceptance:
 
@@ -312,7 +322,7 @@ replace the role labels below at kickoff.
 
 | Batch | Objective and production ownership | Prerequisite / pinned source-interface dependency | Human authority boundary | Negative / concurrency / recovery exit |
 |---|---|---|---|---|
-| 0 — executable authority | O4/O3/O1; deployment launcher/image plus `swapService.py`, `src/custody_admission.py`, `scripts/custody_external_launcher.py` and complete runtime closure | Published `ba09cc59` witness/fingerprint and eight launcher increments are the compatibility baseline. Review the exact owner candidate; then pin protected launcher/interpreter/Docker/runc/image/approval authority, semantic host policy and one witness-bound sole route. | Independent artifact approver selects and protects immutable digest/policy; runtime/operator credentials cannot issue or rewrite it | Reject all 18 matching-approved probe families and byte/identity drift before side effects; real processes/admin mutation contend on one image/permit; kill/lose acknowledgement before/after start/claim/complete/seal. One exact generation runs/seals; every loser remains side-effect-free/held. |
+| 0 — executable authority | O4/O3/O1; deployment launcher/image plus `swapService.py`, `src/custody_admission.py`, `scripts/custody_external_launcher.py` and complete runtime closure | Published `64995d7` witness/fingerprint and 15 launcher refusals are the compatibility baseline. Rebase and review the exact old-base dirty overlay, define custom-network/endpoint and host-source-root policy, then pin protected launcher/interpreter/Docker/runc/image/approval authority and one witness-bound sole route. | Independent artifact approver selects and protects immutable digest/policy; runtime/operator credentials cannot issue or rewrite it | Reject every rebased-overlay policy negative plus fresh custom-network/broad-source, byte/identity and symlink/inode/content drift before side effects; real processes/admin mutation contend on one image/permit; kill/lose acknowledgement before/after start/claim/complete/seal. One exact generation runs/seals; every loser remains side-effect-free/held. |
 | 1 — restore admission | O4/O3; recovery owner for `src/state_db.py`, `src/startup_recovery.py`, `src/solana_client.py`, `src/nexus_client.py` and migration/backup format | Batch 0 external executable admission plus a versioned, independently approved coherent restore/bootstrap identity covering the SQLite image, schema, configuration, witness generation and all policy/capacity/submission/fee/terminal evidence. | Operator separately approves audited new bootstrap or coherent restore; absent history has no send authority | Parameterize every nonterminal status and required field with absent/wrong/conflicting evidence; race audit with scanner/workers; exercise empty, unrelated-row partial, source/capacity/terminal/cap-only, pre-fix, online backup, DB+WAL and total loss. Require zero transport/full liability or exact original intent once. |
 | 2 — durable startup outcome | O4/O3; witness/runtime/dashboard in `src/custody_witness.py`, `src/custody_admission.py`, `src/main.py`, `src/dashboard.py` | Batch 0 executable identity and Batch 1 coherent restore admission; preserve the published `ready → claimed → running → ready(next generation)` witness states and exact-image/configuration interfaces. | Independent witness administrator owns bootstrap/hold recovery; service runtime owns only one-use transitions | Use distinct OS processes/connections to contend on claim/complete/hold/seal; kill at each boundary; read from a third connection. Exactly one owner may run, stale green state is forbidden and no claimed/held generation revives automatically. |
 | 3 — capacity progress | O4; state/workers/dashboard in `src/state_db.py`, `src/solana_client.py`, `src/dashboard.py` | Batch 1 complete state audit and the accepted frozen-policy, liability, reservation and capacity-hold schemas at `ba09cc59`; malformed/conflicting evidence must move classifications without changing principal or inventing send authority. | Human disposition requires frozen evidence and audit; no direct send/SQL edit | Put malformed/conflicting/unknown oldest rows ahead of same/cross-kind valid holds, beyond worker limits; race refund/quarantine workers; restart and vary cap/age. Younger valid intent sends once; blocked principal/evidence stays unchanged and outside eligible FIFO. |
@@ -352,8 +362,8 @@ container, print environment values or claim release.
 **Bounded RED/GREEN and acceptance:**
 
 1. RED: collect a valid fixture plus duplicate/malformed/recursive/non-finite/oversized/invalid-UTF-8/
-   stalled evidence; every accepted launcher negative; all 18 matching-approved open families; secret
-   environment values; stale approval and changed second read.
+   stalled evidence; every one of the 15 published negatives; every rebased-overlay negative; fresh
+   custom-network/broad-source cases; secret environment values; stale approval and changed second read.
 2. GREEN: implement one read-only canonical report and cross-check its digest/policy verdict against an
    independent fixture implementation and the launcher's accepted projection.
 3. Concurrency/stale: two report processes observe changing evidence without mixed reads, a passing stale
