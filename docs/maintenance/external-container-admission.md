@@ -1,5 +1,29 @@
 # External container admission primitive
 
+## Prior-start timestamp restriction
+
+Both inspections require explicit `State.StartedAt="0001-01-01T00:00:00Z"`,
+Docker's canonical Go zero-time spelling. A reported nonzero start, missing value,
+wrong type or alternate zero-time spelling refuses before another diff or start,
+even with matching independent approval. State is outside the approval projection,
+so this is checked independently on each read; no timestamp is printed or rewritten.
+
+[Moby v28.5.1 state handling](https://github.com/moby/moby/blob/v28.5.1/container/state.go)
+records `StartedAt` on running transitions and derives created status from its zero
+value. A nonzero start alongside `Status="created"` is therefore **contradictory
+injected evidence**, not a demonstrated genuine Docker restart path. The launcher
+previously accepted that contradiction. Exact zero-time matching deliberately
+refuses unknown/noncanonical encodings rather than attempting timestamp repair.
+
+This closes one malformed/history-evidence admission gap only. A zero timestamp
+and empty error do not attest complete execution history or prevent protected
+administrator/daemon evidence mutation. Failed setup before a recorded start,
+complete executable authority, mandatory image/witness binding and real Docker
+acceptance remain separate gates. The
+[focused tests](../../tests/test_custody_external_started_at.py) inject evidence
+on both reads and preserve exact-ID one-start/child-exit controls. No container,
+chain or custody generation is exercised; production and real funds remain blocked.
+
 ## Canonical non-root bind-source restriction
 
 Both inspections require custody and secrets bind sources to be strings spelling

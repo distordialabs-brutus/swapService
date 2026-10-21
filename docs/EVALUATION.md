@@ -1,5 +1,56 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
+## Maintenance increment — refuse contradictory prior-start timestamps (2026-10-21)
+
+**Implemented narrowly offline; Batch 0 remains blocked.** External executable
+admission remains the first unresolved priority. Published `93ed7dd` already rejects
+host-root source spellings, host networking and candidate seccomp overrides; those
+fixes are not repeated. The exact cumulative owner launcher/test candidate was
+reviewed read-only first; its earlier controls remain preserved and excluded from
+this one-issue publication candidate. A collected RED regression reached injected
+start with matching independent approval, created status, an empty error and a
+nonzero `State.StartedAt` on either inspection. Both reads now require Docker's
+canonical zero-time timestamp. Missing, malformed, nonzero and alternate zero-time
+evidence refuses without leaking the inspected value. State is not approval-pinned,
+so second-read refusal is exercised independently of configuration drift. See the
+[prior-start contract](maintenance/external-container-admission.md#prior-start-timestamp-restriction).
+
+Pinned Moby v28.5.1 derives created status from a zero start time; the negative is
+therefore contradictory injected evidence, **not a reproduced genuine daemon
+restart exploit**. This is a malformed/history-evidence boundary repair, not a
+complete history attestation. Empty errors/zero timestamps cannot exclude every
+setup side effect or trusted-administrator mutation. Complete executable closure,
+mandatory protected launch/witness binding, coherent restore and real Docker
+acceptance remain open. Production and real funds remain blocked. Tests use no
+container, chain, funds, credentials or custody generation.
+
+The scheduled maintainer acts under bounded one-issue authorization. Deployment/
+startup owns the launcher and collected `tests/test_custody_external_started_at.py`;
+work-item grounding is Batch 0, O4/O3 with supporting O1. Non-Atlas settlement,
+transitional custody and independent artifact/release authority remain unchanged.
+No financial worker, dependency, schema or witness behavior changes. Earlier owner
+edits are excluded from the publication index; only the common positive fixture's
+start observation is added alongside this repair.
+
+Clean Python **3.12.3** verification passed with Node.js renderer coverage and no
+skipped tests. Full suites ran serially to avoid the legacy dashboard's shared
+port/database. Both fresh exports were independently indexed to exactly their
+intended Git trees; the isolated candidate excludes all earlier owner repairs.
+
+| Gate | Published base plus this repair | Shared tree including owner repairs |
+|---|---|---|
+| New focused module | **34 passed** | **34 passed** |
+| Fifteen external-launcher modules | **561 passed** | **809 passed** |
+| Complete suite | **2,083 passed, 77 subtests passed**, 162.42 seconds | **2,331 passed, 77 subtests passed**, 159.06 seconds |
+| CI isolation shards | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** |
+| Compilation, dependency consistency, Markdown links and intended-index token inventory | Passed; **274 active inventory lines** | Passed; **274 active inventory lines** |
+
+Read-only review found no code/test blocker; its request to replace pending
+verification wording is resolved by the actual results above. Final documentation-
+only recording, exact diff, whitespace, intended-index checks and the unchanged
+pre-commit policy are rechecked before publication. Commit/push/exact-SHA CI
+evidence accompanies the maintenance report; offline checks are not release acceptance.
+
 ## Maintenance increment — reject host-root bind sources (2026-10-21)
 
 **Implemented narrowly offline; Batch 0 remains blocked.** The first unresolved

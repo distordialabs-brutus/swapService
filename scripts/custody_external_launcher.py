@@ -170,6 +170,11 @@ def launch(container_id: str, image_id: str, config_sha256: str) -> int:
             state = value["State"]
             if not isinstance(state, dict) or state.get("Error") != "":
                 raise LaunchError("container prior startup failure is not excluded")
+            # Status and an empty error cannot erase positive prior-start
+            # evidence. Require Docker's canonical Go zero-time observation;
+            # missing/malformed timestamps are unknown, not never-started.
+            if state.get("StartedAt") != "0001-01-01T00:00:00Z":
+                raise LaunchError("container prior execution is not excluded")
             if (value["State"]["Status"] != "created"
                     or value["State"]["Running"] is not False
                     or host["ReadonlyRootfs"] is not True
