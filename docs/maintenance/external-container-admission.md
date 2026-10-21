@@ -1,5 +1,20 @@
 # External container admission primitive
 
+## Cumulative integration status — 2026-10-21
+
+The complete previously uncommitted launcher overlay is included under explicit
+owner publication authorization, reconciled with documentation commit `8a71db1`.
+The guard now also enforces the documented bounded evidence/strict JSON policy,
+no-new-privileges, system-path minima, conventional runtime, disabled daemon init
+and legacy links, private IPC/cgroup/UTS, no declared host devices and no
+container-shared networking. Earlier old-base/dirty-overlay descriptions below are
+historical review evidence; they no longer describe the integration status.
+
+These are offline Docker-reported containment controls only. Publication does not
+supply independent artifact/deployment approval, approved endpoint/source-root
+policy, mandatory witness binding, real Docker enforcement or release acceptance.
+All existing custody and release stop gates remain in force.
+
 ## Prior-start timestamp restriction
 
 Both inspections require explicit `State.StartedAt="0001-01-01T00:00:00Z"`,
@@ -246,6 +261,38 @@ arguments. The launcher never prints inspected evidence or Docker inspection err
 After approval it attaches to the service's normal output, whose existing secret-safe
 logging obligations remain separate.
 
+## System-path confinement
+
+Both inspections require explicit string arrays in `HostConfig.MaskedPaths` and
+`HostConfig.ReadonlyPaths`, including every path in the following minimum policy.
+Missing, null, empty, malformed or incomplete evidence refuses even with matching
+independent approval. Extra independently approved paths and different array ordering
+remain supported; the exact arrays are still part of the configuration digest.
+
+```text
+MaskedPaths:
+/proc/acpi, /proc/asound, /proc/interrupts, /proc/kcore, /proc/keys,
+/proc/latency_stats, /proc/sched_debug, /proc/scsi, /proc/timer_list,
+/proc/timer_stats, /sys/devices/virtual/powercap, /sys/firmware
+ReadonlyPaths:
+/proc/bus, /proc/fs, /proc/irq, /proc/sys, /proc/sysrq-trigger
+```
+
+This selected baseline comes from [Moby's default OCI specification](https://github.com/moby/moby/blob/d74daf1a/daemon/pkg/oci/defaults.go).
+[Moby's creation policy](https://github.com/moby/moby/blob/d74daf1a/daemon/create_unix.go)
+only supplies defaults for null fields, not explicit empty arrays. Disabling these
+protections (including through Docker's `systempaths=unconfined` option) exposes
+additional mutable host-backed runtime paths outside the approved image and explicit
+bind list. A read-only root and empty layer diff do not establish their confinement.
+The guard does not infer protection from `SecurityOpt` text or a matching digest.
+
+This is a minimum path-policy restriction, not an assertion that the remaining `/proc`
+and `/sys` bytes are immutable or fully attested. Additional daemon/kernel-specific
+masks, protected runtime configuration, complete executable authority and real Docker
+acceptance remain separate requirements. Older daemon defaults lacking a baseline
+path need independently reviewed explicit configuration; the guard does not silently
+weaken the minimum to accommodate them.
+
 ## Prior startup failure restriction
 
 Both inspections require object-shaped `State` with explicit `Error=""`, in
@@ -413,16 +460,113 @@ search roots or symlinks to executable locations. A pinned unsafe image is still
 
 The guard requires:
 
+- inspection/diff stdout is streamed with a one-MiB **byte** limit (plus one
+  overflow sentinel), before UTF-8 decoding; stderr is discarded rather than captured.
+  Oversized or invalid UTF-8 output and nonzero exits refuse without exposing evidence.
+  One monotonic 15-second deadline covers reading and child exit, including continuous
+  trickle output or stdout closure before exit. Refusal kills/reaps an unfinished Docker
+  child and closes the pipe. Attached service output is live, not buffered or limited;
+- inspection JSON within the engine's byte limit must also fit decoder and canonical
+  encoder nesting limits; recursion-limit failures refuse with the sanitized invalid-
+  evidence message on either inspection, without printing raw evidence or a traceback;
+- inspection JSON refuses the nonstandard bare numeric tokens `NaN`, `Infinity` and
+  `-Infinity` during decoding, including in fields outside the configuration digest;
+  either inspection returns sanitized invalid-evidence refusal before any later diff/start.
+  Quoted strings containing those spellings remain ordinary valid JSON text;
+- inspection JSON floating-point number lexemes must decode to finite values, on
+  both inspections and even outside the approval projection. Standard JSON numbers
+  such as `1e309` otherwise silently overflow Python's decoder to infinity without
+  invoking its nonstandard-constant rejection. Overflow refuses with the sanitized
+  invalid-evidence message before any later diff/start. Finite floats retain the
+  existing canonical approval encoding; quoted text and arbitrary-precision integers
+  remain supported. This is a decoded-representation constraint, not a claim that
+  those overflowing number lexemes violate JSON syntax or that decimal rounding and
+  underflow are lossless;
 - object-shaped `HostConfig` evidence; null, arrays and scalar values refuse through
   the sanitized invalid-evidence boundary even if their approval digest matches;
 - a never-started (`created`, not running) container with the exact approved image ID;
+- explicit string-array `HostConfig.SecurityOpt` containing `no-new-privileges` or
+  `no-new-privileges=true`, on both inspections. Missing, default, disabled and malformed
+  evidence refuses even with matching approval. Every option for that key must use
+  one of those two canonical enabled spellings; contradictory or noncanonical forms
+  refuse regardless of order (including deprecated `:` options). Other approved
+  string options remain pinned and supported. Read-only layers and dropped capabilities
+  alone do not prohibit setuid/setgid identity gains on exec. [Moby's security-option
+  parser](https://github.com/moby/moby/blob/d74daf1a/daemon/daemon_unix.go)
+  initializes from daemon policy and applies options in order, and [OCI construction](https://github.com/moby/moby/blob/d74daf1a/daemon/oci_linux.go)
+  sets the process restriction. This contains exec-time privilege gains only: initial
+  user authority, other security options, complete executable closure and real Docker
+  enforcement remain independent approval/acceptance obligations;
 - `ReadonlyRootfs=true`, `Privileged=false`, `CapDrop=["ALL"]`, no added capabilities;
+- explicit `HostConfig.Runtime="runc"`; missing/malformed evidence and alternate
+  runtime names refuse even with matching approval. An alternate OCI runtime can inject
+  host libraries or hooks outside the approved image and bind list. This is a selected
+  runtime-policy restriction, not attestation of the binary behind the name: the protected
+  daemon's `runc` registration, executable and configuration remain externally trusted;
+- explicit boolean `HostConfig.Init=false` (prepare with `--init=false`); true injects
+  a daemon-supplied init executable before the approved command, outside the image and
+  explicit bind list. Null or missing evidence can inherit the daemon's init default,
+  so neither establishes disabled injection. Type-confused values also refuse, even
+  with matching approval. Both inspections enforce this restriction; an init needed by
+  the service must instead be included in the independently approved image/command.
+  [Moby's OCI construction](https://github.com/moby/moby/blob/d74daf1a/daemon/oci_linux.go)
+  shows the explicit/daemon-default selection and late host bind. This contains that
+  injection route only, not all OCI hooks or host-supplied runtime content;
+- explicit `HostConfig.CgroupnsMode="private"` (prepare with `--cgroupns=private`);
+  host sharing, empty/default, missing and malformed evidence refuse even with matching
+  approval, on both inspections. Host sharing exposes host/cross-container cgroup
+  topology outside the approved image. This is namespace-isolation containment only:
+  a private cgroup namespace does not attest cgroupfs bytes, make a writable cgroup
+  filesystem safe, or establish complete executable closure. Protected daemon/kernel
+  policy and actual Docker acceptance remain separate prerequisites;
+- explicit `HostConfig.UTSMode=""`, Docker's private UTS namespace; `host`,
+  missing evidence and malformed/unsupported values refuse even with matching
+  independent approval, on both inspections. Host sharing causes
+  [Moby's OCI construction](https://github.com/moby/moby/blob/d74daf1a/daemon/oci_linux.go)
+  to remove the UTS namespace and ignore the approved `Config.Hostname`, inheriting
+  mutable host hostname/domain identity instead. This contains shared UTS identity
+  only: runtime pseudo-filesystems and daemon-generated files remain outside image
+  byte claims, and offline tests do not establish real Docker acceptance;
 - explicit `HostConfig.PidMode=""`, Docker's default private PID namespace;
   host and `container:<id>` namespaces, missing evidence and malformed values refuse
   even with matching approval. Shared namespaces can expose other processes' filesystem
   roots through `/proc/<pid>/root`, outside the approved image/mount projection. A
   private namespace contains this cross-process route only; it does not attest runtime
   pseudo-filesystems or guarantee complete executable closure;
+- explicit `HostConfig.IpcMode="private"`; host and `container:<id>` IPC sharing
+  exposes externally writable `/dev/shm` content outside the image and explicit bind
+  projection. Missing/malformed evidence and all other modes (including `shareable`
+  and `none`) refuse even with matching approval. This contains the shared-memory
+  filesystem route only; private runtime pseudo-filesystems are not image bytes;
+- explicit empty `HostConfig.Devices`, `DeviceCgroupRules` and `DeviceRequests`
+  evidence (each JSON null or an empty array); missing, malformed or nonempty values
+  refuse even with matching approval. Host block/character devices, permissive device
+  cgroup rules and device-driver requests can expose storage or inject runtime content
+  outside the image/bind projection without `Privileged=true`. This contains declared
+  device passthrough only, not Docker's default devices or all runtime injection paths;
+- explicit `HostConfig.Links` evidence, either JSON null or an empty array; missing,
+  malformed or nonempty legacy links refuse even with matching approval. A link name
+  does not bind startup values from the linked container. [Moby's linked-container
+  setup](https://github.com/moby/moby/blob/d74daf1a/daemon/container_operations_unix.go)
+  reads the donor's environment/ports, and [OCI construction](https://github.com/moby/moby/blob/d74daf1a/daemon/oci_linux.go)
+  merges linked values into the process environment after inspection. In this selected
+  Moby version the deprecated environment behavior is daemon-option controlled; older
+  versions may enable it by default. The guard refuses links rather than inferring that
+  daemon policy or attesting another container. This contains legacy linked-environment
+  injection only, not every daemon-generated environment or runtime filesystem value;
+- explicit nonempty string `HostConfig.NetworkMode` that does not start with
+  `container:`; sharing another container's network reuses its hostname, hosts and
+  resolver files during startup, outside the approved image and explicit bind list.
+  Pinning the donor name or full ID does not pin those mutable file bytes.
+  [Moby's network initialization](https://github.com/moby/moby/blob/d74daf1a/daemon/container_operations.go)
+  selects the donor, and [its Unix path setup](https://github.com/moby/moby/blob/d74daf1a/daemon/container_operations_unix.go)
+  assigns the donor's `HostnamePath`, `HostsPath` and `ResolvConfPath`. Missing,
+  malformed or container-sharing modes refuse even with matching approval, on both
+  inspections. Other independently approved non-host modes (including custom networks)
+  remain supported; host mode is refused by the separate
+  [host-network policy](#host-network-namespace-restriction). Their daemon-managed
+  DNS/hostname files, networking and runtime pseudo-filesystems are not attested by
+  this donor-file containment;
 - explicit `HostConfig.RestartPolicy.Name="no"` and integer `MaximumRetryCount=0`;
   missing/malformed evidence and `always`, `unless-stopped` or `on-failure` policies
   refuse even if the configuration digest matches independent approval. Docker-managed
@@ -463,7 +607,7 @@ Do not configure an independent automatic restart route that bypasses admission.
 
 Collected [offline tests](../../tests/test_custody_external_launcher.py) inject the trusted
 Docker boundary. They verify reported image/command/configuration/network/security/layer
-drift, mount constraints, private PID namespace admission, repeated checks, strict
+drift, mount constraints, private PID and IPC namespace admission, repeated checks, strict
 pins/JSON, sanitized authority failures,
 clean child environment and exact-ID start ordering. An actual isolated Python subprocess
 verifies CLI refusal before a mutable `sitecustomize.py` can execute. These are not real

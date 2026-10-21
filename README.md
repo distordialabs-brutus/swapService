@@ -4,14 +4,14 @@ A custodial, bidirectional bridge for **one operator-configured Solana SPL token
 
 The bridge uses a **1:1 whole-token backing/conversion model before fees and conservative decimal rounding**. It is not a market-price exchange, a multi-pair router, or a general cross-chain adapter. The current Solana transfer implementation uses the classic SPL Token program; configurable mint selection does not imply native-SOL or Token-2022 support.
 
-> **Release safety:** local engineering checks do not establish production readiness. Published source
-> `64995d7` has 15 narrow Docker-reported admission refusals, including canonical zero `StartedAt` on both inspections.
-> A separately reviewed four-file dirty overlay at old base `93ed7dd9` is not a current-tip candidate or published behavior. Published source still reaches
-> injected start with matching-approved custom networks and canonical but broadly located host bind
-> sources. The launcher is optional, self-unattested and not bound to the one-use custody witness;
-> coherent restore, exact service/node freshness, capacity progress, audited hold operations and live-chain
-> gates also remain open. **Do not transfer tokens, publish a mapping to initiate a swap, or start custody
-> processing.**
+> **Release safety:** local engineering checks do not establish production readiness. The cumulative
+> launcher hardening is integrated, including bounded evidence capture, strict JSON and additional
+> namespace/runtime/device/security controls. These remain offline Docker-reported containment only;
+> matching approval still permits custom networks and canonical but broadly located host bind sources.
+> The launcher is optional, self-unattested and not bound to the one-use custody witness; protected
+> artifact authority, semantic host policy, coherent restore, exact service/node freshness, capacity
+> progress, audited hold operations and live-chain gates remain open. **Do not transfer tokens, publish
+> a mapping to initiate a swap, or start custody processing.**
 > See the [current evaluation](docs/EVALUATION.md),
 > [maintained plan](docs/plans/2026-09-25-recovery-admission-and-capacity-fairness.md),
 > [external-container contract](docs/maintenance/external-container-admission.md), and

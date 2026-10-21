@@ -10,14 +10,31 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
+import os
 import re
+import selectors
 import subprocess
 import sys
+import time
 from typing import Literal, overload
 
 
 class LaunchError(Exception):
     """Public refusal without engine output, credentials or inspected configuration."""
+
+
+_REQUIRED_SYSTEM_PATHS = {
+    "MaskedPaths": frozenset({
+        "/proc/acpi", "/proc/asound", "/proc/interrupts", "/proc/kcore",
+        "/proc/keys", "/proc/latency_stats", "/proc/sched_debug", "/proc/scsi",
+        "/proc/timer_list", "/proc/timer_stats", "/sys/devices/virtual/powercap",
+        "/sys/firmware",
+    }),
+    "ReadonlyPaths": frozenset({
+        "/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger",
+    }),
+}
 
 
 @overload
@@ -28,21 +45,66 @@ def _engine(args: list[str], *, attach: Literal[False] = False) -> str: ...
 def _engine(args: list[str], *, attach: Literal[True]) -> int: ...
 
 
+_EVIDENCE_LIMIT = 1024 * 1024
+_EVIDENCE_TIMEOUT = 15
+
+
 def _engine(args: list[str], *, attach: bool = False) -> str | int:
+    command = ["/usr/bin/docker", *args]
+    environment = {"PATH": "/usr/bin:/bin", "HOME": "/nonexistent"}
     try:
-        result = subprocess.run(
-            ["/usr/bin/docker", *args],
-            env={"PATH": "/usr/bin:/bin", "HOME": "/nonexistent"},
-            stdin=subprocess.DEVNULL, capture_output=not attach,
-            text=True, timeout=None if attach else 15, check=False,
-        )
+        if attach:
+            # Service output remains live and is not evidence to buffer or limit.
+            return subprocess.run(
+                command, env=environment, stdin=subprocess.DEVNULL,
+                capture_output=False, text=True, timeout=None, check=False,
+            ).returncode
+        deadline = time.monotonic() + _EVIDENCE_TIMEOUT
+        with subprocess.Popen(
+            command, env=environment, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0,
+        ) as process:
+            try:
+                assert process.stdout is not None  # Guaranteed by stdout=PIPE.
+                evidence = bytearray()
+                with selectors.DefaultSelector() as selector:
+                    selector.register(process.stdout, selectors.EVENT_READ)
+                    while True:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0 or not selector.select(remaining):
+                            raise subprocess.TimeoutExpired(command, _EVIDENCE_TIMEOUT)
+                        # Read at most the limit plus one sentinel byte. Never
+                        # capture unbounded stdout/stderr before checking size.
+                        chunk = os.read(process.stdout.fileno(),
+                                        min(65536, _EVIDENCE_LIMIT - len(evidence) + 1))
+                        if not chunk:
+                            break
+                        evidence.extend(chunk)
+                        if len(evidence) > _EVIDENCE_LIMIT:
+                            raise LaunchError("local container evidence is unavailable")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, _EVIDENCE_TIMEOUT)
+                if process.wait(timeout=remaining) != 0:
+                    raise LaunchError("local container evidence is unavailable")
+                return evidence.decode("utf-8")
+            finally:
+                # Refusal must leave neither a blocked pipe writer nor a zombie.
+                if process.poll() is None:
+                    process.kill()
+                process.wait()
     except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
         raise LaunchError("local container authority is unavailable") from exc
-    if attach:
-        return result.returncode
-    if result.returncode != 0 or len(result.stdout) > 1024 * 1024:
-        raise LaunchError("local container evidence is unavailable")
-    return result.stdout
+
+
+def _finite_json_float(value: str) -> float:
+    # Standard JSON exponents can overflow Python's float decoder even when
+    # parse_constant rejects NaN/Infinity. Check every numeric token, including
+    # fields outside the approval projection, without exposing private evidence.
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError
+    return result
 
 
 def _unique_object(pairs):
@@ -54,6 +116,12 @@ def _unique_object(pairs):
     return result
 
 
+def _reject_json_constant(value: str):
+    # Python otherwise accepts NaN/Infinity, including outside the pinned fields.
+    # Reject during parsing, without disclosing the inspection's private values.
+    raise ValueError
+
+
 def launch(container_id: str, image_id: str, config_sha256: str) -> int:
     if (re.fullmatch(r"[0-9a-f]{64}", container_id) is None
             or re.fullmatch(r"sha256:[0-9a-f]{64}", image_id) is None
@@ -62,7 +130,8 @@ def launch(container_id: str, image_id: str, config_sha256: str) -> int:
     for _ in range(2):
         try:
             rows = json.loads(_engine(["inspect", "--type=container", container_id]),
-                              object_pairs_hook=_unique_object)
+                              object_pairs_hook=_unique_object, parse_float=_finite_json_float,
+                              parse_constant=_reject_json_constant)
             if not isinstance(rows, list) or len(rows) != 1 or rows[0]["Id"] != container_id:
                 raise ValueError
             value = rows[0]
@@ -137,6 +206,44 @@ def launch(container_id: str, image_id: str, config_sha256: str) -> int:
             annotations = host.get("Annotations")
             if annotations is not None and (not isinstance(annotations, dict) or annotations):
                 raise LaunchError("container runtime annotations are not disabled")
+            # Read-only layers and CapDrop do not prohibit setuid/setgid exec.
+            # Do not infer the effective setting from a mutable daemon default.
+            security = host.get("SecurityOpt")
+            enabled = {"no-new-privileges", "no-new-privileges=true"}
+            if (not isinstance(security, list)
+                    or not all(isinstance(option, str) for option in security)
+                    or not any(option in enabled for option in security)
+                    or any(option.partition("=" if "=" in option else ":")[0] == "no-new-privileges"
+                           and option not in enabled for option in security)):
+                raise LaunchError("container no-new-privileges policy is required")
+            # Explicit empty lists disable Docker's /proc and /sys protections;
+            # read-only root and diff do not cover these runtime filesystems.
+            # Require the selected Moby baseline, not implicit daemon defaults.
+            for field, required in _REQUIRED_SYSTEM_PATHS.items():
+                paths = host.get(field)
+                if (not isinstance(paths, list)
+                        or not all(isinstance(path, str) for path in paths)
+                        or not required.issubset(paths)):
+                    raise LaunchError("container system path protections are required")
+            # Alternate OCI runtimes can inject host libraries or hooks outside
+            # the approved image/binds. The protected daemon's runc installation
+            # and configuration remain trusted external prerequisites.
+            if host.get("Runtime") != "runc":
+                raise LaunchError("container conventional runtime is required")
+            # Null/absent Init can inherit the daemon's default. An init enabled
+            # explicitly or by default injects a daemon-supplied executable that
+            # is not covered by the approved service image.
+            if host.get("Init") is not False:
+                raise LaunchError("container daemon-supplied init is not disabled")
+            # A host cgroup namespace exposes cross-container/host topology
+            # outside the approved image. Empty/absent evidence can inherit a
+            # daemon default; require explicit private namespace admission.
+            if host.get("CgroupnsMode") != "private":
+                raise LaunchError("container private cgroup namespace is required")
+            # Host UTS sharing ignores the approved Config.Hostname and reads
+            # mutable host identity instead. Docker reports private UTS as "".
+            if host.get("UTSMode") != "":
+                raise LaunchError("container private UTS namespace is required")
             # Host networking shares the daemon host's network namespace and
             # local services; a configuration pin cannot authorize that access.
             # Other network modes still need independently enforced endpoint policy.
@@ -156,6 +263,27 @@ def launch(container_id: str, image_id: str, config_sha256: str) -> int:
             # Docker reports the default private namespace as an empty string.
             if host.get("PidMode") != "":
                 raise LaunchError("container private PID namespace is required")
+            # Host/container IPC sharing adds externally writable /dev/shm
+            # contents not covered by the approved image or explicit bind list.
+            if host.get("IpcMode") != "private":
+                raise LaunchError("container private IPC namespace is required")
+            # Host devices and device-driver requests expose authority outside
+            # the approved image/bind list, even with a read-only root.
+            for field in ("Devices", "DeviceCgroupRules", "DeviceRequests"):
+                if field not in host or host[field] not in (None, []):
+                    raise LaunchError("container host-device access is not disabled")
+            # Container networking reuses the donor's hostname/hosts/resolver
+            # files at startup. Its name/ID does not pin those mutable bytes,
+            # which are outside the approved image and explicit bind projection.
+            network_mode = host.get("NetworkMode")
+            if (not isinstance(network_mode, str) or not network_mode
+                    or network_mode.startswith("container:")):
+                raise LaunchError("container network file sharing is not disabled")
+            # Legacy links can add environment values from a different container
+            # during OCI construction. Pinning the link name does not pin those
+            # late-bound values; Config.Env is not the complete startup environment.
+            if "Links" not in host or host["Links"] not in (None, []):
+                raise LaunchError("container legacy links are not disabled")
             restart = host.get("RestartPolicy")
             if (not isinstance(restart, dict)
                     or restart.get("Name") != "no"
@@ -220,7 +348,9 @@ def launch(container_id: str, image_id: str, config_sha256: str) -> int:
                         or mount.get("Propagation", "rprivate") != "rprivate"):
                     raise LaunchError("container bind mount policy is inconsistent")
                 destinations.add(destination)
-        except (ValueError, TypeError, KeyError) as exc:
+        except (ValueError, TypeError, KeyError, RecursionError) as exc:
+            # A byte-bounded JSON response can still exhaust decoder/encoder
+            # nesting limits. Refuse without exposing raw inspection evidence.
             raise LaunchError("local container evidence is invalid") from exc
         # Even a never-started container can be changed with docker cp. Reject its
         # entire upper layer, not just a finite source/dependency inventory.

@@ -1,5 +1,40 @@
 # swapService — Current Engineering Evaluation and Remediation Plan
 
+## Cumulative launcher integration — 2026-10-21
+
+The repository owner explicitly authorized committing and pushing all outstanding
+changes. The complete four-file launcher overlay is integrated over documentation
+commit `8a71db1`, preserving the previously published controls and the newer review.
+It adds bounded byte/deadline evidence capture, strict numeric/nesting JSON refusal,
+no-new-privileges, minimum system-path protections, `runc`, disabled daemon init and
+legacy links, private IPC/cgroup/UTS, no declared host-device access and no
+container-shared networking. Earlier descriptions below of this overlay as dirty,
+unpublished or publication-blocked are historical records, not its integration status.
+The older source identities and test counts remain evidence for those exact candidates.
+
+This publication is **not deployment, artifact approval or release acceptance**.
+Protected complete executable authority, the sole witness-bound launch route,
+independently approved network/endpoint and source-root policy, coherent restore,
+service/node freshness, capacity progress, audited hold operations and real-engine/
+chain acceptance remain open. Production and real funds remain blocked. No custody
+worker, schema, dependency, witness transition or financial operation changes here.
+The exact cumulative runtime/test candidate was independently reviewed with no
+blocking security or logic findings, then verified in a fresh indexed export matching
+staged Git tree `09c1113b621ae1a90cf79894c36f34a3f1a8ae9d`, using Python **3.12.3**
+and Node.js renderer coverage, with no skipped tests:
+
+| Gate | Result |
+|---|---|
+| External-launcher tests | **809 passed** |
+| Complete suite | **2,331 passed, 77 subtests passed**, 115.83 seconds |
+| CI isolation shards | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** |
+| Compilation, dependency consistency, Markdown links, token inventory and whitespace | Passed; **274 active inventory lines** |
+| Added-line static security scan and unchanged local pre-commit policy | Passed |
+
+The final README safety-banner and verification-record edits are documentation-only;
+final indexed checks precede commit. Exact pushed-SHA CI is reported separately and
+must not be confused with real Docker or release acceptance.
+
 ## Consolidated current assessment — 2026-10-21
 
 **Verdict: release blocked; real funds blocked.** Exact published source
@@ -866,6 +901,244 @@ Tests use an injected engine, not actual Docker/runtime/systemd behavior. Protec
 deployment, other daemon/runtime injection, external-image witness binding and real
 mutation/concurrency/crash/restore acceptance remain open. Production and funds remain blocked.
 
+## Maintenance increment — explicit no-new-privileges admission (2026-10-16)
+
+**Implemented narrowly offline; Batch 0 and publication remain blocked.** The first
+unresolved priority remains external pre-execution artifact authority. Earlier local
+repairs are preserved, not reimplemented or implicitly published. Twelve collected
+red regressions reached injected start with matching independent approval despite
+absent, disabled, contradictory or malformed `HostConfig.SecurityOpt` evidence.
+Both inspections now require an explicit string array containing `no-new-privileges`
+or `no-new-privileges=true`; every option with that key must use one of those canonical
+enabled spellings. Disabling, malformed and deprecated colon forms refuse regardless
+of order. This deliberately avoids inferring authority from mutable daemon defaults.
+Read-only layers and dropped capabilities alone do not prohibit setuid/setgid identity
+gains on exec. See the [external-container contract](maintenance/external-container-admission.md)
+for the pinned Moby parser/OCI evidence and the conservative compatibility boundary.
+
+Collected tests cover missing/type-confused policy, disabling forms mixed with enabled
+options, second-inspection drift, both accepted spellings and approved additional
+string options. Exact-ID one-start ordering and child exit status remain unchanged.
+This contains exec-time privilege gains only; initial user authority, other security
+options, protected deployment, complete executable closure, external-image witness
+binding and real Docker mutation/concurrency/crash/restore acceptance remain open.
+No dependency, worker, database schema or witness behavior changes. Tests use an
+injected engine, not actual Docker enforcement or chain activity. Production and
+real funds remain blocked.
+
+Clean Python **3.12.3** gates passed in independently exported trees whose Git tree
+identities matched their intended indexes:
+
+| Gate | Shared tree including earlier unpublished repairs | Isolated HEAD plus this repair only |
+|---|---|---|
+| Launcher module | **340 passed** | **121 passed** |
+| Complete suite | **1,862 passed, 77 subtests passed**, no skips, 112.65 seconds | **1,643 passed, 77 subtests passed**, no skips, 114.60 seconds |
+| CI isolation shards | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** |
+| Compilation, dependency consistency, Markdown links, intended-index literal inventory and whitespace | Passed; **274 active inventory lines** | Passed; **274 active inventory lines** |
+
+Final documentation recording is rechecked against both exact indexes. **Publication
+blocked:** the existing pre-commit hook was exercised against the isolated candidate
+and refused because it retains unchanged historical `vision.md`. The pre-existing
+staged deletion is unrelated and excluded. No bypass, policy change or implicit
+publication of earlier repairs is authorized. The original index remains byte-for-byte
+unchanged; no maintenance commit, push or new CI run exists. Publication requires
+separately authorized local-policy resolution. Freshly fetched `origin/main` and local
+HEAD both resolve to `b31a27c2b5dc509fe0ddd9877f9a3c09d90e16e1`; its successful
+[CI run 37744660527](https://github.com/distordialabs-brutus/swapService/actions/runs/37744660527)
+is base-commit evidence only, not verification of this uncommitted increment.
+
+**Work-item grounding:** Batch 0, O4/O3 with supporting O1; deployment/startup owns
+`scripts/custody_external_launcher.py` and the collected launcher tests. The scheduled
+maintainer acts under bounded one-issue authorization. Non-Atlas settlement,
+transitional custody and independent artifact/release authority remain unchanged.
+
+## Maintenance increment — retain Docker system-path confinement (2026-10-16)
+
+**Implemented narrowly offline; Batch 0 and publication remain blocked.** The first
+unresolved priority is external pre-execution artifact authority. Earlier local repairs
+remain preserved, not reimplemented or implicitly published. Sixteen collected red
+regressions reached injected start with independently matching approval despite absent,
+null, empty or malformed masked/read-only path evidence. The launcher now requires
+explicit `HostConfig.MaskedPaths` and `HostConfig.ReadonlyPaths` string arrays containing
+the selected Moby baseline, on both inspections. Explicit empty lists disable Docker's
+normal `/proc` and `/sys` protections; a matching configuration pin, read-only root and
+empty writable-layer diff do not bind the additional host-backed runtime contents.
+
+The independent test inventory exercises every baseline path's removal, malformed
+members in otherwise complete lists, second-inspection drift and exact-ID one-start/
+child-exit controls. Additional approved paths and reordered arrays remain supported.
+See the [external-container contract](maintenance/external-container-admission.md) for
+the exact minimum, pinned Moby source references and older-daemon compatibility boundary.
+This is system-path confinement only: remaining runtime pseudo-filesystem bytes,
+complete executable closure, protected deployment, external-image witness binding and
+real mutation/concurrency/crash/restore acceptance remain unproved. Tests inject the
+engine boundary; no real Docker container, chain request or financial action was run.
+Production and real funds remain blocked.
+
+Clean Python **3.12.3** gates passed in two independently exported trees whose Git tree
+identities matched their intended indexes:
+
+| Gate | Shared tree including earlier unpublished repairs | Isolated HEAD plus this repair only |
+|---|---|---|
+| Launcher tests | **310 passed** | **140 passed** |
+| Complete suite | **1,832 passed, 77 subtests passed**, no skips, 153.36 seconds | **1,662 passed, 77 subtests passed**, no skips, 150.55 seconds |
+| CI isolation shards | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** | **35 passed/52 subtests; 36 passed/52 subtests; 85 passed** |
+| Compilation, dependency consistency, Markdown links, intended-index literal inventory and whitespace | Passed; **274 active inventory lines** | Passed; **274 active inventory lines** |
+
+Final documentation recording is rechecked against both exact indexes. No dependency,
+financial worker, database schema or witness behavior changed.
+
+**Publication blocked:** the existing pre-commit hook was exercised against the exact
+isolated candidate and refused because it retains unchanged historical `vision.md`.
+The pre-existing staged deletion is unrelated and excluded. No hook bypass, policy
+change or implicit publication of other repairs is authorized. The original Git index
+is byte-for-byte unchanged. No maintenance commit, push or new CI run exists. Resolution
+requires separately authorized local-policy handling. Freshly fetched `origin/main`
+and local HEAD both resolve to `b31a27c2b5dc509fe0ddd9877f9a3c09d90e16e1`; its successful
+[CI run 37744660527](https://github.com/distordialabs-brutus/swapService/actions/runs/37744660527)
+is base-commit evidence, not verification of this uncommitted increment.
+
+**Work-item grounding:** Batch 0, O4/O3 with supporting O1; deployment/startup owns
+`scripts/custody_external_launcher.py` and the collected launcher tests. The scheduled
+maintainer acts under bounded one-issue authorization. Non-Atlas settlement,
+transitional custody and independent artifact/release authority remain unchanged.
+
+## Maintenance increment — private UTS identity admission (2026-10-15)
+
+**Implemented narrowly offline; Batch 0 and publication remain blocked.** The first
+unresolved priority is external pre-execution artifact authority. Existing local
+repairs remain preserved, not reimplemented or implicitly published. Nine collected
+red regressions reached injected start with matching independent approval and host,
+missing, malformed or unsupported UTS namespace evidence. Both inspections now require
+explicit `HostConfig.UTSMode=""`, Docker's private UTS namespace. Host sharing causes
+Moby to remove the UTS namespace and ignore the pinned `Config.Hostname`, inheriting
+mutable host hostname/domain identity instead. Matching approval cannot exempt this
+route. Three second-inspection drift regressions and a private-UTS exact-ID one-start/
+child-exit control cover refusal and continued normal operation. See the
+[external-container contract](maintenance/external-container-admission.md).
+
+The clean Python **3.12.3** shared-tree launcher module returned **261 passed** and
+its complete suite returned **1,783 passed and 77 subtests passed**, with no skips,
+in 109.91 seconds. The isolated HEAD-plus-own-fix candidate returned **104 focused
+tests** and **1,626 full-suite tests plus 77 subtests**, with no skips, in 109.04
+seconds. Shared counts include earlier unpublished repairs; the isolated candidate
+excludes them. Candidate/export Git trees matched. Compilation, dependency consistency,
+Markdown links, intended-index literal inventory (**274 active lines**) and candidate
+whitespace passed. CI-isolation shards returned **35 passed/52 subtests**, **36
+passed/52 subtests** and **85 passed** in both trees. Final documentation recording is
+rechecked against the exact candidate. No dependency, financial worker, schema or
+witness behavior changed.
+
+**Publication blocked:** the existing pre-commit hook was executed against the exact
+candidate and refused because it retains unchanged historical `vision.md`. Its
+pre-existing staged deletion is unrelated and excluded. No hook bypass, policy change
+or implicit publication of earlier repairs is authorized; the original index remains
+byte-for-byte unchanged. No maintenance commit, push or new CI run exists. Publication
+needs separately authorized policy resolution. Freshly fetched `origin/main` and local
+HEAD both resolve to `b31a27c2b5dc509fe0ddd9877f9a3c09d90e16e1`; that base has successful
+[CI run 37744660527](https://github.com/distordialabs-brutus/swapService/actions/runs/37744660527),
+not CI evidence for this uncommitted increment.
+
+**Work-item grounding:** Batch 0, O4/O3 with supporting O1; deployment/startup owns
+`scripts/custody_external_launcher.py` and its collected launcher tests. The scheduled
+maintainer acts under bounded one-issue authorization. Non-Atlas settlement,
+transitional custody and independent artifact/release authority remain unchanged.
+This contains shared UTS identity only: it does not attest runtime pseudo-filesystems,
+daemon-generated files or a complete executable closure. Tests use injected engine
+evidence, not real Docker isolation or claim/run/seal acceptance. Protected deployment,
+complete image closure, external-image witness binding and real mutation/crash/restore
+acceptance remain open. Production and real funds remain blocked.
+
+## Maintenance increment — private cgroup namespace admission (2026-10-15)
+
+**Implemented narrowly offline; Batch 0 and publication remain blocked.** The first
+unresolved priority is external pre-execution artifact authority. All earlier local
+repairs are preserved, not reimplemented or implicitly published. Nine collected red
+regressions reached injected start with matching independent approval and host, default,
+missing or malformed cgroup namespace evidence. Both inspections now require explicit
+`HostConfig.CgroupnsMode="private"`; matching approval cannot exempt host sharing or
+reliance on a daemon namespace default. Host sharing exposes host/cross-container cgroup
+topology outside the approved image. Three second-inspection drift regressions and the
+existing exact-ID one-start/child-exit control cover continued enforcement.
+
+The clean Python **3.12.3** shared-tree launcher module returned **248 passed** and
+its complete suite returned **1,770 passed and 77 subtests passed**, with no skips,
+in 106.53 seconds. The isolated HEAD-plus-own-fix candidate returned **103 focused
+tests** and **1,625 full-suite tests plus 77 subtests**, with no skips, in 108.08
+seconds. Shared counts include earlier unpublished repairs; the isolated candidate
+excludes them. Candidate/export Git trees matched. Compilation, dependency consistency,
+Markdown links, intended-index literal inventory (**274 active lines**) and candidate
+whitespace passed. CI-isolation shards returned **35 passed/52 subtests**, **36
+passed/52 subtests** and **85 passed**. Final documentation recording is rechecked
+against the exact candidate. No dependency, financial worker, schema or witness
+behavior changed. See the [external-container contract](maintenance/external-container-admission.md).
+
+**Publication blocked:** the existing pre-commit hook was executed against the exact
+candidate and returned exit 1 because it retains unchanged historical `vision.md`.
+Its pre-existing staged deletion is unrelated and excluded. No hook bypass, policy
+change or implicit publication of earlier local repairs is authorized; the original
+index remains byte-for-byte unchanged. No maintenance commit, push or new CI run
+exists. Publication needs separately authorized policy resolution. Freshly fetched
+`origin/main` and local HEAD both resolve to
+`b31a27c2b5dc509fe0ddd9877f9a3c09d90e16e1`.
+
+**Work-item grounding:** Batch 0, O4/O3 with supporting O1; deployment/startup owns
+`scripts/custody_external_launcher.py` and its collected launcher tests. The scheduled
+maintainer acts under bounded one-issue authorization. Non-Atlas settlement, transitional
+custody and independent artifact/release authority remain unchanged. A private cgroup
+namespace does not attest cgroupfs bytes or make writable cgroupfs safe. Tests use
+injected engine evidence, not real Docker isolation or claim/run/seal acceptance.
+Protected deployment, complete image closure, external-image witness binding and real
+mutation/crash/restore acceptance remain open. Production and real funds remain blocked.
+
+## Maintenance increment — refuse overflowing inspection numbers (2026-10-15)
+
+**Implemented narrowly offline; Batch 0 and publication remain blocked.** The first
+unresolved priority is external pre-execution artifact authority. All previously
+implemented local repairs remain preserved, not reimplemented or implicitly published.
+Six collected red regressions reached injected start with matching approval when the
+first or second inspection contained `1e309`, `-1e309` or a just-overflowing boundary
+number in a nested unpinned state field. These are standard JSON number lexemes;
+Python's decoder silently converts them to infinity without invoking `parse_constant`.
+Canonical encoding had refused nonfinite values only inside the approval projection.
+
+Both inspections now use a finite-value floating-point decoder. Overflow anywhere in
+inspection JSON follows the existing sanitized invalid-evidence exit 1, with no later
+diff/start and no raw evidence or traceback. Eight controls preserve finite positive/
+negative boundary values, signed zero, small finite exponents, quoted overflow text and
+arbitrary-precision integers, with unchanged canonical approval identity, exact-ID
+one-start ordering and child exit status. This constrains decoded representation; it
+neither declares those lexemes invalid JSON nor claims lossless decimal rounding or
+underflow. See the [external-container contract](maintenance/external-container-admission.md).
+
+The clean Python **3.12.3** shared-tree launcher module returned **236 passed** and its
+complete suite returned **1,758 passed and 77 subtests passed**, with no skips, in
+108.49 seconds. The isolated HEAD-plus-own-fix candidate returned **105 focused tests**
+and **1,627 full-suite tests plus 77 subtests**, with no skips, in 109.86 seconds. Shared
+counts include earlier unpublished repairs; the isolated candidate excludes them.
+Candidate/export Git trees matched. Compilation, dependency consistency, Markdown links,
+intended-index literal inventory (**274 active lines**) and candidate whitespace passed.
+CI-isolation shards returned **35 passed/52 subtests**, **36 passed/52 subtests** and
+**85 passed**. Final documentation recording is rechecked against the exact candidate.
+
+**Publication blocked:** the existing pre-commit hook was executed against the exact
+candidate and returned exit 1 because it retains unchanged historical `vision.md`.
+Its pre-existing staged deletion is unrelated and excluded. No hook bypass, policy
+change or implicit publication of other local repairs is authorized; the original
+index is byte-for-byte unchanged. No maintenance commit, push or new CI run exists.
+Publication requires separately authorized policy resolution. Freshly fetched
+`origin/main` and local HEAD both resolve to
+`b31a27c2b5dc509fe0ddd9877f9a3c09d90e16e1`.
+
+**Work-item grounding:** Batch 0, O4/O3 with supporting O1; deployment/startup owns
+`scripts/custody_external_launcher.py` and its collected tests. The scheduled maintainer
+acts under bounded one-issue authorization. Non-Atlas settlement, transitional custody
+and independent artifact/release authority remain unchanged. No dependency, financial
+worker, custody schema or witness behavior changed. Engine evidence is offline/injected,
+not a real Docker execution or claim/run/seal rehearsal. Protected deployment, complete
+image closure, external-image witness binding and real mutation/crash/restore acceptance
+remain open. Production and real funds remain blocked.
+
 ## Current exact-source assessment — 2026-10-07
 
 **Release and real funds remain blocked.** This assessment covers detached exact source
@@ -1119,6 +1392,402 @@ shared-namespace access or approved claim/run/seal generation was exercised. Pro
 installation/exclusive Docker administration, complete image closure, external-image
 witness binding and real mutation/crash/restore acceptance remain open. Production and
 real funds remain blocked.
+
+### Maintenance increment — private IPC namespace admission (2026-10-08)
+
+**Implemented narrowly offline; Batch 0 remains blocked.** On publication base
+`b31a27c`, a matching independent configuration pin allowed host and shared
+`container:<id>` IPC namespaces through the external launcher. Two collected red
+regressions reached the injected start action. Such modes expose externally writable
+`/dev/shm` content outside the approved image and explicit bind projection. Both
+inspections now require explicit `HostConfig.IpcMode="private"`; missing, malformed
+and all other modes refuse with a sanitized exit 1 before diff/start. Approval
+pinning cannot exempt this constraint. The private candidate still starts exactly
+once and preserves the attached process's exit status.
+
+The focused launcher module returned **105 passed**. Coverage includes both shared
+modes, missing/type-confused/unsupported values and between-inspection drift. A clean
+Python **3.12.3** exact-candidate export passed **1,627 tests and 77 subtests**, with no
+skips, plus compilation, dependency consistency, Markdown links, intended-index
+literal inventory (**274 active lines**) and whitespace. CI-isolation shards returned
+**35 passed/52 subtests**, **36 passed/52 subtests** and **85 passed**. No dependency,
+financial worker, schema or witness behavior changed.
+
+**Publication blocked locally.** The existing `.git/hooks/pre-commit` refuses any
+index still tracking `vision.md`, including its unchanged historical version. The
+pre-existing staged deletion is unrelated and is excluded from the one-issue candidate;
+including it would publish work outside this repair. The commit attempt was refused:
+no maintenance commit, push or new CI run exists. The hook was not bypassed or changed,
+and the original staged deletion remains untouched. Publication needs a separately
+authorized resolution of that local-only policy versus the published tree.
+
+**Work-item grounding:** Batch 0 external executable authority, O4/O3 and supporting
+O1; deployment/startup owns `scripts/custody_external_launcher.py` and its collected
+launcher tests. The scheduled maintainer acts under bounded one-issue authorization;
+non-Atlas settlement, transitional custody and independent artifact/release authority
+remain unchanged. See the [external-container admission contract](maintenance/external-container-admission.md).
+
+This contains a shared-memory filesystem route only. Private runtime pseudo-filesystems
+and host-bind content are not approved image bytes; this is not complete execution
+closure or pre-execution deployment acceptance. Docker tests are offline/injected:
+no actual shared-memory access, image mutation or claim/run/seal was exercised. Protected
+installation/exclusive administration, complete image closure, external-image witness
+binding and real mutation/crash/restore acceptance remain open. Production and real
+funds remain blocked.
+
+### Maintenance increment — refuse external host-device passthrough (2026-10-12)
+
+**Implemented narrowly offline; Batch 0 and publication remain blocked.** The first
+unresolved priority remains external executable authority. Existing root/interpreter/SDK,
+restart-policy, host-shape and PID repairs are preserved; the pre-existing local IPC
+candidate is not reimplemented or implicitly published. On publication base `b31a27c`,
+a matching configuration pin allowed explicit host-device mappings, device cgroup rules
+and device-driver requests through the launcher. Three collected red regressions reached
+the injected start action despite a read-only root and dropped capabilities. These
+settings expose authority outside the approved image and explicit bind projection.
+
+Both inspections now require explicit `HostConfig.Devices`, `DeviceCgroupRules` and
+`DeviceRequests`, each JSON null or an empty array. Missing, type-confused, malformed
+or nonempty evidence refuses with sanitized exit 1 before diff/start; approval cannot
+exempt this constraint. Focused tests cover all three unsafe settings, malformed/missing
+fields, between-inspection drift and every empty/null combination, preserving exact-ID
+one-start ordering and the child's exit status. The shared-tree focused module returned
+**140 passed**. A clean Python **3.12.3** HEAD-plus-repair exact-candidate export
+returned **126 focused tests**, **1,648 full-suite tests and 77 subtests**, with no
+skips. The shared-tree full suite, including the preserved local IPC candidate,
+returned **1,662 tests and 77 subtests**, with no skips. Compilation, dependency
+consistency, Markdown links, intended-index token inventory (**274 active lines**)
+and candidate whitespace passed. CI-isolation shards returned **35 passed/52
+subtests**, **36 passed/52 subtests** and **85 passed**. The publication candidate
+excludes all pre-existing dirty changes.
+
+**Publication blocked:** the existing pre-commit hook was executed against the exact
+candidate and returned exit 1 because it still tracks unchanged historical `vision.md`.
+Its pre-existing staged deletion is unrelated and remains untouched. No maintenance
+commit, push or new CI run exists. The hook was not bypassed or changed, and the local
+IPC candidate was not implicitly published. Protected policy resolution remains a
+separate authority.
+
+**Work-item grounding:** Batch 0, O4/O3 with supporting O1; deployment/startup owns
+`scripts/custody_external_launcher.py` and its collected launcher tests. The scheduled
+maintainer acts under bounded one-issue authorization; transitional custody, non-Atlas
+settlement and independent artifact/release approval remain unchanged. See the
+[external-container admission contract](maintenance/external-container-admission.md).
+No dependency, worker, schema or witness behavior changed. Engine evidence is injected
+and offline, not a real host-device or claim/run/seal rehearsal. Default runtime devices,
+other injection paths, protected deployment/image closure/witness binding and real Docker
+mutation/crash/restore acceptance remain outside this narrow fix. Production and real
+funds remain blocked.
+
+### Maintenance increment — conventional container runtime admission (2026-10-12)
+
+**Implemented narrowly offline; Batch 0 and publication remain blocked.** The first
+unresolved priority is external executable authority. Existing IPC and host-device
+candidates are preserved, not reimplemented or implicitly published. Two collected red
+regressions showed that an independently matching configuration pin admitted `nvidia`
+and another alternate runtime through the injected start action. Alternate OCI runtimes
+can inject host libraries or hooks outside the approved image and explicit bind list.
+
+Both inspections now require explicit `HostConfig.Runtime="runc"`; missing, malformed
+and all other runtime names refuse with sanitized exit 1 before diff/start. Approval
+cannot exempt this constraint. Collected tests cover matching-pin alternate runtimes,
+missing/type-confused evidence, second-inspection drift and the unchanged exact-ID
+one-start/exit-status positive control. The shared-tree focused module returned
+**153 passed**; the clean Python **3.12.3** shared-tree full suite returned **1,675 tests
+and 77 subtests**, with no skips, in 107.70 seconds. These results include the preserved
+IPC and device candidates, not a publication claim. The isolated HEAD-plus-own-increment
+export returned **104 focused tests** and **1,626 full-suite tests plus 77 subtests**,
+with no skips, in 108.61 seconds. Export and candidate-index Git trees matched exactly.
+Compilation, dependency consistency, Markdown links, intended-index token inventory
+(**274 active lines**) and candidate whitespace passed. CI-isolation shards returned
+**35 passed/52 subtests**, **36 passed/52 subtests** and **85 passed**.
+
+**Publication blocked:** the existing local pre-commit hook was executed against the
+exact candidate and returned exit 1 because it tracks unchanged historical `vision.md`.
+Its pre-existing staged deletion is unrelated and remains excluded from this repair.
+The hook was not bypassed or changed; the original index is unchanged. No maintenance
+commit, push or new CI run exists. Policy resolution remains separately authorized.
+
+**Work-item grounding:** Batch 0, O4/O3 and supporting O1; deployment/startup owns
+`scripts/custody_external_launcher.py` and its collected tests. The scheduled maintainer
+acts under bounded one-issue authorization. The non-Atlas settlement hypothesis,
+transitional custody and independent artifact/release approval remain unchanged. See the
+[external-container admission contract](maintenance/external-container-admission.md).
+No financial worker, dependency, schema or witness behavior changed.
+
+This is runtime-policy containment only. The name `runc` does not attest its registered
+binary or configuration: the independently protected daemon/runtime installation remains
+trusted. OCI hooks, default devices, runtime pseudo-filesystems and other injection paths
+are not proven absent. Engine tests are offline/injected, not a real Docker runtime or
+claim/run/seal rehearsal. Protected deployment, complete executable closure, witness-image
+binding and real mutation/crash/restore acceptance remain open. Production and real funds
+remain blocked.
+
+### Maintenance increment — refuse daemon-supplied init injection (2026-10-13)
+
+**Implemented narrowly offline; Batch 0 and publication remain blocked.** The first
+unresolved priority remains external pre-execution artifact authority. Existing local
+IPC, host-device and conventional-runtime candidates are preserved, not reimplemented
+or implicitly published. A collected red regression reached injected start with a
+matching configuration pin and `HostConfig.Init=true`: Docker can prepend its own
+host-supplied init executable and bind it into the container during OCI construction,
+outside the approved image and declared bind projection. Moby's inspected source also
+uses the daemon init default when the field is null; omitting it does not prove that
+injection is disabled.
+
+Both inspections now require explicit boolean `HostConfig.Init=false`; true, missing,
+null and type-confused evidence refuse with sanitized exit 1 before diff/start. An init
+needed by the service must be included in the independently approved image/command,
+not injected from the daemon. Collected tests cover matching-pin refusal, missing/null
+and malformed evidence, second-inspection drift and unchanged exact-ID one-start/
+exit-status behavior. The shared-tree focused module returned **166 passed**; its clean
+Python **3.12.3** full suite returned **1,688 tests and 77 subtests**, with no skips,
+in 108.66 seconds. The isolated HEAD-plus-own-increment export returned **104 focused
+and 1,626 full-suite tests plus 77 subtests**, with no skips, in 108.44 seconds.
+Candidate-index and export Git trees matched. Compilation, dependency consistency,
+Markdown links, intended-index literal inventory (**274 active lines**) and candidate
+whitespace passed. CI-isolation shards returned **35 passed/52 subtests**,
+**36 passed/52 subtests** and **85 passed**.
+
+**Publication blocked:** the existing pre-commit hook was executed against the exact
+candidate and returned exit 1 because it still tracks unchanged historical `vision.md`.
+Its pre-existing staged deletion remains unrelated and excluded. The hook was not
+bypassed or changed; the original index is preserved. No maintenance commit, push or
+new CI run exists. Protected policy resolution remains separately authorized.
+
+**Work-item grounding:** Batch 0, O4/O3 and supporting O1; deployment/startup owns
+`scripts/custody_external_launcher.py` and its collected tests. The scheduled maintainer
+acts under bounded one-issue authorization. The non-Atlas settlement hypothesis,
+transitional custody and independent artifact/release authority remain unchanged.
+See the [external-container admission contract](maintenance/external-container-admission.md).
+No financial worker, dependency, schema or witness behavior changed. This contains
+one daemon-supplied executable route only: other OCI hooks/runtime injection, protected
+deployment, complete executable closure, witness-image binding and real Docker
+mutation/crash/restore/claim-run-seal acceptance remain open. Engine tests are injected
+and offline, not a real init-injection rehearsal. Production and real funds remain blocked.
+
+### Maintenance increment — sanitized inspection nesting refusal (2026-10-13)
+
+**Implemented narrowly offline; Batch 0 and publication remain blocked.** The first
+unresolved priority remains external pre-execution artifact authority. Existing local
+IPC, host-device, runtime and init candidates are preserved, not reimplemented or
+implicitly published. Two collected red regressions supplied valid JSON below the
+engine's one-MiB response limit with excessive array nesting on the first or second
+inspection. Both escaped `main()` as an uncaught `RecursionError` instead of following
+the controlled refusal boundary. No start was reached in either reproduction.
+
+The existing invalid-evidence handler now includes recursion-limit failures from JSON
+decoding/canonical encoding. `main()` returns exit 1 with only the sanitized invalid-
+evidence message, without raw inspection data or a traceback; no diff/start follows
+the rejected inspection. Approval pins, constraints, financial authority and witness
+ordering are unchanged. Collected tests exercise the real JSON decoder on both reads,
+assert exact refusal output/action ordering, and retain the exact-ID one-start/child-
+exit-status positive control. The shared-tree focused module returned **168 passed**;
+its clean Python **3.12.3** full suite returned **1,690 tests and 77 subtests**, with no
+skips, in 110.10 seconds. These results include the preserved unpublished candidates.
+The isolated HEAD-plus-own-increment export returned **93 focused tests** and **1,615
+full-suite tests plus 77 subtests**, with no skips, in 109.75 seconds. Candidate-index
+and export Git trees matched. Compilation, dependency consistency, Markdown links,
+intended-index literal inventory (**274 active lines**) and candidate whitespace passed.
+CI-isolation shards returned **35 passed/52 subtests**, **36 passed/52 subtests** and
+**85 passed**.
+
+**Publication blocked:** the existing pre-commit hook was executed against the exact
+candidate and returned exit 1 because it tracks unchanged historical `vision.md`.
+The pre-existing staged deletion is unrelated and remains excluded. The hook was not
+bypassed or changed; the original index is preserved. No maintenance commit, push or
+new CI run exists. Protected policy resolution remains separately authorized.
+
+**Work-item grounding:** Batch 0, O4/O3 with supporting O1; deployment/startup owns
+`scripts/custody_external_launcher.py` and its collected tests. The scheduled maintainer
+acts under bounded one-issue authorization. Non-Atlas settlement, transitional custody
+and independent artifact/release authority remain unchanged. See the
+[external-container contract](maintenance/external-container-admission.md).
+This fixes malformed-evidence reporting only, not executable closure or Docker byte
+attestation. Engine tests remain injected/offline; protected deployment, complete image
+closure, external-image witness binding and real mutation/crash/restore/claim-run-seal
+acceptance remain open. Production and real funds remain blocked.
+
+### Maintenance increment — bounded external evidence capture (2026-10-13)
+
+**Implemented narrowly offline; Batch 0 and publication remain blocked.** The first
+unresolved priority remains external pre-execution artifact authority. All previous
+local candidates are preserved, not reimplemented or implicitly published. The launcher
+previously captured all Docker stdout/stderr before checking its one-MiB limit, and
+counted decoded characters rather than bytes. A collected real-child red regression
+accepted more than one MiB of multibyte output; another showed overflow was rejected
+only after the child exited, rather than stopping its pipe writer at the limit.
+
+Inspection/diff stdout now streams into a bounded byte buffer with one overflow sentinel;
+stderr goes directly to the null device. The byte cap applies before strict UTF-8 decoding.
+One monotonic 15-second deadline covers pipe reads and child exit, including continuous
+trickle output or stdout EOF before process exit. Refusal kills/reaps an unfinished
+child and closes its pipe. Oversize, timeout, nonzero exit and invalid encoding remain
+sanitized and cannot reach diff/start after a rejected inspection. Attached service
+output stays live/unbuffered and its exit status is preserved.
+
+The shared-tree focused launcher module returned **180 passed**. Collected coverage uses
+real isolated subprocess pipes for ASCII/multibyte overflows and exact-limit/empty
+controls, early overflow termination, idle/trickle/closed-stdout timeouts, discarded
+large stderr, invalid UTF-8 and child/pipe cleanup; no Docker or chain activity is used.
+The clean Python **3.12.3** shared-tree full suite returned **1,702 tests and 77
+subtests**, with no skips, in 109.48 seconds; it includes the preserved unpublished
+candidates. The isolated HEAD-plus-own-increment export returned **103 focused tests**
+and **1,625 full-suite tests plus 77 subtests**, with no skips, in 107.44 seconds.
+Candidate-index and export Git trees matched. Compilation, dependency consistency,
+Markdown links, intended-index token inventory (**274 active lines**) and candidate
+whitespace passed. CI-isolation shards returned **35 passed/52 subtests**,
+**36 passed/52 subtests** and **85 passed**.
+
+**Publication blocked:** the existing pre-commit policy refuses an index tracking
+unchanged historical `vision.md`. Its pre-existing staged deletion is unrelated and
+excluded. No hook bypass, policy change or implicit publication of earlier local repairs
+is authorized; the original index is preserved. Exact-candidate hook evidence accompanies
+the gate results. No maintenance commit, push or new CI run is claimed.
+
+**Work-item grounding:** Batch 0, O4/O3 with supporting O1; deployment/startup owns
+`scripts/custody_external_launcher.py` and its focused collected tests. The scheduled
+maintainer acts under bounded one-issue authorization. Non-Atlas settlement, transitional
+custody and independent artifact/release authority remain unchanged. See the
+[external-container contract](maintenance/external-container-admission.md).
+This contains evidence-capture resource use, not executable closure or Docker byte
+attestation. Protected deployment, complete image closure, external-image witness binding
+and real mutation/crash/restore/claim-run-seal acceptance remain open. Production and real
+funds remain blocked.
+
+### Maintenance increment — refuse legacy linked startup environment (2026-10-14)
+
+**Implemented narrowly offline; Batch 0 and publication remain blocked.** The first
+unresolved priority remains external pre-execution artifact authority. Existing local
+IPC, device, runtime, init, nesting and capture repairs are preserved, not reimplemented
+or implicitly published. A collected red regression reached injected start with an
+independently matching configuration pin and a nonempty `HostConfig.Links`. Pinning a
+link name does not pin the linked container's environment/ports: Moby builds linked
+values during OCI construction and merges them into the process environment. The
+inspected Moby revision enables the deprecated environment behavior through a daemon
+option; this guard cannot infer that setting or certify the donor container.
+
+Both inspections now require explicit `HostConfig.Links`, JSON null or an empty array.
+Missing, malformed and nonempty evidence refuses with sanitized exit 1 before diff/start,
+even with matching approval. Collected coverage includes enabled links, missing/type-
+confused evidence, second-inspection drift and both disabled forms with exact-ID one-start
+ordering and preserved child exit status. No approval, witness, financial worker, schema
+or dependency behavior changed. See the [external-container contract](maintenance/external-container-admission.md).
+
+The clean Python **3.12.3** shared-tree launcher module returned **195 passed**; its
+complete suite returned **1,717 tests and 77 subtests**, with no skips, in 108.12 seconds.
+The isolated HEAD-plus-own-increment candidate returned **106 focused tests** and
+**1,628 full-suite tests plus 77 subtests**, with no skips, in 108.63 seconds. The shared
+counts include preserved unpublished repairs; the isolated candidate excludes them.
+Candidate-index/export Git trees matched. Compilation, dependency consistency, Markdown
+links, intended-index literal inventory (**274 active lines**) and whitespace passed.
+CI-isolation shards returned **35 passed/52 subtests**, **36 passed/52 subtests** and
+**85 passed**. Final documentation-only recording is checked with the exact candidate.
+
+**Publication blocked:** the existing local pre-commit hook was exercised against the
+exact candidate and refused because it still tracks unchanged historical `vision.md`.
+The pre-existing staged deletion remains unrelated and excluded. The original index is
+preserved; no hook bypass or policy change is authorized. No maintenance commit, push
+or new CI run exists. Publication requires separately authorized policy resolution.
+Freshly fetched `origin/main` and local HEAD both resolve to `b31a27c2b5dc509fe0ddd9877f9a3c09d90e16e1`.
+
+**Work-item grounding:** Batch 0, O4/O3 and supporting O1; deployment/startup owns
+`scripts/custody_external_launcher.py` and its collected launcher tests. The scheduled
+maintainer acts under bounded one-issue authorization. Non-Atlas settlement, transitional
+custody and independent artifact/release authority remain unchanged. This contains one
+late-bound environment route only, not complete executable closure or all daemon-generated
+values. Engine tests are offline/injected; no actual linked-container, image-mutation or
+claim/run/seal rehearsal was executed. Protected deployment, complete image closure,
+external-image witness binding and real mutation/crash/restore acceptance remain open.
+Production and real funds remain blocked.
+
+### Maintenance increment — reject nonstandard JSON numeric evidence (2026-10-14)
+
+**Implemented narrowly offline; Batch 0 and publication remain blocked.** The first
+unresolved priority remains external pre-execution artifact authority. Earlier local
+repairs are preserved, not reimplemented or implicitly published. Six collected red
+regressions reached injected start with matching independent approval when inspection
+JSON contained bare `NaN`, `Infinity` or `-Infinity` in a nested, unpinned state field,
+on the first or second inspection. Python's default decoder accepts these nonstandard
+tokens; canonical encoding rejected them only inside the selected digest projection.
+
+Inspection decoding now explicitly refuses those three tokens anywhere in the response.
+The existing invalid-evidence boundary returns sanitized exit 1, no raw data/traceback,
+and no diff/start after rejection. Three quoted-string controls preserve ordinary JSON
+text, the exact-ID one-start ordering and attached child exit status. No approval,
+financial worker, dependency, custody schema or witness behavior changed. The shared-tree
+focused launcher module returned **204 passed**, after the six reproductions failed
+before the fix. Its clean Python **3.12.3** complete suite returned **1,726 passed and
+77 subtests passed**, with no skips, in 111.13 seconds. The isolated HEAD-plus-own-fix
+candidate returned **100 focused tests** and **1,622 full-suite tests plus 77 subtests**,
+with no skips, in 107.10 seconds. The shared counts include earlier unpublished repairs;
+the isolated candidate excludes them. Candidate/export Git trees matched. Compilation,
+dependency consistency, Markdown links, intended-index token inventory (**274 active
+lines**) and whitespace passed. CI-isolation shards returned **35 passed/52 subtests**,
+**36 passed/52 subtests** and **85 passed**.
+
+**Publication blocked:** the existing pre-commit hook was executed against the exact
+candidate and returned exit 1 because it retains unchanged historical `vision.md`.
+Its pre-existing staged deletion is unrelated and excluded. The hook was not bypassed
+or changed; the original index remains byte-for-byte unchanged. No maintenance commit,
+push or new CI run exists. Publication requires separately authorized policy resolution.
+Freshly fetched `origin/main` and local HEAD both resolve to
+`b31a27c2b5dc509fe0ddd9877f9a3c09d90e16e1`.
+
+**Work-item grounding:** Batch 0, O4/O3 with supporting O1; deployment/startup owns
+`scripts/custody_external_launcher.py` and its collected tests. The scheduled maintainer
+acts under bounded one-issue authorization; non-Atlas settlement, transitional custody
+and independent artifact/release authority remain unchanged. See the
+[external-container contract](maintenance/external-container-admission.md). This fixes
+malformed-evidence acceptance only, not complete executable closure or Docker byte
+attestation. Engine tests are injected/offline; protected deployment, complete image
+closure, external-image witness binding and real mutation/crash/restore/claim-run-seal
+acceptance remain open. Production and real funds remain blocked.
+
+### Maintenance increment — refuse container-shared network files (2026-10-14)
+
+**Implemented narrowly offline; Batch 0 and publication remain blocked.** The first
+unresolved priority remains external pre-execution artifact authority. All pre-existing
+local repairs are preserved, not reimplemented or implicitly published. Two collected
+red regressions reached injected start with matching independent approval and
+`HostConfig.NetworkMode=container:<name-or-full-id>`. Moby's network initialization
+selects that donor during startup and assigns its hostname, hosts and resolver paths;
+pinning the donor reference does not pin those mutable bytes outside the approved image
+and explicit bind projection.
+
+Both inspections now require a nonempty string network mode that does not start with
+`container:`. Missing, malformed and container-sharing evidence refuses with sanitized
+exit 1 before any later diff/start, even with matching approval. Focused coverage includes
+name/full-ID donors, missing/type-confused evidence, second-inspection drift and unchanged
+exact-ID one-start/child-exit controls for other approved modes. No dependency, financial
+worker, schema or witness behavior changed. The shared-tree focused module returned
+**222 passed**; its clean Python **3.12.3** complete suite returned **1,744 passed and
+77 subtests passed**, with no skips, in 108.65 seconds. The isolated HEAD-plus-own-fix
+candidate returned **109 focused tests** and **1,631 full-suite tests plus 77 subtests**,
+with no skips, in 108.87 seconds. The shared counts include preserved unpublished
+repairs; the isolated candidate excludes them. Candidate/export Git trees matched.
+Compilation, dependency consistency, Markdown links, intended-index literal inventory
+(**274 active lines**) and candidate whitespace passed. CI-isolation shards returned
+**35 passed/52 subtests**, **36 passed/52 subtests** and **85 passed**.
+
+**Publication blocked:** the existing pre-commit hook was exercised against the exact
+candidate and returned exit 1 because it still tracks unchanged historical `vision.md`.
+Its pre-existing staged deletion is unrelated and excluded. The hook was not bypassed
+or changed; the original index remains byte-for-byte unchanged. No maintenance commit,
+push or new CI run exists. Publication requires separately authorized policy resolution.
+Freshly fetched `origin/main` and local HEAD both resolve to
+`b31a27c2b5dc509fe0ddd9877f9a3c09d90e16e1`.
+
+**Work-item grounding:** Batch 0, O4/O3 with supporting O1; deployment/startup owns
+`scripts/custody_external_launcher.py` and its collected tests. The scheduled maintainer
+acts under bounded one-issue authorization. Non-Atlas settlement, transitional custody
+and independent artifact/release authority remain unchanged. See the
+[external-container contract](maintenance/external-container-admission.md). This contains
+cross-container network-file reuse only: other modes, host/daemon-managed DNS/hostname
+files and runtime pseudo-filesystems remain outside immutable-image byte claims. Engine
+tests are injected/offline, not a real Docker donor-file or claim/run/seal rehearsal.
+Protected deployment, complete image closure, external-image witness binding and real
+mutation/crash/restore acceptance remain open. Production and real funds remain blocked.
 
 ## Historical verdict — 2026-10-02
 
