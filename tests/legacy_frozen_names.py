@@ -84,6 +84,10 @@ def check(name, cond, extra=""):
 
 EXPECTED_SCHEMA = {
     "accounts": ["nickname", "chain", "ticker", "name", "address", "balance", "timestamp"],
+    # Additive operator-alert delivery outbox: persisted before delivery, retried, and
+    # dead-lettered so an operator notification cannot be lost. No existing row is touched.
+    "alert_outbox": ["id", "level", "event", "message", "payload_json", "attempts",
+                     "created_timestamp", "last_attempt_timestamp", "last_error", "status"],
     "attempts": ["action_key", "count", "last_timestamp"],
     "counters": ["name", "value"],
     # Explicit additive safety migration: old column names remain unchanged.

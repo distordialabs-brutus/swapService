@@ -292,6 +292,22 @@ def _summary_in_snapshot(conn) -> dict:
             recovery_unresolved = True
             ratio_bps = None
 
+    # Operator alerts that never reached a channel: counts per level and the oldest.
+    undelivered_alerts = {"counts": {}, "oldest": None}
+    if conn is not None:
+        try:
+            for r in rows(
+                    """SELECT level, COUNT(*) AS n, MIN(created_timestamp) AS oldest
+                       FROM alert_outbox WHERE status <> ?
+                       GROUP BY level""", (state_db.ALERT_OUTBOX_SENT,)):
+                undelivered_alerts["counts"][r["level"]] = r["n"]
+                oldest = r["oldest"]
+                if oldest and (undelivered_alerts["oldest"] is None
+                               or oldest < undelivered_alerts["oldest"]):
+                    undelivered_alerts["oldest"] = oldest
+        except sqlite3.Error:
+            pass  # an outbox that predates the schema stays readable for operators
+
     return {
         "now": now,
         "recovery_admission": recovery,
@@ -315,6 +331,7 @@ def _summary_in_snapshot(conn) -> dict:
             "waterline_nexus": hb.get("wline_nxs"),
         },
         "counts": counts,
+        "undelivered_alerts": undelivered_alerts,
     }
 
 
@@ -479,11 +496,26 @@ def api_issues() -> dict:
         "SELECT action_key, count, last_timestamp FROM attempts WHERE count >= ? "
         "ORDER BY last_timestamp DESC LIMIT 100", (max_attempts,))
 
+    # Operator alerts that never reached a channel: pending retries and dead letters.
+    undelivered = _rows(
+        """SELECT id, level, event, message, attempts, created_timestamp,
+                   last_attempt_timestamp, last_error, status
+           FROM alert_outbox WHERE status <> ?
+           ORDER BY created_timestamp ASC LIMIT 100""",
+        (state_db.ALERT_OUTBOX_SENT,))
+    for r in undelivered:
+        r["age_sec"] = (now - int(r["created_timestamp"])) if r.get("created_timestamp") else None
+
     return {
         "now": now,
         "issues": issues,
         "exhausted_attempts": exhausted,
-        "counts": {"issues": len(issues), "exhausted": len(exhausted)},
+        "undelivered_alerts": undelivered,
+        "counts": {
+            "issues": len(issues),
+            "exhausted": len(exhausted),
+            "undelivered": len(undelivered),
+        },
     }
 
 
@@ -721,6 +753,14 @@ function renderSummary(d){
   if(d.ratio!=null&&d.ratio<1){const x=el("div","banner bad");
     x.append(el("strong",null,"Under-collateralised. "));
     x.append(document.createTextNode("Vault "+SOL+" is below circulating "+NXS+"."));b.append(x);}
+  const ua=d.undelivered_alerts;
+  if(ua&&ua.counts&&ua.counts.critical){
+    const x=el("div","banner bad");
+    x.append(el("strong",null,"ALERTS UNDELIVERED — "));
+    x.append(document.createTextNode(ua.counts.critical+" critical operator alert"+(ua.counts.critical>1?"s":"")+
+      (ua.oldest?" — oldest "+AGE((Date.now()/1000)-ua.oldest):"")+"; open Issues for the full outbox."));
+    b.append(x);
+  }
 
   const c=document.getElementById("cards");c.textContent="";
   const rc=unresolved?"bad":d.ratio==null?"":d.ratio>=1?"ok":d.ratio>=0.99?"warn":"bad";
@@ -779,6 +819,22 @@ function renderIssues(d){
       tr.append(el("td","mono",a.action_key));
       tr.append(el("td","num",a.count));
       tr.append(el("td",null,TS(a.last_timestamp)));
+      return tr;}));
+  }
+  if(d.undelivered_alerts.length){
+    p.append(el("h3",null,"Undelivered operator alerts"));
+    p.append(table(["Level","Status","Age","Attempts","Event","Last error","ID"],d.undelivered_alerts,a=>{
+      const tr=el("tr");
+      const lv=el("td");lv.append(el("span",a.level&&a.level==="critical"?"pill bad":"pill",a.level||"—"));
+      tr.append(lv);
+      const st=el("td");
+      st.append(el("span",a.status&&a.status==="abandoned"?"pill bad":"pill",a.status||"—"));
+      tr.append(st);
+      tr.append(el("td",null,AGE(a.age_sec)));
+      tr.append(el("td","num",a.attempts));
+      tr.append(el("td","mono",a.event||"—"));
+      tr.append(el("td","mono",a.last_error||"—"));
+      tr.append(el("td","mono",a.id||"—"));
       return tr;}));
   }
 }

@@ -242,6 +242,13 @@ def _run_with_watchdog(func, label, budget_sec):
               f"(its next cycle will be skipped until it finishes)")
 
 
+def _drain_alerts():
+    """Deliver due operator alerts and dead-letter the ones that exhausted their budget."""
+    delivered, abandoned = alerts.deliver_pending()
+    if delivered or abandoned:
+        print(f"[alerts] outbox drain: delivered={delivered} abandoned={abandoned}")
+
+
 def _process_stale_deposits():
     """Process stale deposits that exceed STALE_DEPOSIT_QUARANTINE_SEC.
     
@@ -683,6 +690,11 @@ def _run_admitted(lease):
                     print(f"[waterline] Applied proposals: solana={sol_wl} nexus={nxs_wl}")
             except Exception as e:
                 print(f"[waterline] apply error: {e}")
+            
+            # Drain the durable operator alert outbox: retries pending deliveries, dead-letters
+            # alerts that exhausted their budget. Alert delivery happens at least once per
+            # main-loop cycle, so a process restart cannot lose an unsent alert.
+            _run_with_watchdog(_drain_alerts, "alert_outbox", 30)
             
             # Cleanup expired reservations periodically
             try:

@@ -533,6 +533,12 @@ ALERT_WEBHOOK_URL = os.getenv("ALERT_WEBHOOK_URL")      # POSTed a JSON body
 ALERT_COMMAND = os.getenv("ALERT_COMMAND")              # argv0; receives JSON on stdin
 ALERT_MIN_INTERVAL_SEC = int(os.getenv("ALERT_MIN_INTERVAL_SEC", "300"))  # per-event dedupe
 
+# Durable delivery: every alert is persisted to the state DB before delivery and
+# retried from there if the channel is down. alerts are never dropped; those that
+# exhaust their budget are dead-lettered so the dashboard can report them.
+MAX_ALERT_ATTEMPTS = int(os.getenv("MAX_ALERT_ATTEMPTS", "5"))
+ALERT_RETRY_COOLDOWN_SEC = int(os.getenv("ALERT_RETRY_COOLDOWN_SEC", "60"))
+
 # Minimum vault value before a read-only backing-surplus alert is emitted.
 _SURPLUS_THRESH_SOLANA = os.getenv("BACKING_SURPLUS_MINT_THRESHOLD_USDC", "20")
 try:

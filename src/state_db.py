@@ -1101,6 +1101,10 @@ def _init_db_with_connection(conn: sqlite3.Connection) -> None:
         "status TEXT, PRIMARY KEY (txid, contract_id)",
     )
 
+    # Operator alert delivery outbox: alerts are persisted before delivery so a crash
+    # or a dead channel can never lose them; the main loop retries and dead-letters.
+    _ensure_alert_outbox(cursor)
+
 
 def init_db() -> None:
     """Initialize or migrate the database atomically and always release its lock."""
@@ -5589,6 +5593,166 @@ def reset_attempts(action_key: str):
     """, (action_key,))
     conn.commit()
     conn.close()
+
+
+## Alert delivery outbox.
+
+# Operator alerts used to be handed to a fire-and-forget thread: nothing was persisted,
+# so a crash or process exit silently lost them, and a downed channel was never retried.
+# Every alert is now durably enqueued before delivery, retried from the outbox within a
+# budget and cooldown, and dead-lettered ('abandoned') once the budget is exhausted so
+# the dashboard can report exactly what never reached the operator.
+
+
+ALERT_OUTBOX_PENDING = "pending"
+ALERT_OUTBOX_SENT = "sent"
+ALERT_OUTBOX_ABANDONED = "abandoned"
+
+
+def _ensure_alert_outbox(cursor):
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS alert_outbox (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            level TEXT NOT NULL,
+            event TEXT NOT NULL,
+            message TEXT,
+            payload_json TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+            created_timestamp INTEGER NOT NULL,
+            last_attempt_timestamp INTEGER,
+            last_error TEXT,
+            status TEXT NOT NULL DEFAULT 'pending'
+        )
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_alert_outbox_status
+        ON alert_outbox(status, created_timestamp)
+    """)
+
+
+def enqueue_alert(level: str, event: str, message: str, payload_json: str) -> int:
+    """Durably record an alert before any delivery attempt. Returns the row id."""
+    import time
+    now = int(time.time())
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        with conn:
+            cursor = conn.cursor()
+            _ensure_alert_outbox(cursor)
+            cursor.execute("""
+                INSERT INTO alert_outbox (
+                    level, event, message, payload_json, attempts,
+                    created_timestamp, status)
+                VALUES (?, ?, ?, ?, 0, ?, ?)
+            """, (str(level), str(event), str(message), str(payload_json), now, ALERT_OUTBOX_PENDING))
+            return int(cursor.lastrowid)
+    finally:
+        conn.close()
+
+
+def load_alert(alert_id: int) -> dict | None:
+    """Fetch one alert row as a dict, or None when the id is unknown."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        cursor = conn.cursor()
+        _ensure_alert_outbox(cursor)
+        cursor.execute("SELECT * FROM alert_outbox WHERE id = ?", (int(alert_id),))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def _alert_limits():
+    """Delivery budget and cooldown; config is imported lazily to avoid a cycle."""
+    try:
+        from . import config as _cfg
+        return (int(getattr(_cfg, "MAX_ALERT_ATTEMPTS", 5)),
+                int(getattr(_cfg, "ALERT_RETRY_COOLDOWN_SEC", 60)))
+    except Exception:
+        return (5, 60)
+
+
+def due_alert_rows(limit: int | None = None, max_attempts: int | None = None,
+                   cooldown_sec: int | None = None) -> list[dict]:
+    """Alerts whose attempt budget and cooldown allow delivery right now, oldest first."""
+    import time as _time
+    cfg_max, cfg_cooldown = _alert_limits()
+    if max_attempts is None:
+        max_attempts = cfg_max
+    if cooldown_sec is None:
+        cooldown_sec = cfg_cooldown
+
+    sql = """
+        SELECT id, level, event, message, payload_json, attempts, created_timestamp,
+               last_attempt_timestamp, last_error, status
+        FROM alert_outbox WHERE status = ? AND attempts < ?
+            AND (last_attempt_timestamp IS NULL
+                 OR (? - last_attempt_timestamp) >= ?)
+        ORDER BY created_timestamp ASC"""
+    params = (ALERT_OUTBOX_PENDING, int(max_attempts), int(_time.time()), int(cooldown_sec))
+    if limit is not None:
+        sql += " LIMIT ?"
+        params += (int(limit),)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        cursor = conn.cursor()
+        _ensure_alert_outbox(cursor)
+        return [dict(r) for r in cursor.execute(sql, params).fetchall()]
+    finally:
+        conn.close()
+
+
+def record_alert_delivery(alert_id: int, delivered: bool, error: str | None = None) -> dict:
+    """Record one delivery attempt: 'sent', still 'pending', or 'abandoned' when spent.
+
+    Returns {'id', 'attempts', 'status'} for the row after the update.
+    """
+    max_attempts, _ = _alert_limits()
+    now = int(time.time())
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cursor = conn.cursor()
+        _ensure_alert_outbox(cursor)
+        with conn:
+            cursor.execute("""
+                UPDATE alert_outbox SET attempts = attempts + 1,
+                    last_attempt_timestamp = ?,
+                    last_error = ?,
+                    status = CASE WHEN ? THEN ?
+                        WHEN attempts + 1 >= ? THEN ? ELSE ? END
+                WHERE id = ?
+            """, (now, error, int(delivered), ALERT_OUTBOX_SENT, max_attempts,
+                  ALERT_OUTBOX_ABANDONED, ALERT_OUTBOX_PENDING, int(alert_id)))
+            cursor.execute("""
+                SELECT id, attempts, status FROM alert_outbox WHERE id = ?
+            """, (int(alert_id),))
+            row = cursor.fetchone()
+        if not row:
+            raise ValueError(f"alert_outbox row {alert_id} not found")
+        return {"id": int(row[0]), "attempts": int(row[1]), "status": row[2]}
+    finally:
+        conn.close()
+
+
+def undelivered_alerts(limit: int = 100) -> list[dict]:
+    """Alerts that never reached the operator: pending retries and abandoned dead letters."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        cursor = conn.cursor()
+        _ensure_alert_outbox(cursor)
+        cursor.execute("""
+            SELECT id, level, event, message, attempts, created_timestamp,
+                   last_attempt_timestamp, last_error, status
+            FROM alert_outbox WHERE status <> ?
+            ORDER BY created_timestamp ASC LIMIT ?
+        """, (ALERT_OUTBOX_SENT, int(limit)))
+        return [dict(r) for r in cursor.fetchall()]
+    finally:
+        conn.close()
 
 
 ## Waterline proposals (ephemeral, cleared after applying)

@@ -245,6 +245,10 @@ The two field names must be non-empty and distinct at runtime and must already e
 | `ALERT_WEBHOOK_URL` | empty | JSON webhook route. |
 | `ALERT_COMMAND` | empty | Executable receiving alert JSON on stdin. |
 | `ALERT_MIN_INTERVAL_SEC` | `300` | Per-event deduplication interval. |
+| `MAX_ALERT_ATTEMPTS` | `5` | Delivery attempts per alert before it is dead-lettered (`abandoned`). |
+| `ALERT_RETRY_COOLDOWN_SEC` | `60` | Minimum spacing between delivery attempts of the same alert. |
+
+Alerts are persisted to the state DB outbox before delivery and retried from there by the main loop, so a restart or a temporarily dead channel cannot lose an operator notification. Alerts that exhaust `MAX_ALERT_ATTEMPTS` are dead-lettered and visible under the dashboard's undelivered-alerts counts, pending retries and abandonments alike.
 
 An unavailable, malformed, incomplete or discrepant balance reconciliation latches new exposure paused until a later explicitly healthy result.
 
