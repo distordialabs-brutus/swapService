@@ -50,7 +50,7 @@ Excluded surfaces are explicit:
 | `.github/copilot-instructions.md` | Display metadata | Keep money-path and Nexus/Solana safety guidance synchronized with the validated canonical configuration. |
 <!-- token-pair-inventory: ASSET_STANDARD.md:15,171,183,188,189,451 -->
 | `ASSET_STANDARD.md` | Planned/schema example + Public pair-specific example | Keep v1 distinct from planned v2; Nexus `format=basic` fixes field sets, so never relabel an incomplete v1 asset as v2. |
-<!-- token-pair-inventory: CONFIG.md:24,25,28,38,39,40,41,42,43,44,45,46,47,48,49,50,53,59,60,61,62,71,73,81,108,109,110,244,257,258,259,272,292,293 -->
+<!-- token-pair-inventory: CONFIG.md:24,25,28,38,39,40,41,42,43,44,45,46,47,48,49,50,53,59,60,61,62,71,73,81,108,109,110,244,261,262,263,276,296,297 -->
 | `CONFIG.md` | Migration alias + Public pair-specific example | Document implemented canonical configuration, exact defaults/alias behavior and currently legacy-only settings; do not advertise future provider-v2 settings as active. |
 <!-- token-pair-inventory: README.md:3,41,44,51 -->
 | `README.md` | Display metadata + Migration alias | Deployment-neutral instructions describe the configured pair and existing public-record fields; retained token literals identify defaults or compatibility aliases only. |
@@ -68,11 +68,11 @@ Excluded surfaces are explicit:
 | `nexus_transfer_operator.py` | Runtime semantics + Frozen compatibility state | Intent/hold reason labels must move only through a tested durable-state migration. |
 <!-- token-pair-inventory: quarantine_viewer.py:25,26,27,28 -->
 | `quarantine_viewer.py` | Display metadata + Frozen compatibility state | Present canonical symbols while retaining existing state labels until migrated. |
-<!-- token-pair-inventory: src/config.py:12,13,15,27,31,33,39,84,85,86,88,89,90,91,92,93,111,112,114,116,117,118,120,121,124,128,129,130,131,137,166,171,181,187,188,190,209,210,211,213,215,216,218,229,230,270,314,315,316,318,321,322,324,330,332,334,335,356,360,362,365,370,374,388,389,391,393,404,405,407,412,415,416,418,423,431,442,443,445,521,522,523,524,527,528,537,540,542 -->
+<!-- token-pair-inventory: src/config.py:12,13,15,27,31,33,39,84,85,86,88,89,90,91,92,93,111,112,114,116,117,118,120,121,124,128,129,130,131,137,166,171,181,187,188,190,209,210,211,213,215,216,218,229,230,270,314,315,316,318,321,322,324,330,332,334,335,356,360,362,365,370,374,388,389,391,393,404,405,407,412,415,416,418,423,431,442,443,445,521,522,523,524,527,528,543,546,548 -->
 | `src/config.py` | Runtime semantics + Migration alias + Frozen compatibility state | The immutable `SwapPairConfig` exists. Extend remaining consumer coverage without renaming frozen state; preserve the exact conflict/precedence behavior of each supported legacy input. |
-<!-- token-pair-inventory: src/dashboard.py:44,45,46,47,692 -->
+<!-- token-pair-inventory: src/dashboard.py:44,45,46,47,724 -->
 | `src/dashboard.py` | Display metadata | Dashboard labels/fallbacks must consume canonical display symbols and never control custody or routing. |
-<!-- token-pair-inventory: src/main.py:96,98,100,108,109,110,111,383,384,397,400,448,449,451,455,520,535,577 -->
+<!-- token-pair-inventory: src/main.py:96,98,100,108,109,110,111,390,391,404,407,455,456,458,462,527,542,584 -->
 | `src/main.py` | Runtime semantics + Display metadata | Production admission and output must use canonical identities/terms, preserving only compatibility names where migration requires them. |
 <!-- token-pair-inventory: src/nexus_client.py:350,355,428,514,1047,1758 -->
 | `src/nexus_client.py` | Runtime semantics + Display metadata | Require immutable Nexus register identity for authorization/reconciliation; retain token name only where the Nexus API requires it and for presentation. |
@@ -80,7 +80,7 @@ Excluded surfaces are explicit:
 | `src/solana_client.py` | Runtime semantics + Frozen compatibility state | Route transfers, payout caps and persisted labels through the canonical pair object without renaming live state prematurely. |
 
 | `src/startup_recovery.py` | Runtime semantics | Recovery must preserve the validated pair/custody identity and exact integer amounts. |
-<!-- token-pair-inventory: src/state_db.py:19,6339 -->
+<!-- token-pair-inventory: src/state_db.py:19,6503 -->
 | `src/state_db.py` | Frozen compatibility state + Display metadata | Existing SQLite names stay stable until a separately tested append-only migration; new labels derive from canonical metadata. |
 <!-- token-pair-inventory: src/swap_nexus.py:92,328,467,866 -->
 | `src/swap_nexus.py` | Runtime semantics | Nexus-to-Solana processing must use canonical token/custody/fee configuration and durable intent rules. |
