@@ -470,6 +470,15 @@ def parse_strict_boolean(name: str, value: str | None = None, *, default: bool =
 
 PRODUCTION_MODE = parse_strict_boolean("SWAP_PRODUCTION_MODE", default=False)
 
+# Optional fail-closed chain identity pin. Verifying the Nexus endpoint against its
+# height-zero block hash requires the node's -indexheight index; an operator who cannot
+# provide it can disable the check with CUSTODY_NEXUS_IDENTITY_CHECK=false and accepts
+# that swapService cannot detect a differently-versioned LLL-TAO node. With the check
+# enabled, a missing pin, an unsupported query, or a mismatched identity refuses admission.
+CUSTODY_NEXUS_IDENTITY_CHECK = parse_strict_boolean(
+    "CUSTODY_NEXUS_IDENTITY_CHECK", default=True
+)
+
 ALLOW_LEGACY_PROVIDER_V1 = parse_strict_boolean(
     "ALLOW_LEGACY_PROVIDER_V1", default=False
 )

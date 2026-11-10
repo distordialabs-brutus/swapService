@@ -231,3 +231,65 @@ def test_verify_rejects_unavailable_queries_without_leaking_transport_details(mo
     with pytest.raises(admission.AdmissionError) as caught:
         custody_chain.verify()
     assert "secret" not in str(caught.value)
+
+
+def test_configuration_fingerprint_binds_nexus_identity_check_toggle(monkeypatch):
+    fake = SimpleNamespace(PRODUCTION_MODE=True, CUSTODY_NEXUS_IDENTITY_CHECK=True)
+    baseline = admission.configuration_fingerprint(fake)
+    fake.CUSTODY_NEXUS_IDENTITY_CHECK = False
+    assert admission.configuration_fingerprint(fake) != baseline
+
+
+@pytest.mark.parametrize("value", [None, "abc", "A" * 256])
+def test_configuration_fingerprint_ignores_nexus_identity_when_check_disabled(monkeypatch, value):
+    fake = SimpleNamespace(PRODUCTION_MODE=True, CUSTODY_NEXUS_IDENTITY_CHECK=False)
+    if value is None:
+        monkeypatch.delenv("CUSTODY_NEXUS_GENESIS_HASH", raising=False)
+    else:
+        monkeypatch.setenv("CUSTODY_NEXUS_GENESIS_HASH", value)
+    assert isinstance(admission.configuration_fingerprint(fake), str)
+
+
+def test_verify_requires_nexus_identity_when_check_enabled_by_default(monkeypatch):
+    from src import custody_chain
+
+    monkeypatch.delenv("CUSTODY_NEXUS_GENESIS_HASH", raising=False)
+    monkeypatch.setattr(
+        custody_chain.requests, "post", Mock(return_value=_response({"result": SOLANA_GENESIS}))
+    )
+    with pytest.raises(admission.AdmissionError, match="configuration missing"):
+        custody_chain.verify()
+
+
+def test_verify_skips_nexus_identity_check_when_disabled(monkeypatch):
+    from src import custody_chain
+
+    monkeypatch.setattr(config, "CUSTODY_NEXUS_IDENTITY_CHECK", False)
+    monkeypatch.delenv("CUSTODY_NEXUS_GENESIS_HASH", raising=False)
+    monkeypatch.setattr(
+        custody_chain.nexus_client, "_run", Mock(side_effect=AssertionError("skipped"))
+    )
+    monkeypatch.setattr(
+        custody_chain.requests, "post", Mock(return_value=_response({"result": SOLANA_GENESIS}))
+    )
+
+    assert custody_chain.verify() is None
+
+
+@pytest.mark.parametrize("value", [None, "abc", "A" * 256])
+def test_verify_ignores_nexus_identity_configuration_when_disabled(monkeypatch, value):
+    from src import custody_chain
+
+    monkeypatch.setattr(config, "CUSTODY_NEXUS_IDENTITY_CHECK", False)
+    if value is None:
+        monkeypatch.delenv("CUSTODY_NEXUS_GENESIS_HASH", raising=False)
+    else:
+        monkeypatch.setenv("CUSTODY_NEXUS_GENESIS_HASH", value)
+    monkeypatch.setattr(
+        custody_chain.nexus_client, "_run", Mock(side_effect=AssertionError("skipped"))
+    )
+    monkeypatch.setattr(
+        custody_chain.requests, "post", Mock(return_value=_response({"result": SOLANA_GENESIS}))
+    )
+
+    assert custody_chain.verify() is None

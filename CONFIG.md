@@ -254,7 +254,7 @@ An unavailable, malformed, incomplete or discrepant balance reconciliation latch
 
 ## Production admission
 
-`SWAP_PRODUCTION_MODE` defaults to `false`. It and `NEXUS_SWAP_RECEIPTS_ENABLED` are parsed strictly: accepted values are `1/true/yes/on` and `0/false/no/off`, case-insensitively with surrounding whitespace ignored. Any other present value raises. Receipt publication is development/test-only: production admission rejects an explicit receipt enablement until its independent NXS-spend controls and registration migration exist.
+`SWAP_PRODUCTION_MODE` defaults to `false`. It, `NEXUS_SWAP_RECEIPTS_ENABLED` and `CUSTODY_NEXUS_IDENTITY_CHECK` are parsed strictly: accepted values are `1/true/yes/on` and `0/false/no/off`, case-insensitively with surrounding whitespace ignored. Any other present value raises. The custody pathway's optional Nexus height-zero identity check defaults to enabled and is documented with the witness protocol in [docs/maintenance/sealed-custody-admission.md](docs/maintenance/sealed-custody-admission.md); set it to `false` when the node cannot answer that query and accept responsibility for node version correctness. Receipt publication is development/test-only: production admission rejects an explicit receipt enablement until its independent NXS-spend controls and registration migration exist.
 
 When true, startup refuses before polling unless all of these are present:
 

@@ -105,7 +105,7 @@ CUSTODY_NEXUS_GENESIS_HASH=<independently approved height-zero hash: 256 lowerca
 
 There is no development/default opt-out. Missing witness configuration blocks admission.
 
-Obtain chain pins from independently verified deployment records, never by automatically trusting the unverified runtime endpoint. The Nexus height-zero block hash is not a user's sigchain genesis. The Nexus node must support `ledger/get/blockhash height=0` with its `-indexheight` index enabled; unavailable indexing/query results refuse admission rather than falling back to a profile identity. The custody host/filesystem must enforce exclusive trusted writing: no concurrent live restore or unauthorized in-place edit is supported; restoring requires a stopped service and the singleton lock. Host/root compromise is outside this control.
+Obtain chain pins from independently verified deployment records, never by automatically trusting the unverified runtime endpoint. The Nexus height-zero block hash is not a user's sigchain genesis. With the optional Nexus identity check enabled (default), the Nexus node must support `ledger/get/blockhash height=0` with its `-indexheight` index enabled, and unavailable indexing/query results refuse admission rather than falling back to a profile identity. Set `CUSTODY_NEXUS_IDENTITY_CHECK=false` to disable the check: admission then skips the query entirely and the operator accepts responsibility for verifying their node's LLL-TAO version. The custody host/filesystem must enforce exclusive trusted writing: no concurrent live restore or unauthorized in-place edit is supported; restoring requires a stopped service and the singleton lock. Host/root compromise is outside this control.
 
 Required startup order:
 

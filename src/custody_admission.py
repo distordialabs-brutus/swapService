@@ -471,6 +471,10 @@ def configuration_fingerprint(config_module: Any = None) -> str:
     silently fall outside the certificate.  Credential and transient session values are
     deliberately excluded (with their names recorded); locations are represented only by
     hashes so the published fingerprint cannot disclose private URLs or filesystem paths.
+
+    The Solana genesis pin is always part of the binding.  The Nexus height-zero pin is part
+    of admission only while CUSTODY_NEXUS_IDENTITY_CHECK is enabled; when disabled, the
+    query and its pin are omitted and the operator accepts responsibility for node version.
     """
     if config_module is None:
         from . import config as config_module
@@ -528,8 +532,9 @@ def configuration_fingerprint(config_module: Any = None) -> str:
 
     try:
         solana_genesis = os.getenv("CUSTODY_SOLANA_GENESIS_HASH")
+        nexus_check_enabled = getattr(config_module, "CUSTODY_NEXUS_IDENTITY_CHECK", True)
         nexus_genesis = os.getenv("CUSTODY_NEXUS_GENESIS_HASH")
-        if not solana_genesis or not nexus_genesis:
+        if not solana_genesis or (nexus_check_enabled and not nexus_genesis):
             raise AdmissionError("custody chain identity configuration missing")
         try:
             valid_solana_genesis = (
@@ -538,10 +543,16 @@ def configuration_fingerprint(config_module: Any = None) -> str:
             )
         except Exception:
             valid_solana_genesis = False
-        if (not valid_solana_genesis
-                or nexus_genesis != nexus_genesis.strip()
-                or len(nexus_genesis) != 256
-                or any(character not in _HEX for character in nexus_genesis)):
+        if nexus_check_enabled:
+            valid_nexus_genesis = (
+                isinstance(nexus_genesis, str)
+                and nexus_genesis == nexus_genesis.strip()
+                and len(nexus_genesis) == 256
+                and all(character in _HEX for character in nexus_genesis)
+            )
+        else:
+            valid_nexus_genesis = True
+        if not valid_solana_genesis or not valid_nexus_genesis:
             raise AdmissionError("custody chain identity configuration invalid")
 
         settings: dict[str, object] = {}
@@ -564,12 +575,13 @@ def configuration_fingerprint(config_module: Any = None) -> str:
 
         identity = {
             "format": "custody-effective-config-v2",
+            "nexus_identity_check": nexus_check_enabled,
             "settings": settings,
             "hashed_location_settings": hashed,
             "excluded_sensitive_settings": excluded,
             "expected_chain_identity": {
                 "solana_genesis_hash": solana_genesis,
-                "nexus_height_0_block_hash": nexus_genesis,
+                "nexus_height_0_block_hash": nexus_genesis if nexus_check_enabled else None,
             },
         }
         return hashlib.sha256(_canonical(identity)).hexdigest()
