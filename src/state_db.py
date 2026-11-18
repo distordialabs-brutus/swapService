@@ -313,6 +313,15 @@ def _init_db_with_connection(conn: sqlite3.Connection) -> None:
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS custody_bootstrap (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            deployment_id TEXT NOT NULL,
+            nexus_waterline INTEGER NOT NULL CHECK (nexus_waterline > 0),
+            solana_waterline INTEGER NOT NULL CHECK (solana_waterline > 0)
+        )
+    """)
+
     # Monotonic startup observation boundary, not a restore-completeness certificate.
     # Unseen older Solana sources must not acquire current-term authorization.
     cursor.execute("""
@@ -1749,12 +1758,12 @@ def get_nexus_transfer_intents_by_status(statuses: tuple[str, ...], limit: int =
         conn.close()
 
 
-def latch_empty_custody_recovery(*, nexus_waterline: int, solana_waterline: int) -> bool:
-    """Latch an empty-database restart before replay can manufacture local history.
+def latch_empty_custody_recovery(*, nexus_waterline: int, solana_waterline: int,
+                                 deployment_id: str | None = None) -> bool:
+    """Latch total loss before replay; allow an independently sealed bootstrap image.
 
-    Retained source rows only avoid this *total-loss* containment gate; their presence
-    is not proof of complete/valid history. Other recovery audits remain mandatory.
-    There is deliberately no automatic reset or new-deployment bootstrap override.
+    A bootstrap marker is provisioned offline, not during recovery. It cannot clear
+    a hold, and it does not bypass any chain scan or prove restore completeness.
     """
     if any(type(value) is not int or value <= 0
            for value in (nexus_waterline, solana_waterline)):
@@ -1774,14 +1783,20 @@ def latch_empty_custody_recovery(*, nexus_waterline: int, solana_waterline: int)
             conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
             for table in tables
         )
-        if not has_source_history:
+        bootstrap = conn.execute(
+            "SELECT deployment_id, nexus_waterline, solana_waterline FROM custody_bootstrap WHERE id = 1"
+        ).fetchone() if deployment_id else None
+        approved_empty = (bootstrap is not None and bootstrap[0] == deployment_id
+                          and bootstrap[1] <= nexus_waterline and bootstrap[2] <= solana_waterline)
+        held = not has_source_history and not approved_empty
+        if held:
             conn.execute(
                 """INSERT INTO recovery_admission_holds
                    (id, reason, nexus_waterline, solana_waterline) VALUES (1, ?, ?, ?)""",
                 ("empty_custody_database_recovery_held", nexus_waterline, solana_waterline),
             )
         conn.commit()
-        return not has_source_history
+        return held
     except Exception:
         conn.rollback()
         raise
@@ -5841,6 +5856,17 @@ def get_proposed_nexus_waterline() -> int | None:
     return row[0] if row else None
 
 
+def acknowledge_waterline_proposals(*, solana: int | None, nexus: int | None) -> None:
+    """Drop only proposals covered by a successful publication, not newer work."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        with conn:
+            conn.executemany("DELETE FROM waterline_proposals WHERE chain = ? AND proposed_timestamp <= ?",
+                             [(chain, ts) for chain, ts in (("solana", solana), ("nexus", nexus)) if ts is not None])
+    finally:
+        conn.close()
+
+
 def get_and_clear_proposed_waterlines() -> tuple[int | None, int | None]:
     """Get proposed waterlines and clear them atomically.
     
@@ -6295,6 +6321,18 @@ def update_fee_summary():
 
 
 ## Helper: next reference number
+
+def bootstrap_reference_floor(deployment_id: str) -> int | None:
+    """Read the retained counter of an exact, independently provisioned deployment."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        row = conn.execute("""SELECT counters.value FROM custody_bootstrap JOIN counters
+                            ON counters.name = 'reference' WHERE deployment_id = ?""",
+                           (deployment_id,)).fetchone()
+        return row[0] if row and type(row[0]) is int and 0 <= row[0] < 2**63 - 1 else None
+    finally:
+        conn.close()
+
 
 def next_reference() -> int:
     """Get next unique reference number for Nexus debits.

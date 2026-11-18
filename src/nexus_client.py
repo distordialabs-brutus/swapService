@@ -198,6 +198,13 @@ def _run_via_nexus_api(cmd: list[str], timeout: int) -> tuple[int, str, str]:
 
 
 def _run(cmd: list[str], timeout: int = 15) -> tuple[int, str, str]:
+    # Only explicitly read-only verbs bypass custody signing checks. The same
+    # boundary serves both the local CLI and HTTP transport.
+    if config.PRODUCTION_MODE and cmd[1].split('/')[1:2] not in (
+        ['get'], ['list'], ['history'], ['transactions'], ['validate'],
+    ):
+        from . import custody_chain
+        custody_chain.require_signing()
     cmd = apply_session(cmd)
     if str(getattr(config, "NEXUS_API_URL", "") or "").strip():
         return _run_via_nexus_api(cmd, timeout)
@@ -250,9 +257,10 @@ def get_account_info(nexus_addr: str) -> Optional[Dict[str, Any]]:
         if code != 0:
             return None
         data = _parse_json_lenient(out)
-        if isinstance(data, dict):
-            return data
-        return None
+        if not isinstance(data, dict) or "error" in data:
+            return None
+        account = data.get("result", data)
+        return account if isinstance(account, dict) and "error" not in account else None
     except Exception:
         return None
 
@@ -2150,8 +2158,7 @@ def get_heartbeat_asset() -> Optional[Dict[str, Any]]:
 class DepositScan:
     """Result of a bounded Nexus deposit enumeration.
 
-    Recovery can advance durable state only when ``complete`` is true.  Partial pages are
-    evidence, never proof that no older matching credit exists.
+    Recovery can advance durable state only when ``complete`` is true.
     """
 
     deposits: list[dict]
@@ -2181,8 +2188,8 @@ def treasury_deposit_history_command(treasury_addr: str) -> list[str]:
     """Build the public register-history query for the configured treasury account.
 
     A token-register history omits ordinary account-to-account credits because neither
-    side of those CREDIT contracts is the token supply register.  Deposit admission and
-    wipeout recovery must instead enumerate the immutable treasury account itself.
+    side of those CREDIT contracts is the token supply register. This query serves live
+    deposit polling; wipeout recovery requires a hash-linked history instead.
     """
     treasury = str(treasury_addr or "").strip()
     if not treasury:
@@ -2200,94 +2207,141 @@ def treasury_deposit_history_command(treasury_addr: str) -> list[str]:
     ]
 
 
-def fetch_deposits_since(treasury_addr: str, since_timestamp: int, max_pages: int = 50) -> DepositScan:
-    """Enumerate Nexus transactions containing CREDITs to one canonical treasury.
-
-    ``complete`` is true only when the scan reaches a transaction below the requested
-    waterline or a short/empty terminal page.  CLI, parse, and pagination-budget failures
-    are deliberately incomplete so wipeout recovery cannot advance beyond unseen credits.
-    """
-    results: list[dict] = []
-    limit = 100
-
+def _read_recovery_history(cmd: list[str]) -> tuple[Any, str | None]:
+    """Accept one complete CLI JSON document or the native HTTP result envelope."""
     try:
-        base_cmd = treasury_deposit_history_command(treasury_addr)
-    except ValueError:
-        return DepositScan(results, False, "missing_treasury_account")
+        code, out, _ = _run(cmd, timeout=config.NEXUS_CLI_TIMEOUT_SEC)
+    except Exception:
+        return None, "exception"
+    if code != 0:
+        return None, "cli_error"
+    try:
+        value = json.loads(out, parse_float=Decimal)
+    except (ValueError, TypeError, ArithmeticError, RecursionError):
+        return None, "invalid_response"
+    if isinstance(value, dict):
+        if "error" in value:
+            return None, "invalid_response"
+        value = value.get("result", value)
+    return value, None
 
-    for page in range(max(1, int(max_pages))):
-        cmd = list(base_cmd) + [f"limit={limit}", f"offset={page * limit}"]
-        try:
-            code, out, err = _run(cmd, timeout=getattr(config, "NEXUS_CLI_TIMEOUT_SEC", 12))
-        except Exception as exc:
-            _log("nexus_deposit_page_fetch_failed", level=logging.ERROR, page=page,
-                 error=redact(str(exc)))
-            return DepositScan(results, False, "exception")
-        if code != 0:
-            _log("nexus_deposit_page_fetch_failed", level=logging.ERROR, page=page,
-                 error=redact(err or out))
-            return DepositScan(results, False, "cli_error")
 
-        txs = _parse_json_lenient(out)
-        if not isinstance(txs, list):
-            return DepositScan(results, False, "invalid_response")
-        if not txs:
-            if page > 0:
-                return DepositScan([], False, "pagination_snapshot_unavailable")
-            return DepositScan(results, True)
+_RECOVERY_CONTRACT_OPS = frozenset({
+    "WRITE", "APPEND", "CREATE", "TRANSFER", "CLAIM", "COINBASE", "TRUST",
+    "GENESIS", "DEBIT", "CREDIT", "MIGRATE", "AUTHORIZE", "FEE", "LEGACY",
+})
 
-        page_has_old_txs = False
-        for tx in txs:
-            if not isinstance(tx, dict):
-                return DepositScan(results, False, "invalid_transaction")
-            txid = tx.get("txid")
-            timestamp = tx.get("timestamp")
-            if isinstance(timestamp, bool) or not isinstance(timestamp, int) or timestamp <= 0:
-                return DepositScan(results, False, "invalid_timestamp")
-            confirmations = tx.get("confirmations")
-            if (isinstance(confirmations, bool) or not isinstance(confirmations, int)
-                    or confirmations < 0):
-                return DepositScan(results, False, "invalid_confirmations")
-            if timestamp < since_timestamp:
-                page_has_old_txs = True
+
+def fetch_deposits_since(treasury_addr: str, since_timestamp: int, max_pages: int = 50) -> DepositScan:
+    """Recover from a single hash-linked owner sigchain range, not register offset pages.
+
+    Verified against LLL-TAO 5.1.6 (1185145534a20ed4d2288e4513c505f271be536d):
+    * API/commands/ledger/list-transactions.cpp captures one head and follows hashPrevTx.
+      Detail JSON exposes genesis, sequence, prevhash and contracts (API/json.cpp).
+    * API/commands/register/transactions.cpp instead builds a set using CompareResults,
+      whose comparator returns true on ties; projection can also silently drop rows.
+    * Operation/credit.cpp requires the caller to own the credited account. We require
+      its CREATE on this chain and refuse ownership changes, even below the waterline.
+
+    The legacy page budget now sizes one response (100 rows per unit, at most 5000,
+    plus a truncation sentinel). It bounds client rows, not the node's internal walk.
+    This is a view as of the returned head, not a reorg lock or finality guarantee.
+    """
+    def incomplete(reason: str) -> DepositScan:
+        return DepositScan([], False, reason)
+
+    if not isinstance(treasury_addr, str) or not treasury_addr.strip():
+        return incomplete("missing_treasury_account")
+    if type(since_timestamp) is not int or since_timestamp < 0:
+        return incomplete("invalid_waterline")
+    if type(max_pages) is not int or not 1 <= max_pages <= 50:
+        return incomplete("invalid_history_budget")
+
+    account, reason = _read_recovery_history([
+        config.NEXUS_CLI, "register/get/finance:account", f"address={treasury_addr}",
+    ])
+    if reason is not None:
+        return incomplete(reason)
+    owner = account.get("owner") if isinstance(account, dict) else None
+    if (not isinstance(owner, str) or len(owner) != 64
+            or any(ch not in "0123456789abcdef" for ch in owner) or owner == "0" * 64
+            or account.get("address") != treasury_addr):
+        return incomplete("treasury_owner_unproven")
+
+    limit = max_pages * 100 + 1
+    txs, reason = _read_recovery_history([
+        config.NEXUS_CLI, "ledger/list/transactions", f"genesis={owner}",
+        "verbose=detail", "order=desc", f"limit={limit}",
+    ])
+    if reason is not None:
+        return incomplete(reason)
+    if not isinstance(txs, list):
+        return incomplete("invalid_response")
+    if len(txs) >= limit:
+        return incomplete("pagination_truncated")
+    if not txs:
+        return incomplete("invalid_sigchain_range")
+
+    results: list[dict] = []
+    seen: set[str] = set()
+    expected_hash = None
+    created = False
+    for sequence, tx in zip(range(len(txs) - 1, -1, -1), txs):
+        if not isinstance(tx, dict):
+            return incomplete("invalid_transaction")
+        txid, prevhash = tx.get("txid"), tx.get("prevhash")
+        if (not isinstance(txid, str) or not nexus_memo.is_canonical_nexus_txid(txid) or txid == "0" * 128
+                or txid in seen or (expected_hash is not None and txid != expected_hash)
+                or not nexus_memo.is_canonical_nexus_txid(prevhash)
+                or tx.get("genesis") != owner
+                or type(tx.get("sequence")) is not int or tx["sequence"] != sequence):
+            return incomplete("invalid_sigchain_range")
+        seen.add(txid)
+        expected_hash = prevhash
+        # Sequence zero is the root (hybrid chains can carry a nonzero root prevhash).
+        timestamp = tx.get("timestamp")
+        if type(timestamp) is not int or timestamp <= 0:
+            return incomplete("invalid_timestamp")
+        confirmations = tx.get("confirmations")
+        if type(confirmations) is not int or confirmations <= 0:
+            # The node may start from a mempool head or lack block-index evidence.
+            return incomplete("invalid_confirmations")
+        contracts = tx.get("contracts")
+        if not isinstance(contracts, list) or not 1 <= len(contracts) <= 100:
+            return incomplete("invalid_contracts")
+        has_credit = False
+        for contract_id, contract in enumerate(contracts):
+            op = contract.get("OP") if isinstance(contract, dict) else None
+            if not isinstance(op, str) or op not in _RECOVERY_CONTRACT_OPS:
+                return incomplete("invalid_contract")
+            if type(contract.get("id")) is not int or contract["id"] != contract_id:
+                return incomplete("invalid_contract_id")
+            if op in {"CREATE", "TRANSFER", "CLAIM"}:
+                address = _parse_nexus_contract_address(contract.get("address"))
+                if not address:
+                    return incomplete("invalid_ownership_evidence")
+                if address == treasury_addr:
+                    if op != "CREATE" or created:
+                        return incomplete("treasury_ownership_changed")
+                    created = True
+            if op != "CREDIT":
                 continue
+            to_address = _parse_nexus_contract_address(contract.get("to"))
+            if not to_address:
+                return incomplete("invalid_credit_destination")
+            if to_address != treasury_addr or timestamp < since_timestamp:
+                continue
+            if not _parse_nexus_contract_address(contract.get("from")):
+                return incomplete("invalid_credit_source")
+            if classify_nexus_credit(contract.get("amount")).disposition == "invalid":
+                return incomplete("invalid_credit_amount")
+            has_credit = True
+        if has_credit:
+            results.append(tx)
+    if not created:
+        return incomplete("treasury_creation_unproven")
+    return DepositScan(results, True)
 
-            contracts = tx.get("contracts")
-            if not isinstance(contracts, list):
-                return DepositScan(results, False, "invalid_contracts")
-            for contract in contracts:
-                if not isinstance(contract, dict):
-                    return DepositScan(results, False, "invalid_contract")
-                if str(contract.get("OP") or "").upper() != "CREDIT":
-                    continue
-                to_address = _parse_nexus_contract_address(contract.get("to"))
-                if to_address != treasury_addr:
-                    continue
-                if not nexus_memo.is_canonical_nexus_txid(txid):
-                    return DepositScan([], False, "invalid_txid")
-                contract_id = contract.get("id")
-                from_address = _parse_nexus_contract_address(contract.get("from"))
-                if isinstance(contract_id, bool) or not isinstance(contract_id, int) or contract_id < 0:
-                    return DepositScan(results, False, "invalid_contract_id")
-                if not from_address:
-                    return DepositScan(results, False, "invalid_credit_source")
-                if classify_nexus_credit(contract.get("amount")).disposition == "invalid":
-                    return DepositScan(results, False, "invalid_credit_amount")
-                results.append(tx)
-                break
-
-        if page_has_old_txs or len(txs) < limit:
-            if page > 0:
-                # The node's offset pagination has no immutable snapshot identifier.
-                # Once an offset has moved, concurrent history changes can shift unseen
-                # rows even if a repeated scan happens to look identical.
-                return DepositScan([], False, "pagination_snapshot_unavailable")
-            return DepositScan(results, True)
-
-    if max(1, int(max_pages)) > 1:
-        return DepositScan([], False, "pagination_snapshot_unavailable")
-    return DepositScan([], False, "pagination_truncated")
-    
 
 ## Reference integer fetching
 

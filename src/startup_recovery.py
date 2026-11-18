@@ -604,7 +604,7 @@ def _terminal_solana_dispositions_have_provenance() -> bool:
         conn.close()
 
 
-def perform_startup_recovery() -> dict:
+def perform_startup_recovery(*, deployment_id: str | None = None) -> dict:
     """Recover both chains from nonzero checkpoints or return an explicit latch."""
     print("🔧 Starting recovery...")
 
@@ -679,6 +679,7 @@ def perform_startup_recovery() -> dict:
     try:
         empty_custody_held = state_db.latch_empty_custody_recovery(
             nexus_waterline=nexus_waterline, solana_waterline=solana_waterline,
+            deployment_id=deployment_id,
         )
     except Exception:
         return {
@@ -849,7 +850,11 @@ def perform_startup_recovery() -> dict:
         }
 
     try:
-        seeded = nexus_client.get_last_reference()
+        # Fresh deployments may have no earlier debit. Their reviewed image
+        # already contains the durable counter; do not require unrelated activity.
+        seeded = state_db.bootstrap_reference_floor(deployment_id) if deployment_id else None
+        if seeded is None:
+            seeded = nexus_client.get_last_reference()
     except Exception as exc:
         return {
             "recovery_complete": False,

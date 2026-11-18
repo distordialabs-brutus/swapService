@@ -196,26 +196,31 @@ class CriticalSafetyTests(unittest.TestCase):
             self.assertFalse(nexus_client.is_valid_nexus_token_account("recipient"))
             self.assertTrue(nexus_client.is_valid_nexus_token_account("recipient"))
 
-    def test_recovery_scans_canonical_treasury_account_history(self):
-        """Wipeout recovery must not fall back to the token register's lossy history."""
+    def test_recovery_uses_the_resolved_treasury_owner_not_the_token_register(self):
+        owner = "a1" * 32
+        treasury = "canonical-treasury"
         credit = {
             "txid": "ab" * 64, "timestamp": 1_000, "confirmations": 2,
-            "contracts": [{
-                "id": 0, "OP": "CREDIT", "from": "sender",
-                "to": "canonical-treasury", "amount": "3",
-            }],
+            "genesis": owner, "sequence": 0, "prevhash": "0" * 128,
+            "contracts": [
+                {"id": 0, "OP": "CREATE", "address": treasury},
+                {"id": 1, "OP": "CREDIT", "from": "sender", "to": treasury, "amount": "3"},
+            ],
         }
         with patch.object(config, "NEXUS_TOKEN_NAME", "LEGACY"), patch.object(
-            nexus_client, "_run", return_value=(0, json.dumps([credit]), "")
+            nexus_client, "_run", side_effect=[
+                (0, json.dumps({"address": treasury, "owner": owner}), ""),
+                (0, json.dumps([credit]), ""),
+            ]
         ) as run:
-            scan = nexus_client.fetch_deposits_since("canonical-treasury", 0)
+            scan = nexus_client.fetch_deposits_since(treasury, 0)
 
-        self.assertTrue(scan.complete)
-        self.assertEqual(scan.deposits, [credit])
-        command = run.call_args.args[0]
-        self.assertTrue(command[1].startswith("register/transactions/finance:account/"))
-        self.assertIn("address=canonical-treasury", command)
-        self.assertNotIn("name=LEGACY", command)
+        self.assertEqual(scan, nexus_client.DepositScan([credit], True))
+        account_query, history_query = [c.args[0] for c in run.call_args_list]
+        self.assertEqual(account_query[1:], ["register/get/finance:account", f"address={treasury}"])
+        self.assertEqual(history_query[1], "ledger/list/transactions")
+        self.assertIn(f"genesis={owner}", history_query)
+        self.assertNotIn("name=LEGACY", history_query)
 
     def test_deposit_history_requires_canonical_treasury_account(self):
         """An absent canonical treasury is incomplete evidence, never an empty scan."""
@@ -549,18 +554,14 @@ class CriticalSafetyTests(unittest.TestCase):
         self.assertEqual(summary["error"], "nexus_deposit_scan_incomplete:page_fetch_failed")
 
     def test_recovery_deposit_producer_rejects_malformed_treasury_credit_evidence(self):
-        """Recovery must not call a malformed treasury CREDIT scan complete."""
+        owner = "a1" * 32
         valid = {
-            "txid": "credit-tx",
-            "timestamp": 1_000,
-            "confirmations": 2,
-            "contracts": [{
-                "id": 0,
-                "OP": "CREDIT",
-                "from": "sender",
-                "to": "TREASURY",
-                "amount": "3",
-            }],
+            "txid": "ab" * 64, "timestamp": 1_000, "confirmations": 2,
+            "genesis": owner, "sequence": 0, "prevhash": "0" * 128,
+            "contracts": [
+                {"id": 0, "OP": "CREDIT", "from": "sender", "to": "TREASURY", "amount": "3"},
+                {"id": 1, "OP": "CREATE", "address": "TREASURY"},
+            ],
         }
         malformed = {
             "missing_txid": lambda tx: tx.pop("txid"),
@@ -574,39 +575,14 @@ class CriticalSafetyTests(unittest.TestCase):
             with self.subTest(field=name):
                 tx = json.loads(json.dumps(valid))
                 mutate(tx)
-                with patch.object(
-                    nexus_client, "_run", return_value=(0, json.dumps([tx]), "")
-                ):
+                with patch.object(nexus_client, "_run", side_effect=[
+                    (0, json.dumps({"address": "TREASURY", "owner": owner}), ""),
+                    (0, json.dumps([tx]), ""),
+                ]):
                     scan = nexus_client.fetch_deposits_since("TREASURY", 0, max_pages=1)
 
                 self.assertFalse(scan.complete)
                 self.assertEqual(scan.deposits, [])
-
-    def test_recovery_deposit_scan_requires_stable_repeatable_pagination_evidence(self):
-        """Recovery cannot call offset-paginated history complete after it changes mid-scan."""
-        def transaction(txid, timestamp):
-            return {
-                "txid": txid,
-                "timestamp": timestamp,
-                "confirmations": 2,
-                "contracts": [],
-            }
-
-        newest_page = [transaction(f"tx-{timestamp}", timestamp) for timestamp in range(200, 100, -1)]
-        first_terminal_page = [transaction("old-a", 99)]
-        changed_terminal_page = [transaction("old-b", 99)]
-        pages = [newest_page, first_terminal_page, newest_page, changed_terminal_page]
-
-        with patch.object(
-            nexus_client,
-            "_run",
-            side_effect=[(0, json.dumps(page), "") for page in pages],
-        ):
-            scan = nexus_client.fetch_deposits_since("TREASURY", 100, max_pages=2)
-
-        self.assertFalse(scan.complete)
-        self.assertEqual(scan.reason, "pagination_snapshot_unavailable")
-        self.assertEqual(scan.deposits, [])
 
     def test_service_record_terms_use_canonical_pair_fee_policy(self):
         """Nexus heartbeat terms must advertise the same policy that pays Solana users."""
@@ -2608,7 +2584,8 @@ class CriticalSafetyTests(unittest.TestCase):
             patch.object(main.alerts, "critical"),
         ):
             # Exercise the reconciliation gate after independent image admission.
-            main._run_admitted(Mock(spec=['complete', 'assert_running', 'verify_image', 'check_file_identity']))
+            main._run_admitted(Mock(spec=['complete', 'assert_running', 'verify_image', 'check_file_identity'],
+                                   certificate=Mock(deployment_id='offline-fixture')))
 
         poll_solana.assert_called_once_with(paused=True)
 

@@ -224,10 +224,10 @@ def test_reference_http_server_only_binds_loopback(store):
         make_http_server("0.0.0.0", 0, application)
 
 
-def test_admin_cli_only_issues_reviewed_certificate_or_serves(tmp_path):
+def test_admin_cli_requires_reviewed_certificate_for_issuance(tmp_path):
     help_text = build_cli_parser().format_help()
-    assert "issue" in help_text and "serve" in help_text
-    assert "sign-current" not in help_text and "restore" not in help_text
+    assert all(command in help_text for command in ("issue", "restore", "serve"))
+    assert "sign-current" not in help_text
     cert_path = tmp_path / "certificate.json"
     cert_path.write_text(json.dumps(certificate().to_dict()))
     store_path = tmp_path / "witness.db"

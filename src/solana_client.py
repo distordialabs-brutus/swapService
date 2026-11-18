@@ -1861,8 +1861,16 @@ def _build_and_send_legacy_tx(instructions: list[TransactionInstruction], kp: Ke
     if not bh:
         raise RuntimeError("Failed to fetch recent blockhash")
     recent = Hash.from_string(bh)
+    from . import custody_chain
+    custody_chain.require_signing()  # Before signing, not only before submission.
     tx = Transaction.new_signed_with_payer(instructions, kp.pubkey(), [kp], recent)
-    send_resp = _rpc_call(client.send_raw_transaction, bytes(tx), timeout=getattr(config, "SOLANA_RPC_TIMEOUT_SEC", 8))
+
+    def submit(raw):
+        # Executed in the RPC helper itself, not in the parent that may time out.
+        custody_chain.require_signing()
+        return client.send_raw_transaction(raw)
+
+    send_resp = _rpc_call(submit, bytes(tx), timeout=getattr(config, "SOLANA_RPC_TIMEOUT_SEC", 8))
     sig = _rpc_get_result(send_resp)
     if not isinstance(sig, str):
         raise RuntimeError(f"Failed to send tx, unexpected response: {send_resp}")
@@ -2040,8 +2048,11 @@ def swap_token_for_sol_via_jupiter(amount_solana_base_units: int, slippage_bps: 
 
         tx_bytes = base64.b64decode(swap_tx_b64)
         vtx = VersionedTransaction.from_bytes(tx_bytes)
+        from . import custody_chain
+        custody_chain.require_signing()
         vtx.sign([kp])
         raw = bytes(vtx)
+        custody_chain.require_signing()
         send_resp = client.send_raw_transaction(raw)
         sig = _rpc_get_result(send_resp)
         if not isinstance(sig, str):

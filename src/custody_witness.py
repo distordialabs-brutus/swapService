@@ -244,6 +244,44 @@ class Store:
                                (cert.deployment_id,)).fetchone()
             return self._row_head(row)
 
+    def approve_restore(self, certificate: Certificate, *, prior_permit_nonce: str,
+                        actor: str, fencing_evidence: str, reconciliation_evidence: str,
+                        admin_token: str) -> dict[str, Any]:
+        """Replace authority after an independent reviewer has fenced the old signer.
+
+        The witness records the evidence reference, not proof of physical fencing.
+        This operation is only available on the witness host, never over runtime HTTP.
+        """
+        self._require_admin(admin_token)
+        cert = Certificate.from_dict(certificate.to_dict())
+        if (not _is_hex(prior_permit_nonce) or cert.permit_nonce == prior_permit_nonce
+                or any(not isinstance(x, str) or not x.strip() or len(x) > size
+                       for x, size in ((actor, 128), (fencing_evidence, 1000),
+                                       (reconciliation_evidence, 1000)))):
+            raise WitnessError("restore approval requires fencing and reconciliation evidence")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current = conn.execute("SELECT * FROM heads WHERE deployment_id=?",
+                                   (cert.deployment_id,)).fetchone()
+            if (current is None or cert.generation != current['generation'] + 1
+                    or not hmac.compare_digest(prior_permit_nonce, current['permit_nonce'])):
+                raise WitnessError("restore approval does not match the current permit")
+            event_hash = self._append_event(conn, cert.deployment_id, "approve_restore", {
+                "actor": actor.strip(), "fencing_evidence": fencing_evidence.strip(),
+                "reconciliation_evidence": reconciliation_evidence.strip(),
+                "prior_generation": current['generation'], "prior_permit_nonce": prior_permit_nonce,
+                "generation": cert.generation, "permit_nonce": cert.permit_nonce,
+                "image_sha256": cert.image_sha256, "config_sha256": cert.config_sha256,
+                "build_sha256": cert.build_sha256,
+            })
+            conn.execute("""UPDATE heads SET status='ready',generation=?,permit_nonce=?,
+                         claim_nonce=NULL,certificate_json=?,hold_reason=NULL,event_hash=?
+                         WHERE deployment_id=?""",
+                         (cert.generation, cert.permit_nonce, _canonical(cert.to_dict()),
+                          event_hash, cert.deployment_id))
+            return self._row_head(conn.execute("SELECT * FROM heads WHERE deployment_id=?",
+                                               (cert.deployment_id,)).fetchone())
+
     def get_head(self, deployment_id: str, *, token: str) -> dict[str, Any]:
         self._require_runtime(token)
         if not isinstance(deployment_id, str) or not deployment_id:
@@ -658,6 +696,13 @@ def build_cli_parser() -> argparse.ArgumentParser:
                        help="reviewed certificate JSON; this command never hashes a custody DB")
     issue.add_argument("--actor", required=True)
     issue.add_argument("--rationale", required=True)
+    restore = commands.add_parser("restore", help="approve a fenced, reconciled replacement generation")
+    restore.add_argument("--store", required=True)
+    restore.add_argument("--certificate", required=True)
+    restore.add_argument("--prior-permit-nonce", required=True)
+    restore.add_argument("--actor", required=True)
+    restore.add_argument("--fencing-evidence", required=True)
+    restore.add_argument("--reconciliation-evidence", required=True)
     serve = commands.add_parser("serve", help="serve runtime API on loopback")
     serve.add_argument("--store", required=True)
     serve.add_argument("--host", default="127.0.0.1")
@@ -671,15 +716,21 @@ def run_cli(argv: list[str] | None = None, *,
     args = build_cli_parser().parse_args(argv)
     environment = os.environ if environ is None else environ
     runtime_token = environment.get("CUSTODY_WITNESS_TOKEN", "")
-    if args.command == "issue":
+    if args.command in {"issue", "restore"}:
         admin_token = environment.get("CUSTODY_WITNESS_ADMIN_TOKEN", "")
         store = Store(args.store, runtime_token=runtime_token, admin_token=admin_token)
         try:
             certificate = Certificate.from_dict(loads_object(Path(args.certificate).read_bytes()))
         except OSError as exc:
             raise WitnessError("reviewed certificate could not be read") from exc
-        store.issue_initial(certificate, actor=args.actor, rationale=args.rationale,
-                            admin_token=admin_token)
+        if args.command == "issue":
+            store.issue_initial(certificate, actor=args.actor, rationale=args.rationale,
+                                admin_token=admin_token)
+        else:
+            store.approve_restore(certificate, prior_permit_nonce=args.prior_permit_nonce,
+                                  actor=args.actor, fencing_evidence=args.fencing_evidence,
+                                  reconciliation_evidence=args.reconciliation_evidence,
+                                  admin_token=admin_token)
         return 0
     store = Store(args.store, runtime_token=runtime_token, admin_token=None)
     application = HTTPApplication(store)

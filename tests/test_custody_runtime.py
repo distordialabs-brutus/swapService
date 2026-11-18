@@ -16,7 +16,7 @@ class AdmissionError(RuntimeError):
 
 @pytest.fixture
 def admission_boundary(monkeypatch):
-    lease = Mock()
+    lease = Mock(certificate=types.SimpleNamespace(deployment_id='offline-fixture'))
     admission = types.ModuleType('src.custody_admission')
     admission.AdmissionError = AdmissionError
     admission.claim = Mock(return_value=lease)

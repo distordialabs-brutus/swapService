@@ -312,6 +312,13 @@ def _drain_custody_workers(timeout_sec=10):
 
 
 def _run_admitted(lease):
+    from . import custody_chain
+    with custody_chain.signing_session(lease, lambda: _stop_event is None or _stop_event.is_set()) as signing:
+        return _run_with_signing_gate(lease, signing)
+
+
+def _run_with_signing_gate(lease, signing):
+    from . import fees, nexus_client, solana_client
     # Only an independently claimed exact image may be opened or migrated.
     lease.verify_image()
     state_db.init_db()
@@ -321,7 +328,8 @@ def _run_admitted(lease):
     # heartbeat checks, metrics reads, reconciliation, or poller can touch a chain.
     try:
         from . import startup_recovery
-        rec = startup_recovery.perform_startup_recovery()
+        # The deployment ID comes from the independently verified sealed permit.
+        rec = startup_recovery.perform_startup_recovery(deployment_id=lease.certificate.deployment_id)
     except Exception as exc:
         alerts.critical(
             "startup_recovery_incomplete",
@@ -415,7 +423,6 @@ def _run_admitted(lease):
     # Startup balances summary (Solana vault + Nexus circulating supply) with timeout protection
     try:
         from decimal import Decimal
-        from . import solana_client, nexus_client
 
         def _fmt_units(units: int, decimals: int) -> str:
             try:
@@ -486,12 +493,17 @@ def _run_admitted(lease):
             # Fail safe: if the backing check itself errors we treat the cycle as paused
             # (no new exposure) rather than assuming everything is fine.
             should_pause = True
-            # Safety and maintenance first with timeout protection
+            # Loss of chain identity/freshness is stricter than a backing pause.
+            chain_healthy = True
+            if config.PRODUCTION_MODE:
+                try:
+                    chain_healthy = signing.refresh()
+                except Exception as exc:
+                    chain_healthy = False
+                    alerts.critical("custody_signing_paused", "Chain preflight failed; all signing paused",
+                                    error_type=type(exc).__name__)
+            # Read-only reconciliation and metrics can continue during a chain pause.
             try:
-                from . import fees, nexus_client, solana_client
-                if config.PRODUCTION_MODE:
-                    from . import custody_chain
-                    custody_chain.require_fresh_tips()
                 should_pause = _safe_call(fees.maintain_backing_and_bounds, timeout_sec=5)
                 
                 # Periodic backing reconcile: mint the Nexus-side token to fees account to bring the vault back to 1:1 with circulating
@@ -547,7 +559,7 @@ def _run_admitted(lease):
                 # Reconciliation is an exposure gate, not only a monitoring signal.  Keep
                 # processing existing refunds/quarantines in paused poller mode, but do not
                 # accept or pay out new Solana↔Nexus swaps until a later explicit green run.
-                should_pause = bool(should_pause or reconciliation_pause)
+                should_pause = bool(should_pause or reconciliation_pause or not chain_healthy)
                 
                 # Surplus is alert-only until a separately designed, durable intent protocol
                 # exists; do not run automatic Solana DEX or Nexus mint/rebalance actions.
@@ -593,7 +605,7 @@ def _run_admitted(lease):
                     except Exception as e:
                         print(f"[metrics] error: {e}")
                 
-                if should_pause:
+                if should_pause and chain_healthy:
                     # Do NOT skip the cycle. Pausing used to `continue`, freezing refunds
                     # and quarantine of already-stuck user funds along with new swaps.
                     # Instead run the pollers in paused mode: no new exposure, but money
@@ -612,6 +624,11 @@ def _run_admitted(lease):
                 should_pause = True
                 alerts.critical("custody_preflight_paused", "New payouts paused: readiness or maintenance check failed",
                                 error_type=type(e).__name__)
+
+            if not chain_healthy:
+                _run_with_watchdog(_drain_alerts, "alert_outbox", 30)
+                _stop_event.wait(1)
+                continue
 
             # Guard long-running pollers with watchdog timeouts so Ctrl+C remains responsive
             loop_slice_start = time.time()
@@ -657,10 +674,10 @@ def _run_admitted(lease):
 
             # Apply waterline proposals to heartbeat asset (FIX: was commented out)
             try:
-                sol_wl, nxs_wl = state_db.get_and_clear_proposed_waterlines()
-                if sol_wl or nxs_wl:
-                    current_ts = int(time.time())
-                    nexus_client.update_heartbeat_asset(current_ts, nxs_wl, sol_wl)
+                sol_wl = state_db.get_proposed_solana_waterline()
+                nxs_wl = state_db.get_proposed_nexus_waterline()
+                if (sol_wl or nxs_wl) and nexus_client.update_heartbeat_asset(int(time.time()), nxs_wl, sol_wl):
+                    state_db.acknowledge_waterline_proposals(solana=sol_wl, nexus=nxs_wl)
                     print(f"[waterline] Applied proposals: solana={sol_wl} nexus={nxs_wl}")
             except Exception as e:
                 print(f"[waterline] apply error: {e}")

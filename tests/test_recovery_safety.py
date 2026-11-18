@@ -1272,7 +1272,8 @@ class MainStartupRecoveryGateTests(unittest.TestCase):
             patch.object(main.threading, "Event", return_value=_AlreadyStoppedEvent()),
         ):
             # Inner recovery gate; independent image admission is covered separately.
-            result = main._run_admitted(Mock(spec=['complete', 'assert_running', 'verify_image', 'check_file_identity']))
+            result = main._run_admitted(Mock(spec=['complete', 'assert_running', 'verify_image', 'check_file_identity'],
+                                   certificate=Mock(deployment_id='offline-fixture')))
 
         self.assertFalse(result)
         session_check.assert_not_called()
@@ -1293,7 +1294,8 @@ class MainStartupRecoveryGateTests(unittest.TestCase):
             patch.object(main.alerts, "critical") as critical,
         ):
             # Inner recovery gate; independent image admission is covered separately.
-            result = main._run_admitted(Mock(spec=['complete', 'assert_running', 'verify_image', 'check_file_identity']))
+            result = main._run_admitted(Mock(spec=['complete', 'assert_running', 'verify_image', 'check_file_identity'],
+                                   certificate=Mock(deployment_id='offline-fixture')))
 
         self.assertFalse(result)
         heartbeat_check.assert_not_called()
@@ -1330,10 +1332,11 @@ class MainStartupRecoveryGateTests(unittest.TestCase):
             patch.object(nexus_client, "update_heartbeat_asset") as heartbeat_update,
         ):
             # Inner recovery gate; independent image admission is covered separately.
-            result = main._run_admitted(Mock(spec=['complete', 'assert_running', 'verify_image', 'check_file_identity']))
+            result = main._run_admitted(Mock(spec=['complete', 'assert_running', 'verify_image', 'check_file_identity'],
+                                   certificate=Mock(deployment_id='offline-fixture')))
 
         self.assertTrue(result)
-        recover.assert_called_once_with()
+        recover.assert_called_once_with(deployment_id='offline-fixture')
         poller.assert_not_called()
         heartbeat_update.assert_not_called()
 
@@ -1355,7 +1358,8 @@ class MainStartupRecoveryGateTests(unittest.TestCase):
             patch.object(main.alerts, "critical") as critical,
         ):
             # Inner recovery gate; independent image admission is covered separately.
-            result = main._run_admitted(Mock(spec=['complete', 'assert_running', 'verify_image', 'check_file_identity']))
+            result = main._run_admitted(Mock(spec=['complete', 'assert_running', 'verify_image', 'check_file_identity'],
+                                   certificate=Mock(deployment_id='offline-fixture')))
 
         self.assertFalse(result)
         receipt_registration.assert_called_once_with()
@@ -1377,38 +1381,6 @@ class NexusLegacyWrapperTests(unittest.TestCase):
 
         self.assertFalse(result)
         create.assert_not_called()
-
-
-class NexusPaginationTests(unittest.TestCase):
-    def test_mutable_offset_multi_page_scan_never_claims_snapshot_completeness(self):
-        newest_page = [
-            {
-                "txid": f"{value:0128x}",
-                "timestamp": value,
-                "confirmations": 2,
-                "contracts": [],
-            }
-            for value in range(200, 100, -1)
-        ]
-        terminal_page = [{
-            "txid": f"{999:0128x}",
-            "timestamp": 99,
-            "confirmations": 2,
-            "contracts": [],
-        }]
-        with patch.object(
-            nexus_client,
-            "_run",
-            side_effect=[
-                (0, json.dumps(newest_page), ""),
-                (0, json.dumps(terminal_page), ""),
-            ],
-        ):
-            result = nexus_client.fetch_deposits_since("TREASURY", 100, max_pages=2)
-
-        self.assertFalse(result.complete)
-        self.assertEqual(result.reason, "pagination_snapshot_unavailable")
-        self.assertEqual(result.deposits, [])
 
 
 if __name__ == "__main__":

@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
+from contextlib import contextmanager
 
 import requests
 from solders.hash import Hash
@@ -12,6 +14,76 @@ from .custody_admission import AdmissionError
 
 
 _HEX = frozenset("0123456789abcdef")
+_signing_gate = None
+_gate_lock = threading.Lock()
+
+
+class _SigningGate:
+    def __init__(self, lease, stopping):
+        self.lease = lease
+        self.stopping = stopping
+        self.healthy = False
+        self.epoch = 0
+
+    def set_healthy(self, healthy: bool) -> None:
+        with _gate_lock:
+            self.healthy = healthy
+            if not healthy:
+                self.epoch += 1
+
+    def refresh(self) -> bool:
+        with _gate_lock:
+            epoch = self.epoch
+        try:
+            verify()
+            require_fresh_tips()
+        except Exception:
+            self.set_healthy(False)
+            raise
+        with _gate_lock:
+            if self.epoch != epoch or _signing_gate is not self or self.stopping():
+                return False
+            self.healthy = True
+            return True
+
+
+@contextmanager
+def signing_session(lease, stopping):
+    """Bind all worker threads to the current admitted runtime, initially closed."""
+    global _signing_gate
+    gate = _SigningGate(lease, stopping)
+    with _gate_lock:
+        if _signing_gate is not None:
+            raise AdmissionError("custody signing session already active")
+        _signing_gate = gate
+    try:
+        yield gate
+    finally:
+        with _gate_lock:
+            gate.healthy = False
+            _signing_gate = None
+
+
+def require_signing() -> None:
+    """Recheck the witness and both chains at the signing/submission boundary."""
+    if not config.PRODUCTION_MODE:
+        return
+    with _gate_lock:
+        gate = _signing_gate
+        if gate is None or not gate.healthy or gate.stopping():
+            raise AdmissionError("custody signing is paused")
+        epoch = gate.epoch
+    try:
+        gate.lease.assert_running()
+        verify()
+        require_fresh_tips()
+    except Exception:
+        gate.set_healthy(False)
+        raise
+    with _gate_lock:
+        if (_signing_gate is not gate or not gate.healthy or gate.epoch != epoch
+                or gate.stopping()):
+            raise AdmissionError("custody signing is paused")
 
 
 def _expected_solana_identity() -> str:
@@ -105,6 +177,7 @@ def _solana_genesis_hash() -> str:
                 "method": "getGenesisHash",
             },
             timeout=config.SOLANA_RPC_TIMEOUT_SEC,
+            allow_redirects=False,
         )
         response.raise_for_status()
         body = response.json()

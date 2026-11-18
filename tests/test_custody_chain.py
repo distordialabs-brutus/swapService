@@ -162,6 +162,7 @@ def test_verify_accepts_only_exact_observed_genesis_hashes(monkeypatch):
         config.RPC_URL,
         json={"jsonrpc": "2.0", "id": "custody-chain-admission", "method": "getGenesisHash"},
         timeout=config.SOLANA_RPC_TIMEOUT_SEC,
+        allow_redirects=False,
     )
     run.assert_called_once_with(
         [config.NEXUS_CLI, "ledger/get/blockhash", "height=0"],
