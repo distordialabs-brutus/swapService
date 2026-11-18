@@ -5,7 +5,7 @@ from unittest.mock import call, patch
 
 import pytest
 
-from src import config, nexus_client, startup_recovery, state_db
+from src import config, nexus_client, startup_recovery, state_db, swap_nexus
 
 
 TREASURY = "TREASURY"
@@ -63,6 +63,66 @@ def test_recovery_reads_200_linked_rows_in_one_history_request(wrapped):
     ]
 
 
+@pytest.mark.parametrize("broken", [False, True])
+def test_production_poll_applies_only_complete_linked_history(tmp_path, monkeypatch, broken):
+    history = sigchain(205)
+    for index, tx in enumerate(history):
+        tx["timestamp"] = 1_000 - index
+    history[101]["contracts"] = [credit(), credit(1)]
+    if broken:
+        history.pop(102)
+    pair = replace(config.SWAP_PAIR, nexus=replace(config.SWAP_PAIR.nexus, treasury_account=TREASURY))
+    monkeypatch.setattr(config, "SWAP_PAIR", pair)
+    monkeypatch.setattr(config, "PRODUCTION_MODE", True)
+    monkeypatch.setattr(config, "HEARTBEAT_WATERLINE_ENABLED", True)
+    monkeypatch.setattr(config, "HEARTBEAT_WATERLINE_SAFETY_SEC", 3)
+    monkeypatch.setattr(state_db, "DB_PATH", str(tmp_path / "live.db"))
+    state_db.init_db()
+    nexus_field, solana_field = nexus_client.heartbeat_waterline_field_names()
+    monkeypatch.setattr(nexus_client, "get_heartbeat_asset", lambda: {nexus_field: 800, solana_field: 800})
+    monkeypatch.setattr(nexus_client, "get_account_info", lambda address: {"owner": "b2" * 32})
+    with patch.object(nexus_client, "_run", side_effect=[
+        reply({"address": TREASURY, "owner": GENESIS}, wrapped=True), reply(history, wrapped=True),
+    ]) as run:
+        swap_nexus.poll_nexus_deposits()
+    assert [c.args[0][1] for c in run.call_args_list] == [LOOKUP, HISTORY]
+    assert not any(arg.startswith("offset=") for arg in run.call_args.args[0])
+    rows = state_db.get_unprocessed_txids_as_dicts()
+    if broken:
+        assert rows == []
+        assert state_db.get_proposed_nexus_waterline() is None
+    else:
+        assert {(row["txid"], row["contract_id"]) for row in rows} == {(txid(103), 0), (txid(103), 1)}
+        assert state_db.get_proposed_nexus_waterline() == 896
+
+
+@pytest.mark.parametrize("pending_credit", [False, True])
+def test_production_poll_can_ingest_behind_unconfirmed_head(tmp_path, monkeypatch, pending_credit):
+    history = sigchain(3)
+    history[0].pop("confirmations")  # LLL-TAO omits this and blockhash for mempool rows.
+    if pending_credit:
+        history[0]["contracts"] = [credit()]
+    history[1]["contracts"] = [credit()]
+    history[1]["timestamp"] = history[0]["timestamp"] = 900
+    pair = replace(config.SWAP_PAIR, nexus=replace(config.SWAP_PAIR.nexus, treasury_account=TREASURY))
+    monkeypatch.setattr(config, "SWAP_PAIR", pair)
+    monkeypatch.setattr(config, "PRODUCTION_MODE", True)
+    monkeypatch.setattr(config, "NEXUS_TRANSFER_MIN_CONFIRMATIONS", 10)
+    monkeypatch.setattr(config, "HEARTBEAT_WATERLINE_ENABLED", True)
+    monkeypatch.setattr(config, "HEARTBEAT_WATERLINE_SAFETY_SEC", 3)
+    monkeypatch.setattr(state_db, "DB_PATH", str(tmp_path / "live.db"))
+    state_db.init_db()
+    nexus_field, solana_field = nexus_client.heartbeat_waterline_field_names()
+    monkeypatch.setattr(nexus_client, "get_heartbeat_asset", lambda: {nexus_field: 800, solana_field: 800})
+    monkeypatch.setattr(nexus_client, "get_account_info", lambda address: {"owner": "b2" * 32})
+    with patch.object(nexus_client, "_run", side_effect=[
+        reply({"address": TREASURY, "owner": GENESIS}), reply(history),
+    ]):
+        swap_nexus.poll_nexus_deposits()
+    assert {row["txid"] for row in state_db.get_unprocessed_txids_as_dicts()} == {txid(1)}
+    assert state_db.get_proposed_nexus_waterline() == (None if pending_credit else 897)
+
+
 def test_recovery_can_prove_no_deposits_from_a_linked_history():
     with patch.object(nexus_client, "_run", side_effect=[
         reply({"address": TREASURY, "owner": GENESIS}), reply(sigchain(1)),
@@ -91,6 +151,7 @@ def test_recovery_discards_every_row_at_the_query_cap(count, reason):
     (lambda rows: rows.pop(1), "invalid_sigchain_range"),
     (lambda rows: rows[1].update(txid=rows[0]["txid"]), "invalid_sigchain_range"),
     (lambda rows: rows[1].update(genesis="b" * 64), "invalid_sigchain_range"),
+    (lambda rows: rows[-1].update(timestamp=101), "invalid_sigchain_timestamp_order"),
     (lambda rows: rows[0].pop("confirmations"), "invalid_confirmations"),
     (lambda rows: rows[0].update(confirmations=0), "invalid_confirmations"),
     (lambda rows: rows[-1]["contracts"][0].update(address="different-treasury"), "treasury_creation_unproven"),

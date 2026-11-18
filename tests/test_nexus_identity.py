@@ -56,6 +56,52 @@ def complete_intent(intent, remote_txid, remote_contract_id):
     )
 
 
+def test_standalone_production_refund_preserves_authorization(db, monkeypatch, capsys):
+    from unittest.mock import Mock
+    from src import config, nexus_client
+
+    add_credit()
+    intent = state_db.create_nexus_transfer_intent(
+        kind="refund", source_txid="source", source_contract_id=0,
+        from_address="TREASURY", to_address="sender-0", amount_usdd_units=1_000_000,
+    )
+    ident = intent["id"]
+    state_db.record_nexus_transfer_preparation(ident, actor="alice", rationale="reviewed")
+    state_db.authorize_nexus_transfer_intent(
+        ident, actor="alice", rationale="approved", expected_reference=intent["reference"],
+    )
+    monkeypatch.setattr(config, "PRODUCTION_MODE", True)
+    monkeypatch.setattr(config, "NEXUS_PIN", "test-only")
+    claim = Mock(wraps=state_db.claim_nexus_transfer_intent)
+    monkeypatch.setattr(state_db, "claim_nexus_transfer_intent", claim)
+    transport = Mock(side_effect=AssertionError("no submission expected"))
+    monkeypatch.setattr(nexus_client, "_run_via_nexus_api", transport)
+    monkeypatch.setattr(nexus_client.subprocess, "run", transport)
+    assert operator.main(["--db", str(db), "execute", "--intent", ident,
+                          "--operator", "alice", "--reason", "approved"]) == 2
+    assert "standalone" in capsys.readouterr().err
+    stored = state_db.get_nexus_transfer_intent(ident)
+    assert stored is not None and stored["status"] == "authorized"
+    assert [e["action"] for e in state_db.get_nexus_transfer_audit_events(ident)] == [
+        "prepared_refund", "authorized_execution",
+    ]
+    claim.assert_not_called()
+    transport.assert_not_called()
+
+
+def test_direct_production_refund_checks_gate_before_claim(monkeypatch):
+    from unittest.mock import Mock
+    from src import config, nexus_client
+    from src.custody_admission import AdmissionError
+
+    monkeypatch.setattr(config, "PRODUCTION_MODE", True)
+    claim = Mock(return_value=None)
+    monkeypatch.setattr(state_db, "claim_nexus_transfer_intent", claim)
+    with pytest.raises(AdmissionError, match="signing is paused"):
+        nexus_client.execute_nexus_transfer_intent("offline-intent")
+    claim.assert_not_called()
+
+
 def test_fresh_schema_and_reinit_keep_composite_identity_and_payout_terms(db):
     with sqlite3.connect(db) as conn:
         intent_columns = {row[1] for row in conn.execute("PRAGMA table_info(nexus_transfer_intents)")}

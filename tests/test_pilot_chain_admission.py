@@ -40,6 +40,34 @@ def test_production_heartbeat_is_bound_to_address_owner_and_pair(monkeypatch, ow
     assert 'address=approved-record' in run.call_args.args[0]
 
 
+@pytest.mark.parametrize('acknowledgement, accepted', [
+    ({'result': {'success': True, 'address': 'heartbeat', 'txid': 'ab' * 64}}, True),
+    ({'result': {'success': True, 'address': 'heartbeat'}}, False),
+    ({'result': {'success': True, 'address': 'wrong', 'txid': 'ab' * 64}}, False),
+    ({'error': {'code': -32}}, False),
+])
+def test_production_waterline_acknowledgements(monkeypatch, acknowledgement, accepted):
+    monkeypatch.setattr(config, 'PRODUCTION_MODE', True)
+    monkeypatch.setattr(config, 'NEXUS_HEARTBEAT_ASSET_ADDRESS', 'heartbeat')
+    run = Mock(return_value=(0, json.dumps(acknowledgement), ''))
+    monkeypatch.setattr(nexus_client, '_run', run)
+    persist = Mock()
+    monkeypatch.setattr(nexus_client.state_db, 'update_heartbeat', persist)
+    assert nexus_client.update_heartbeat_asset(200, wline_nxs=180, wline_sol=None) is accepted
+    assert persist.call_count == int(accepted)
+
+
+def test_service_record_refresh_does_not_reset_waterlines(monkeypatch):
+    monkeypatch.setattr(config, 'NEXUS_HEARTBEAT_ASSET_NAME', 'heartbeat')
+    monkeypatch.setattr(config, 'HEARTBEAT_ENABLED', True)
+    nx, sol = nexus_client.heartbeat_waterline_field_names()
+    monkeypatch.setattr(nexus_client, 'get_heartbeat_asset', lambda: {nx: 100, sol: 200, 'status': 'online'})
+    run = Mock(return_value=(0, json.dumps({'success': True}), ''))
+    monkeypatch.setattr(nexus_client, '_run', run)
+    assert nexus_client.publish_service_record(status='paused')
+    assert not any(arg.startswith((f'{nx}=', f'{sol}=')) for arg in run.call_args.args[0])
+
+
 @pytest.mark.parametrize('confirmations, allowed', [(2, False), (10, True)])
 def test_exact_nexus_credit_requires_configured_depth(monkeypatch, confirmations, allowed):
     txid = 'ab' * 64

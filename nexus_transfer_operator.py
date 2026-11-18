@@ -172,10 +172,15 @@ def main(argv: list[str] | None = None) -> int:
     finalize.set_defaults(handler=_finalize)
 
     args = parser.parse_args(argv)
-    if args.db:
-        state_db.DB_PATH = args.db
-    state_db.init_db()
     try:
+        if args.command == "execute":
+            config, _ = _nexus_modules()
+            if config.PRODUCTION_MODE:
+                raise ValueError("standalone Nexus execution is disabled in production; "
+                                 "leave the authorization intact for operator review")
+        if args.db:
+            state_db.DB_PATH = args.db
+        state_db.init_db()
         return int(args.handler(args))
     except (ValueError, RuntimeError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

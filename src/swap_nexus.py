@@ -582,6 +582,28 @@ def process_unprocessed_txids(paused: bool = False):
         _log("NEXUS_PROCESS_ERROR", error=str(e))
 
 
+def _legacy_nexus_history_pages(treasury_addr: str, limit: int, max_pages: int):
+    base_cmd = nexus_client.treasury_deposit_history_command(treasury_addr)
+    for page in range(max_pages):
+        cmd = [*base_cmd, f"limit={limit}", f"offset={page * limit}"]
+        try:
+            code, stdout, stderr = nexus_client._run(cmd, timeout=config.NEXUS_CLI_TIMEOUT_SEC)
+        except Exception as exc:
+            _log("NEXUS_ENUMERATION_FAILED", page=page, reason="exception", error=str(exc))
+            yield None
+            return
+        if code != 0:
+            _log("NEXUS_ENUMERATION_FAILED", page=page, reason="cli_error", error=stderr or stdout)
+            yield None
+            return
+        response = nexus_client._parse_json_lenient(stdout)
+        if (not isinstance(response, (list, dict))
+                or isinstance(response, dict) and "error" in response):
+            yield None
+            return
+        yield response if isinstance(response, list) else [response]
+
+
 def poll_nexus_deposits():
     """Detect new Nexus credits to treasury and queue them.
     
@@ -592,21 +614,13 @@ def poll_nexus_deposits():
     # Custody admission binds to the immutable pair identity, not a compatibility alias
     # which can differ after process startup/config mutation.
     treasury_addr = config.SWAP_PAIR.nexus.treasury_account
-    try:
-        # The token-register history omits normal account-to-account credits.  Querying
-        # this custody account is the authoritative admission scope for this direction.
-        base_cmd = nexus_client.treasury_deposit_history_command(treasury_addr)
-    except ValueError as exc:
-        _log("NEXUS_ENUMERATION_FAILED", reason="missing_treasury_account", error=str(exc))
-        alerts.critical(
-            "nexus_treasury_history_unavailable",
-            "Nexus deposit enumeration requires the canonical treasury account",
-        )
+    linked_history = config.PRODUCTION_MODE
+    if not treasury_addr:
+        alerts.critical("nexus_treasury_history_unavailable",
+                        "Nexus deposit enumeration requires the canonical treasury account")
         return
-
-    # Do not filter nested contracts on the server.  An accepted-but-lossy Nexus WHERE
-    # expression could return an empty page and make a real treasury credit fall below the
-    # advanced waterline.  Apply dust/minimum handling only after local enumeration.
+    # Keep legacy register pages for test/development compatibility only. They
+    # cannot prove coverage beyond the first offset.
     limit = 100
     max_pages = int(getattr(config, "NEXUS_MAX_PAGES", 5))
     # Anti-DoS: Limit processing per loop iteration
@@ -628,8 +642,14 @@ def poll_nexus_deposits():
     conn.close()
 
     wl_cutoff = 0
+    current_waterline = 0
+    safety = max(0, int(getattr(config, "HEARTBEAT_WATERLINE_SAFETY_SEC", 0)))
     if getattr(config, "HEARTBEAT_WATERLINE_ENABLED", False):
         heartbeat = nexus_client.get_heartbeat_asset()
+        if linked_history and not heartbeat:
+            alerts.critical("nexus_treasury_history_unavailable",
+                            "Nexus deposit ingestion held: pinned heartbeat is unavailable")
+            return
         if heartbeat:
             try:
                 waterlines = nexus_client.parse_heartbeat_waterlines(heartbeat)
@@ -641,10 +661,12 @@ def poll_nexus_deposits():
                     error=str(exc),
                 )
                 return
-            wl_cutoff = max(
-                0,
-                waterlines.nexus - int(getattr(config, "HEARTBEAT_WATERLINE_SAFETY_SEC", 0)),
-            )
+            current_waterline = waterlines.nexus
+            wl_cutoff = max(0, current_waterline - safety)
+    if linked_history and not 0 < current_waterline <= int(time.time()):
+        alerts.critical("nexus_treasury_history_unavailable",
+                        "Nexus deposit ingestion held: checkpoint is missing or in the future")
+        return
 
     try:
         page_ts_candidates: list[int] = []
@@ -652,43 +674,27 @@ def poll_nexus_deposits():
         enumeration_complete = True
         offset_page_requested = False
         processed_count = 0
-        # Step 1 & 2: fetch treasury credits with pagination
-        for page in range(max_pages):
-            if page > 0:
-                # This endpoint supplies no immutable snapshot identifier.  Merely
-                # requesting a later mutable offset makes absence/completeness unprovable,
-                # even when that later page is short or empty.
-                offset_page_requested = True
-            cmd = list(base_cmd) + [f"limit={limit}", f"offset={page * limit}"]
-            try:
-                code, stdout, stderr = nexus_client._run(
-                    cmd,
-                    timeout=getattr(config, "NEXUS_CLI_TIMEOUT_SEC", 12),
-                )
-            except Exception as e:
-                _log("NEXUS_ENUMERATION_FAILED", page=page, reason="exception", error=str(e))
-                enumeration_complete = False
-                break
-            if code != 0:
-                err = (stderr or stdout or "").strip()
-                _log("NEXUS_ENUMERATION_FAILED", page=page, reason="cli_error", error=err)
-                enumeration_complete = False
-                break
-            txs = nexus_client._parse_json_lenient(stdout)
-            if isinstance(txs, dict) and txs.get("error"):
-                _log("NEXUS_ENUMERATION_FAILED", page=page, reason="api_error", error=str(txs.get("error")))
-                enumeration_complete = False
-                break
+        deferred_credit = False
+        if linked_history:
+            scan = nexus_client.fetch_deposits_since(
+                treasury_addr, wl_cutoff,
+                live_min_confirmations=config.get_nexus_transfer_min_confirmations(),
+            )
+            if not scan.complete:
+                alerts.critical("nexus_treasury_history_unavailable",
+                                "Nexus deposit ingestion held: linked treasury history is incomplete",
+                                reason=scan.reason)
+                return
+            deferred_credit = scan.deferred_credit
+            pages = (scan.deposits,)
+        else:
+            pages = _legacy_nexus_history_pages(treasury_addr, limit, max_pages)
+        for page, txs in enumerate(pages):
+            offset_page_requested = page > 0
             if txs is None:
+                enumeration_complete = False
                 _log("NEXUS_ENUMERATION_FAILED", page=page, reason="invalid_response")
-                enumeration_complete = False
                 break
-            if not isinstance(txs, (list, dict)):
-                _log("NEXUS_ENUMERATION_FAILED", page=page, reason="unexpected_response")
-                enumeration_complete = False
-                break
-            if not isinstance(txs, list):
-                txs = [txs]
             if not txs:
                 break
             malformed = False
@@ -777,11 +783,12 @@ def poll_nexus_deposits():
                     page_ts_candidates.append(ts)
                     min_ts_page = ts if (min_ts_page is None or ts < min_ts_page) else min_ts_page
             # Process credits
-            micro_aggregated: list[dict] = []  # buffer of micro credits to aggregate (no owner lookup)
-            for tx in txs:
+            # Drain the oldest credits first when a linked range exceeds the batch budget.
+            ordered_txs = reversed(txs) if linked_history else iter(txs)
+            for tx in ordered_txs:
                 # Check processing limit for this loop iteration
                 if processed_count >= MAX_PROCESS_PER_LOOP:
-                    _log("NEXUS_LOOP_LIMIT_REACHED", processed=processed_count, remaining=len(txs) - txs.index(tx))
+                    _log("NEXUS_LOOP_LIMIT_REACHED", processed=processed_count)
                     backlog_truncated = True
                     break
                     
@@ -828,12 +835,17 @@ def poll_nexus_deposits():
                         # fee accounting. Recovery uses this same classifier.
                         continue
                     credit_units = classification.amount_nexus_units
+                    owner = (nexus_client.get_account_info(sender) or {}).get("owner")
+                    if linked_history and (not isinstance(owner, str) or not owner.strip()):
+                        enumeration_complete = False
+                        alerts.critical("nexus_credit_owner_unavailable", "Nexus credit held pending owner lookup",
+                                        txid=txid, contract_id=contract_id)
+                        continue
 
                     # Below the swap minimum but above dust: this is real user money.
                     # It must NEVER be dropped silently - record it so the funds are
                     # accounted for and the sender is traceable for manual resolution.
                     if classification.disposition == "below_minimum":
-                        owner = (nexus_client.get_account_info(sender) or {}).get("owner")
                         _finalize_nexus_credit_or_raise(
                             fee_kind="below_min_credit_nexus",
                             fee_nexus_units=credit_units,
@@ -858,7 +870,6 @@ def poll_nexus_deposits():
                     # Over-cap credits are retained for the explicit refund workflow;
                     # recovery makes this exact same disposition.
                     if classification.disposition == "over_cap":
-                        owner = (nexus_client.get_account_info(sender) or {}).get("owner")
                         state_db.add_unprocessed_txid(
                             txid=txid, contract_id=contract_id, timestamp=ts, amount_usdd=float(amount_dec),
                             from_address=sender, to_address=to_addr, owner_from_address=owner,
@@ -879,7 +890,6 @@ def poll_nexus_deposits():
                     # for a payout that will later resolve to zero.
                     if classification.disposition == "fee_only":
                         # Add to processed as fees
-                        owner = (nexus_client.get_account_info(sender) or {}).get("owner")
                         _finalize_nexus_credit_or_raise(
                             fee_kind="fee_only_nexus_credit",
                             fee_nexus_units=credit_units,
@@ -897,8 +907,6 @@ def poll_nexus_deposits():
                         processed_txids.add(identity)
                         processed_count += 1
                         continue
-                    # Owner lookup only for non-micro credits
-                    owner = (nexus_client.get_account_info(sender) or {}).get("owner")
                     state_db.add_unprocessed_txid(
                         txid=txid, contract_id=contract_id,
                         timestamp=ts,
@@ -915,11 +923,9 @@ def poll_nexus_deposits():
                     unprocessed_txids.add(identity)
                     processed_count += 1
                     _log("NEXUS_QUEUED", txid=txid, contract_id=contract_id, amount=str(amount_dec))
-            # Micro credits are fully ignored now (no aggregation flush)
-
             # Break conditions
-            if len(txs) < limit:
-                break  # no more pages
+            if linked_history or len(txs) < limit:
+                break  # complete linked snapshot or end of legacy pages
             if wl_cutoff and min_ts_page and min_ts_page < wl_cutoff:
                 break  # older than cutoff reached
             if page + 1 >= max_pages:
@@ -930,7 +936,6 @@ def poll_nexus_deposits():
 
         # Step 6: waterline proposal (only advance when safe)
         try:
-            safety = int(getattr(config, "HEARTBEAT_WATERLINE_SAFETY_SEC", 0))
             rows = state_db.get_unprocessed_txids_as_dicts()
             if not enumeration_complete:
                 _log("NEXUS_WATERLINE_HOLD", reason="enumeration_incomplete")
@@ -938,6 +943,18 @@ def poll_nexus_deposits():
                 _log("NEXUS_WATERLINE_HOLD", reason="pagination_truncated")
             elif offset_page_requested:
                 _log("NEXUS_WATERLINE_HOLD", reason="mutable_offset_pagination")
+            elif deferred_credit:
+                _log("NEXUS_WATERLINE_HOLD", reason="credit_awaiting_confirmations")
+            elif linked_history and page_ts_candidates:
+                # All eligible deposits were ingested. Use confirmed credit
+                # timestamps, not the wall clock or a non-credit sigchain entry.
+                pending = [int(row["ts"]) for row in rows if row.get("ts")]
+                candidate = min([max(page_ts_candidates), *pending]) - safety
+                if current_waterline < candidate <= int(time.time()):
+                    state_db.propose_nexus_waterline(candidate)
+            elif linked_history:
+                # Empty credit ranges have no confirmed credit timestamp to publish.
+                return
             elif rows:
                 ts_candidates = [int(x.get("ts") or 0) for x in rows if int(x.get("ts") or 0) > 0]
                 if ts_candidates:

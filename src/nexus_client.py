@@ -552,6 +552,9 @@ def execute_nexus_transfer_intent(intent_id: str) -> TransferExecution:
     unparseable successful output can all occur after the Nexus node accepted the
     debit, so each requires positive reference resolution rather than another debit.
     """
+    # A predictable refusal must not consume the sole execution authorization.
+    from . import custody_chain
+    custody_chain.require_signing()
     intent = state_db.claim_nexus_transfer_intent(intent_id)
     if intent is None:
         existing = state_db.get_nexus_transfer_intent(intent_id)
@@ -1976,7 +1979,11 @@ def publish_service_record(status: str = "online", last_poll: int | None = None,
     rec = build_service_record(status=status, last_poll=last_poll,
                                wline_sol=wline_sol, wline_nxs=wline_nxs)
     nxs_field, sol_field = heartbeat_waterline_field_names()
-    mutable = set(SERVICE_RECORD_MUTABLE) | {sol_field, nxs_field}
+    mutable: set[str] = {key for key in SERVICE_RECORD_MUTABLE if key not in {sol_field, nxs_field}}
+    if wline_sol is not None:
+        mutable.add(sol_field)
+    if wline_nxs is not None:
+        mutable.add(nxs_field)
     cmd = [config.NEXUS_CLI, "assets/update/asset", _heartbeat_selector(), "format=basic",
            f"pin={config.NEXUS_PIN}"]
     wrote = 0
@@ -1991,8 +1998,7 @@ def publish_service_record(status: str = "online", last_poll: int | None = None,
         if code != 0:
             _log("nexus_service_record_update_failed", level=logging.ERROR, error=redact(err or out))
             return False
-        data = _parse_json_lenient(out)
-        return bool(isinstance(data, dict) and data.get("success"))
+        return _heartbeat_update_acknowledged(out)
     except Exception as e:
         _log("nexus_service_record_update_failed", level=logging.ERROR, error=redact(str(e)))
         return False
@@ -2012,6 +2018,22 @@ def read_service_record(name: str | None = None) -> Optional[Dict[str, Any]]:
         return data if isinstance(data, dict) else None
     except Exception:
         return None
+
+
+def _heartbeat_update_acknowledged(output: str) -> bool:
+    body = _parse_json_lenient(output)
+    if not isinstance(body, dict) or "error" in body:
+        return False
+    result = body.get("result", body)
+    if not isinstance(result, dict) or "error" in result or result.get("success") is not True:
+        return False
+    if not config.PRODUCTION_MODE:
+        return True
+    txid = result.get("txid")
+    # A queued autotx write can acknowledge success without a signed transaction.
+    return (bool(config.NEXUS_HEARTBEAT_ASSET_ADDRESS)
+            and result.get("address") == config.NEXUS_HEARTBEAT_ASSET_ADDRESS
+            and nexus_memo.is_canonical_nexus_txid(txid) and txid != "0" * 128)
 
 
 def update_heartbeat_asset(last_poll: int, wline_nxs: int | None, wline_sol: int | None) -> bool:
@@ -2042,8 +2064,7 @@ def update_heartbeat_asset(last_poll: int, wline_nxs: int | None, wline_sol: int
         if code != 0:
             _log("nexus_heartbeat_update_failed", level=logging.ERROR, error=redact(err or out))
             return False
-        data = _parse_json_lenient(out)
-        if isinstance(data, dict) and data.get("success"):
+        if _heartbeat_update_acknowledged(out):
             state_db.update_heartbeat(
                 name=config.NEXUS_HEARTBEAT_ASSET_NAME,
                 last_beat=last_poll,
@@ -2164,6 +2185,7 @@ class DepositScan:
     deposits: list[dict]
     complete: bool
     reason: str | None = None
+    deferred_credit: bool = False
 
 
 def treasury_credit_contracts(transaction: dict, treasury_addr: str) -> list[dict]:
@@ -2232,7 +2254,8 @@ _RECOVERY_CONTRACT_OPS = frozenset({
 })
 
 
-def fetch_deposits_since(treasury_addr: str, since_timestamp: int, max_pages: int = 50) -> DepositScan:
+def fetch_deposits_since(treasury_addr: str, since_timestamp: int, max_pages: int = 50,
+                         *, live_min_confirmations: int | None = None) -> DepositScan:
     """Recover from a single hash-linked owner sigchain range, not register offset pages.
 
     Verified against LLL-TAO 5.1.6 (1185145534a20ed4d2288e4513c505f271be536d):
@@ -2246,6 +2269,8 @@ def fetch_deposits_since(treasury_addr: str, since_timestamp: int, max_pages: in
     The legacy page budget now sizes one response (100 rows per unit, at most 5000,
     plus a truncation sentinel). It bounds client rows, not the node's internal walk.
     This is a view as of the returned head, not a reorg lock or finality guarantee.
+    Live reads may defer shallow credits without applying them or advancing the
+    checkpoint past them. Startup recovery still requires confirmed history.
     """
     def incomplete(reason: str) -> DepositScan:
         return DepositScan([], False, reason)
@@ -2256,6 +2281,10 @@ def fetch_deposits_since(treasury_addr: str, since_timestamp: int, max_pages: in
         return incomplete("invalid_waterline")
     if type(max_pages) is not int or not 1 <= max_pages <= 50:
         return incomplete("invalid_history_budget")
+    if live_min_confirmations is not None and (
+        type(live_min_confirmations) is not int or live_min_confirmations <= 0
+    ):
+        return incomplete("invalid_confirmation_policy")
 
     account, reason = _read_recovery_history([
         config.NEXUS_CLI, "register/get/finance:account", f"address={treasury_addr}",
@@ -2285,7 +2314,10 @@ def fetch_deposits_since(treasury_addr: str, since_timestamp: int, max_pages: in
     results: list[dict] = []
     seen: set[str] = set()
     expected_hash = None
+    newer_timestamp: int | None = None
     created = False
+    confirmed_suffix = False
+    deferred_credit = False
     for sequence, tx in zip(range(len(txs) - 1, -1, -1), txs):
         if not isinstance(tx, dict):
             return incomplete("invalid_transaction")
@@ -2302,10 +2334,19 @@ def fetch_deposits_since(treasury_addr: str, since_timestamp: int, max_pages: in
         timestamp = tx.get("timestamp")
         if type(timestamp) is not int or timestamp <= 0:
             return incomplete("invalid_timestamp")
+        if newer_timestamp is not None and timestamp > newer_timestamp:
+            return incomplete("invalid_sigchain_timestamp_order")
+        newer_timestamp = timestamp
+        # LLL-TAO detail omits confirmations and blockhash for mempool rows.
+        # Accept these only as a contiguous prefix, never as chain evidence.
         confirmations = tx.get("confirmations")
-        if type(confirmations) is not int or confirmations <= 0:
-            # The node may start from a mempool head or lack block-index evidence.
+        if (live_min_confirmations is not None and not confirmed_suffix
+                and "confirmations" not in tx and "blockhash" not in tx):
+            confirmations = 0
+        elif type(confirmations) is not int or confirmations <= 0:
             return incomplete("invalid_confirmations")
+        else:
+            confirmed_suffix = True
         contracts = tx.get("contracts")
         if not isinstance(contracts, list) or not 1 <= len(contracts) <= 100:
             return incomplete("invalid_contracts")
@@ -2323,7 +2364,7 @@ def fetch_deposits_since(treasury_addr: str, since_timestamp: int, max_pages: in
                 if address == treasury_addr:
                     if op != "CREATE" or created:
                         return incomplete("treasury_ownership_changed")
-                    created = True
+                    created = confirmations > 0
             if op != "CREDIT":
                 continue
             to_address = _parse_nexus_contract_address(contract.get("to"))
@@ -2337,10 +2378,13 @@ def fetch_deposits_since(treasury_addr: str, since_timestamp: int, max_pages: in
                 return incomplete("invalid_credit_amount")
             has_credit = True
         if has_credit:
-            results.append(tx)
+            if live_min_confirmations is not None and confirmations < live_min_confirmations:
+                deferred_credit = True
+            else:
+                results.append(tx)
     if not created:
         return incomplete("treasury_creation_unproven")
-    return DepositScan(results, True)
+    return DepositScan(results, True, deferred_credit=deferred_credit)
 
 
 ## Reference integer fetching

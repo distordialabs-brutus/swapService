@@ -142,7 +142,9 @@ A crash or unknown outcome after claim consumes the permit and blocks automatic 
 
 ## Nexus recovery bound
 
-Startup recovery reads the treasury owner's linked Nexus transaction history, not mutable register offset pages. Use a dedicated treasury profile that created and continuously owns the treasury and whose full history fits within 5,000 transactions. Partial, unconfirmed, truncated or discontinuous evidence blocks startup. The cap bounds returned records, not how far the target node may walk internally. Live polling and historical mint reconciliation still use separate history paths; confirm both stay within their supported windows for the pilot. Rehearse recovery past 100 records on the intended Nexus build before accepting the deployment.
+Startup recovery and production deposit polling read the treasury owner's linked Nexus transaction history, not mutable register offset pages. Use a dedicated treasury profile that created and continuously owns the treasury and whose full history fits within 5,000 transactions. A gap or truncation blocks startup and live ingestion. Startup also requires on-chain confirmation for the linked history. Live ingestion can process confirmed credits behind a mempool head, but defers shallow credits and holds the checkpoint while any credit is deferred. Use synchronous heartbeat updates (no queued auto-transaction mode); an update must acknowledge the pinned register and return a transaction ID. The cap bounds returned records, not how far the target node may walk internally. Historical mint reconciliation still uses a separate history path; confirm it stays within its supported window. Rehearse startup and live polling past 100 records on the intended Nexus build before accepting the deployment.
+
+The standalone `nexus_transfer_operator.py execute` command is test-only. In production it refuses before recording or claiming execution. Keep refund obligations held until there is an independently reviewed disposition path; do not disable production mode to send a refund.
 
 ## Verification scope
 
