@@ -1132,6 +1132,11 @@ def process_unprocessed_solana_deposits(limit: int = 1000, timeout: float = 8.0)
 
             try:
                 result = nexus_client.debit_nexus_token_with_txid(nexus_address, net_amount, reference)
+            except nexus_client.NexusMintNotSubmitted:
+                requeued = state_db.requeue_unsent_nexus_mint(sig, reference)
+                _log("nexus_mint_signing_refused", level=logging.WARNING, sig=sig,
+                     reference=reference, requeued=requeued)
+                break  # The chain gate is closed, not a per-deposit rejection.
             except Exception as e:
                 # Timeout or transport failure: the debit may still have executed.
                 state_db.update_unprocessed_sig_status(sig, "debit unverified")
@@ -1140,9 +1145,8 @@ def process_unprocessed_solana_deposits(limit: int = 1000, timeout: float = 8.0)
                 continue
 
             if result[0] and result[1]:
-                proc_count_swap += 1
-                state_db.update_unprocessed_sig_txid(sig, str(result[1]))
-                state_db.update_unprocessed_sig_status(sig, "debited, awaiting confirmation")
+                if state_db.record_submitted_nexus_mint(sig, reference, str(result[1])):
+                    proc_count_swap += 1
             else:
                 # The CLI reported failure OR returned an unparsable body. Both are
                 # AMBIGUOUS - debit_nexus_token_with_txid returns (False, None) when the call
@@ -1991,10 +1995,12 @@ def check_timestamp_unpr_sigs() -> int | None:
     # Propose the waterline as oldest_timestamp - 1 to ensure the oldest sig is included in the next poll
     new_waterline = oldest_timestamp - 1
     
-    # Propose the new waterline
-    state_db.propose_solana_waterline(new_waterline)
-    _log("solana_waterline_proposed", proposed_waterline=new_waterline,
-         oldest_unprocessed_timestamp=oldest_timestamp)
+    # Production publishes only the poller's final candidate after applying all
+    # deferred-deposit, durable-hold and safety-overlap bounds.
+    if not config.PRODUCTION_MODE:
+        state_db.propose_solana_waterline(new_waterline)
+        _log("solana_waterline_proposed", proposed_waterline=new_waterline,
+             oldest_unprocessed_timestamp=oldest_timestamp)
     
     return new_waterline
 

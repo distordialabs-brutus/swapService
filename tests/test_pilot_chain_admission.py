@@ -3,7 +3,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from src import config, custody_chain, nexus_client
+from src import config, custody_chain, main, nexus_client, state_db
 from src.custody_admission import AdmissionError
 
 
@@ -66,6 +66,30 @@ def test_service_record_refresh_does_not_reset_waterlines(monkeypatch):
     monkeypatch.setattr(nexus_client, '_run', run)
     assert nexus_client.publish_service_record(status='paused')
     assert not any(arg.startswith((f'{nx}=', f'{sol}=')) for arg in run.call_args.args[0])
+
+
+def test_custody_heartbeat_combines_proposals_and_throttles_failed_attempt(tmp_path, monkeypatch):
+    monkeypatch.setattr(state_db, "DB_PATH", str(tmp_path / "heartbeat.db"))
+    state_db.init_db()
+    state_db.propose_solana_waterline(200)
+    state_db.propose_nexus_waterline(300)
+    monkeypatch.setattr(config, "HEARTBEAT_MIN_INTERVAL_SEC", 300)
+    now = Mock(side_effect=[10, 11, 310])
+    monkeypatch.setattr(main.time, "monotonic", now)
+    publish = Mock(side_effect=[False, True])
+    monkeypatch.setattr(nexus_client, "publish_service_record", publish)
+    next_attempt = main._maybe_publish_custody_heartbeat(False, 0)
+    assert main._maybe_publish_custody_heartbeat(False, next_attempt) == next_attempt
+    assert publish.call_count == 1
+    assert state_db.get_proposed_solana_waterline() == 200
+    assert state_db.get_proposed_nexus_waterline() == 300
+    main._maybe_publish_custody_heartbeat(True, next_attempt)
+    assert publish.call_count == 2
+    assert publish.call_args.kwargs["status"] == "paused"
+    assert publish.call_args.kwargs["wline_sol"] == 200
+    assert publish.call_args.kwargs["wline_nxs"] == 300
+    assert state_db.get_proposed_solana_waterline() is None
+    assert state_db.get_proposed_nexus_waterline() is None
 
 
 @pytest.mark.parametrize('confirmations, allowed', [(2, False), (10, True)])

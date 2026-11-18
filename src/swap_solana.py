@@ -37,7 +37,8 @@ def _advance_solana_waterline(current_wline, poll_start, fetch_ok: bool, deferre
     safety = int(getattr(config, "HEARTBEAT_WATERLINE_SAFETY_SEC", 120))
     if not fetch_ok:
         _log("WATERLINE_HELD", reason="deposit_fetch_failed")
-        nexus_client.update_heartbeat_asset(int(poll_start), None, None)
+        if not config.PRODUCTION_MODE:
+            nexus_client.update_heartbeat_asset(int(poll_start), None, None)
         return
 
     oldest_pending = solana_client.check_timestamp_unpr_sigs()  # oldest unprocessed ts - 1, else None
@@ -47,7 +48,8 @@ def _advance_solana_waterline(current_wline, poll_start, fetch_ok: bool, deferre
     else:
         if type(covered_through_ts) is not int or covered_through_ts <= 0:
             _log("WATERLINE_HELD", reason="missing_completed_cursor_coverage")
-            nexus_client.update_heartbeat_asset(int(poll_start), None, None)
+            if not config.PRODUCTION_MODE:
+                nexus_client.update_heartbeat_asset(int(poll_start), None, None)
             return
         candidate = int(covered_through_ts) - safety
         reason = "completed_cursor_range_persisted"
@@ -71,8 +73,11 @@ def _advance_solana_waterline(current_wline, poll_start, fetch_ok: bool, deferre
 
     if candidate > int(current_wline):
         _log("WATERLINE_ADVANCED", old_ts=int(current_wline), new_ts=candidate, reason=reason)
-        nexus_client.update_heartbeat_asset(int(poll_start), None, candidate)
-    else:
+        if config.PRODUCTION_MODE:
+            state_db.propose_solana_waterline(candidate)
+        else:
+            nexus_client.update_heartbeat_asset(int(poll_start), None, candidate)
+    elif not config.PRODUCTION_MODE:
         # Never move backwards; still refresh the liveness heartbeat.
         nexus_client.update_heartbeat_asset(int(poll_start), None, None)
 
@@ -213,11 +218,12 @@ def poll_solana_deposits(paused: bool = False):
         # Refresh the public registration record (status + current terms) alongside the
         # heartbeat, so a client reading it on-chain sees whether we are paused and what
         # fees/minimums are actually in force right now.
-        try:
-            nexus_client.publish_service_record(
-                status="paused" if paused else "online", last_poll=int(poll_start))
-        except Exception as e:
-            _log("SERVICE_RECORD_UPDATE_FAILED", error=str(e))
+        if not config.PRODUCTION_MODE:
+            try:
+                nexus_client.publish_service_record(
+                    status="paused" if paused else "online", last_poll=int(poll_start))
+            except Exception as e:
+                _log("SERVICE_RECORD_UPDATE_FAILED", error=str(e))
 
         # Retained for observability only; this value no longer gates ingestion.
         current_bal_after = solana_client.get_token_account_balance(config.VAULT_USDC_ACCOUNT)

@@ -13,6 +13,7 @@ from urllib.request import (
     build_opener,
 )
 from . import config
+from .custody_admission import AdmissionError
 from . import (
     state_db, nexus_client, nexus_memo, receipt_contract, solana_deposit_policy,
     structured_logging,
@@ -141,7 +142,7 @@ def nexus_api_transport_errors() -> list[str]:
     return errors
 
 
-def _run_via_nexus_api(cmd: list[str], timeout: int) -> tuple[int, str, str]:
+def _run_via_nexus_api(cmd: list[str], timeout: float) -> tuple[int, str, str]:
     """POST a Nexus CLI-shaped command without putting credentials in ``argv``.
 
     Nexus accepts the same logical endpoint and key/value fields through its HTTP API.
@@ -197,14 +198,23 @@ def _run_via_nexus_api(cmd: list[str], timeout: int) -> tuple[int, str, str]:
         return 1, "", "Nexus API request failed"
 
 
-def _run(cmd: list[str], timeout: int = 15) -> tuple[int, str, str]:
+class NexusMintNotSubmitted(AdmissionError):
+    """The local signing check refused this mint before any transport call."""
+
+
+def _run(cmd: list[str], timeout: float = 15) -> tuple[int, str, str]:
     # Only explicitly read-only verbs bypass custody signing checks. The same
     # boundary serves both the local CLI and HTTP transport.
     if config.PRODUCTION_MODE and cmd[1].split('/')[1:2] not in (
         ['get'], ['list'], ['history'], ['transactions'], ['validate'],
     ):
         from . import custody_chain
-        custody_chain.require_signing()
+        try:
+            custody_chain.require_signing()
+        except Exception as exc:
+            if cmd[1] == "finance/debit/token":
+                raise NexusMintNotSubmitted("custody mint signing refused before transport") from exc
+            raise
     cmd = apply_session(cmd)
     if str(getattr(config, "NEXUS_API_URL", "") or "").strip():
         return _run_via_nexus_api(cmd, timeout)
@@ -455,21 +465,25 @@ def debit_nexus_token_with_txid(to_addr: str, amount_usdd_units: int, reference:
         return (False, None)
 
     amount_str = _format_nexus_amount(int(amount_usdd_units))
-    cmd = [config.NEXUS_CLI, "finance/debit/token", f"from={config.NEXUS_TOKEN_NAME}",
+    source = config.SWAP_PAIR.nexus.register_address if config.PRODUCTION_MODE else config.NEXUS_TOKEN_NAME
+    if not source:
+        return (False, None)
+    cmd = [config.NEXUS_CLI, "finance/debit/token", f"from={source}",
            f"to={to_addr}", f"amount={amount_str}", f"reference={reference}", f"pin={config.NEXUS_PIN}"]
     # Use a generous, consistent timeout: a debit killed mid-flight may still execute
     # on the node, which would desynchronize state and risk a double payout.
     code, out, err = _run(cmd, timeout=getattr(config, "NEXUS_CLI_TIMEOUT_SEC", 30))
     if code != 0:
         return (False, None)
-    # Try to pick txid from output JSON or text
-    txid = None
+    if config.PRODUCTION_MODE:
+        data, error = _parse_nexus_result(out)
+        txid = data.get("txid") if error is None and isinstance(data, dict) else None
+        if not nexus_memo.is_canonical_nexus_txid(txid) or txid == "0" * 128:
+            return (False, None)  # The caller preserves the ambiguous intent.
+        return (True, txid)
     data = _parse_json_lenient(out)
-    if isinstance(data, dict):
-        txid = data.get("txid")
-    if not txid:
-        return (False, None)
-    return (True, str(txid) if txid else None)
+    txid = data.get("txid") if isinstance(data, dict) and not data.get("error") else None
+    return (True, str(txid)) if txid else (False, None)
 
 
 @dataclass(frozen=True)
@@ -676,7 +690,9 @@ def has_confirmed_treasury_credit(*, txid: object, contract_id: int, source: obj
         return False
 
 
-def get_nexus_transfer_debits_by_txid(txid: str) -> "BatchLookup":
+def get_nexus_transfer_debits_by_txid(
+    txid: str, *, min_confirmations: int = 0, timeout: float | None = None,
+) -> "BatchLookup":
     """Read one returned Nexus transaction by its authoritative immutable identity.
 
     A locally persisted txid is evidence returned by the sole allowed debit invocation.
@@ -686,12 +702,14 @@ def get_nexus_transfer_debits_by_txid(txid: str) -> "BatchLookup":
     retryable; those remain held pending a target-proven stable-range query.
     """
     expected_txid = str(txid or "").strip()
-    if not expected_txid:
+    if not expected_txid or (config.PRODUCTION_MODE and (
+        not nexus_memo.is_canonical_nexus_txid(txid) or expected_txid == "0" * 128
+    )):
         return BatchLookup({}, False, "invalid_txid")
     cmd = [config.NEXUS_CLI, "ledger/get/transaction", f"txid={expected_txid}"]
     try:
         code, cli_out, err = _run(
-            cmd, timeout=getattr(config, "NEXUS_CLI_TIMEOUT_SEC", 20)
+            cmd, timeout=timeout if timeout is not None else config.NEXUS_CLI_TIMEOUT_SEC,
         )
     except Exception as exc:
         _log("nexus_transfer_txid_lookup_failed", level=logging.ERROR, error=redact(str(exc)))
@@ -700,10 +718,9 @@ def get_nexus_transfer_debits_by_txid(txid: str) -> "BatchLookup":
         _log("nexus_transfer_txid_lookup_failed", level=logging.ERROR,
              error=redact(err or cli_out), reason="cli_error")
         return BatchLookup({}, False, "cli_error")
-    data = _parse_json_lenient(cli_out)
-    if isinstance(data, dict) and data.get("error"):
-        return BatchLookup({}, False, "api_error")
-    tx = data.get("result") if isinstance(data, dict) and "result" in data else data
+    tx, error = _parse_nexus_result(cli_out)
+    if error is not None:
+        return BatchLookup({}, False, error)
     if not isinstance(tx, dict) or str(tx.get("txid") or "") != expected_txid:
         return BatchLookup({}, False, "invalid_transaction")
     confirmations = tx.get("confirmations")
@@ -712,7 +729,7 @@ def get_nexus_transfer_debits_by_txid(txid: str) -> "BatchLookup":
     except ValueError:
         return BatchLookup({}, False, "invalid_finality_policy")
     if (isinstance(confirmations, bool) or not isinstance(confirmations, int)
-            or confirmations < minimum_confirmations):
+            or confirmations < max(minimum_confirmations, min_confirmations)):
         return BatchLookup({}, False, "insufficient_confirmations")
     contracts = tx.get("contracts")
     if not isinstance(contracts, list):
@@ -930,58 +947,67 @@ def get_transactions_confirmations(txids, limit: int = 200) -> BatchLookup:
     return BatchLookup(out, False, "pagination_truncated")
 
 
+_mint_confirmation_cursor: tuple[int, str] | None = None
+
+
 def check_unconfirmed_debits(min_confirmations: int, timeout: int) -> int:
     """Confirm positively observed Nexus debits; ambiguity stays pending.
 
     A negative history lookup is not proof of non-execution, so this pass never refunds.
     Missing txids and missing lookup values require manual resolution.
     """
-    sigs = state_db.filter_unprocessed_sigs({
-        'status': 'debited, awaiting confirmation',
-        'limit': 1000
-    })
+    global _mint_confirmation_cursor
+    if config.PRODUCTION_MODE:
+        filters = {
+            'status_in': ('debited, awaiting confirmation', *DEBIT_UNVERIFIED_STATUSES),
+            'has_txid': True, 'limit': 1000,
+        }
+        sigs = state_db.filter_unprocessed_sigs({**filters, 'after': _mint_confirmation_cursor})
+        if not sigs and _mint_confirmation_cursor is not None:
+            _mint_confirmation_cursor = None
+            sigs = state_db.filter_unprocessed_sigs(filters)
+    else:
+        sigs = state_db.filter_unprocessed_sigs({'status': 'debited, awaiting confirmation', 'limit': 1000})
     if not sigs:
         return 0
 
     processed_count = 0
     time_start = time.monotonic()
-    current_time = time_start
-    # One bounded lookup for the whole batch instead of an unbounded fetch per row.
-    confirmation_lookup = get_transactions_confirmations([row[6] for row in sigs if row[6]])
-
-    # A confirmation count proves only that the submitted transaction exists.  For a
-    # known txid, use the authoritative ledger lookup instead of a live offset-paginated
-    # reference-history scan: the latter cannot establish a stable global range and would
-    # leave a valid Solana→Nexus mint held forever.  Each returned DEBIT is still checked
-    # against the immutable reference, source register, destination and integer output.
+    source_register = (config.SWAP_PAIR.nexus.register_address if config.PRODUCTION_MODE
+                       else config.NEXUS_TOKEN_REGISTER_ADDRESS)
+    # Production reads submitted txids directly. A lossy token-index projection
+    # need not rediscover the same transaction before we can verify its exact terms.
+    confirmation_lookup = None if config.PRODUCTION_MODE else get_transactions_confirmations(
+        [row[6] for row in sigs if row[6]]
+    )
     debit_lookups: dict[str, BatchLookup] = {}
-    for _sig, _timestamp, _memo, _from_address, _amount_usdc_units, _status, txid in sigs:
-        txid_text = str(txid).strip() if txid else ""
-        confirmations = confirmation_lookup.values.get(txid_text) if txid_text else None
-        if confirmations is not None and confirmations >= min_confirmations:
-            debit_lookups.setdefault(txid_text, get_nexus_transfer_debits_by_txid(txid_text))
-
-    # filter_unprocessed_sigs returns: (sig, timestamp, memo, from_address, amount_usdc_units, status, txid)
     for sig, timestamp, memo, from_address, amount_usdc_units, status, txid in sigs:
+        remaining = timeout - (time.monotonic() - time_start)
+        if config.PRODUCTION_MODE:
+            if remaining <= 0:
+                break
+            _mint_confirmation_cursor = (timestamp, sig)
         if not txid:
             _log("nexus_debit_confirmation_held", level=logging.WARNING, sig=sig,
                  reason="missing_txid")
             continue
+        txid_text = str(txid).strip()
+        if confirmation_lookup is not None:
+            confirmations = confirmation_lookup.values.get(txid_text)
+            if confirmations is None:
+                _log("nexus_debit_confirmation_held", level=logging.WARNING, sig=sig, txid=txid,
+                     reason=confirmation_lookup.reason or "not_observed")
+                continue
+            if confirmations < min_confirmations:
+                continue
+        if txid_text not in debit_lookups:
+            debit_lookups[txid_text] = (
+                get_nexus_transfer_debits_by_txid(txid_text, min_confirmations=min_confirmations,
+                                                timeout=min(remaining, 3.0, config.NEXUS_CLI_TIMEOUT_SEC))
+                if config.PRODUCTION_MODE else get_nexus_transfer_debits_by_txid(txid_text)
+            )
+        debit_lookup = debit_lookups[txid_text]
 
-        confirmations = confirmation_lookup.values.get(str(txid))
-        
-        # A missing value is never proof that the debit did not execute.
-        if confirmations is None:
-            _log("nexus_debit_confirmation_held", level=logging.WARNING, sig=sig, txid=txid,
-                 reason=confirmation_lookup.reason or "not_observed")
-            continue
-        
-        # Case 2: Transaction exists but not enough confirmations yet
-        if confirmations < min_confirmations:
-            # IMPORTANT: Do NOT refund! The debit happened, just not fully confirmed yet.
-            # Wait for more confirmations - do not timeout a partially confirmed transaction.
-            continue
-        
         # Case 3: a confirmed transaction still needs exact contract read-back.  Its
         # persisted per-deposit reference is part of the immutable on-chain identity;
         # never substitute the latest global reference while this debit waited.
@@ -989,12 +1015,6 @@ def check_unconfirmed_debits(min_confirmations: int, timeout: int) -> int:
         if reference is None:
             _log("nexus_debit_confirmation_held", level=logging.WARNING, sig=sig, txid=txid,
                  reason="missing_reference")
-            continue
-        txid_text = str(txid).strip()
-        debit_lookup = debit_lookups.get(txid_text)
-        if debit_lookup is None:
-            _log("nexus_debit_confirmation_held", level=logging.WARNING, sig=sig, txid=txid,
-                 reference=reference, reason="missing_authoritative_txid_lookup")
             continue
         if isinstance(amount_usdc_units, bool) or not isinstance(amount_usdc_units, int):
             _log("nexus_debit_confirmation_held", level=logging.WARNING, sig=sig, txid=txid,
@@ -1026,7 +1046,7 @@ def check_unconfirmed_debits(min_confirmations: int, timeout: int) -> int:
         exact_contracts = [
             evidence for evidence in debit_lookup.values.get(txid_text, [])
             if evidence.reference == str(reference).strip()
-            and evidence.from_address == str(config.NEXUS_TOKEN_REGISTER_ADDRESS)
+            and evidence.from_address == source_register
             and evidence.to_address == nexus_destination
             and evidence.amount_usdd_units == nexus_out_base
         ]
@@ -1079,6 +1099,9 @@ def check_unconfirmed_debits(min_confirmations: int, timeout: int) -> int:
                 _log("nexus_receipt_publication_manual_review", level=logging.WARNING, sig=sig,
                      txid=txid, reason="invalid_receipt_evidence", error=receipt_error)
 
+        if config.PRODUCTION_MODE and status in DEBIT_UNVERIFIED_STATUSES:
+            if not state_db.record_submitted_nexus_mint(sig, reference, txid_text):
+                continue
         finalized = state_db.finalize_confirmed_solana_payout(
             sig=sig,
             timestamp=timestamp,
@@ -1132,7 +1155,9 @@ def resolve_unverified_debits(limit: int = 200) -> int:
 
     Returns the number of rows whose state was resolved.
     """
-    rows = state_db.get_sigs_pending_debit_verification(DEBIT_UNVERIFIED_STATUSES, limit=limit)
+    rows = (state_db.get_sigs_pending_debit_verification(DEBIT_UNVERIFIED_STATUSES, limit=limit, missing_txid=True)
+            if config.PRODUCTION_MODE else
+            state_db.get_sigs_pending_debit_verification(DEBIT_UNVERIFIED_STATUSES, limit=limit))
     if not rows:
         return 0
 
@@ -1140,12 +1165,22 @@ def resolve_unverified_debits(limit: int = 200) -> int:
     # intent, but the remote debit must also match the memo recipient and exact output
     # fixed before the debit was submitted.  Otherwise a same-reference debit could
     # attach an unrelated Nexus txid to this Solana deposit and later authorize a payout.
-    reference_lookup = find_nexus_transfer_debits_by_references(
-        [r[7] for r in rows if r[7] is not None]
-    )
+    source_register = (config.SWAP_PAIR.nexus.register_address if config.PRODUCTION_MODE
+                       else config.NEXUS_TOKEN_REGISTER_ADDRESS)
+    if config.PRODUCTION_MODE:
+        history = _find_owned_token_mint_debits(0)
+        by_reference: dict[str, list[NexusMintDebitEvidence]] = {}
+        for candidates in history.values.values():
+            for evidence in candidates:
+                by_reference.setdefault(evidence.reference, []).append(evidence)
+        reference_lookup = BatchLookup(by_reference, history.complete, history.reason)
+    else:
+        reference_lookup = find_nexus_transfer_debits_by_references(
+            [r[7] for r in rows if r[7] is not None]
+        )
 
-    # A reference scan that is bounded, malformed, failed, or otherwise incomplete
-    # cannot prove global uniqueness.  In particular, one exact-looking contract in
+    # A truncated, malformed, failed, or otherwise incomplete reference scan
+    # cannot prove uniqueness.  In particular, one exact-looking contract in
     # the observed window does not exclude a second matching contract outside it.
     # Leave every ambiguous debit held rather than attaching a remote txid that could
     # later authorize an unrelated terminal mint.
@@ -1183,24 +1218,33 @@ def resolve_unverified_debits(limit: int = 200) -> int:
 
             candidates = [
                 evidence for evidence in reference_lookup.values.get(str(reference).strip(), [])
-                if evidence.from_address == str(config.NEXUS_TOKEN_REGISTER_ADDRESS)
+                if evidence.from_address == source_register
                 and evidence.to_address == destination
                 and evidence.amount_usdd_units == expected_amount
             ]
             # A single transaction can have multiple matching contracts. Treat that as
             # an ambiguous mint until an operator resolves it; its txid is not identity.
+            reason = None
             if len(candidates) != 1:
+                reason = "no_unique_exact_debit_contract"
+            elif config.PRODUCTION_MODE and candidates[0].confirmations < config.get_nexus_transfer_min_confirmations():
+                reason = "insufficient_confirmations"
+            if reason is not None:
                 _log(
                     "nexus_debit_resolution_held", level=logging.WARNING, sig=sig,
                     reference=reference,
-                    reason=reference_lookup.reason or "no_unique_exact_debit_contract",
+                    reason=reason,
                     matching_contracts=len(candidates),
                 )
                 continue
 
             found_txid = candidates[0].remote_txid
-            state_db.update_unprocessed_sig_txid(sig, found_txid)
-            state_db.update_unprocessed_sig_status(sig, "debited, awaiting confirmation")
+            if config.PRODUCTION_MODE:
+                if not state_db.record_submitted_nexus_mint(sig, reference, found_txid):
+                    continue
+            else:
+                state_db.update_unprocessed_sig_txid(sig, found_txid)
+                state_db.update_unprocessed_sig_status(sig, "debited, awaiting confirmation")
             state_db.release_reservation(state_db.DEBIT_RESERVATION_KIND, sig)
             _log("nexus_debit_resolution_confirmed", sig=sig, reference=reference,
                  remote_txid=found_txid)
@@ -1441,16 +1485,53 @@ def find_asset_receival_account_by_txid_and_owner(
         return AssetLookup(None, False, "exception")
 
 
+def _find_owned_token_mint_debits(since_timestamp: int) -> BatchLookup:
+    """Find every debit of the continuously owned token, including pending debits."""
+    token = config.SWAP_PAIR.nexus.register_address
+    if not isinstance(token, str) or not token.strip():
+        return BatchLookup({}, False, "missing_token_register")
+    if type(since_timestamp) is not int or since_timestamp < 0:
+        return BatchLookup({}, False, "invalid_waterline")
+    txs, reason = _read_owned_register_history(token, "token", 5000, allow_mempool=True)
+    if txs is None:
+        return BatchLookup({}, False, reason)
+    found: dict[str, list[NexusMintDebitEvidence]] = {}
+    for tx, confirmations in txs:
+        if tx["timestamp"] < since_timestamp:
+            continue
+        for contract in tx["contracts"]:
+            if contract["OP"] != "DEBIT":
+                continue
+            source = _parse_nexus_contract_address(contract.get("from"))
+            if source is None:
+                return BatchLookup({}, False, "invalid_debit_source")
+            if source != token:
+                continue  # A debit from an account does not mint from the token register.
+            destination = _parse_nexus_contract_address(contract.get("to"))
+            reference = contract.get("reference")
+            amount = _parse_exact_nexus_units(contract.get("amount"))
+            if not destination or type(reference) is not int or not 0 <= reference < 2**64 or not amount:
+                return BatchLookup({}, False, "invalid_debit_evidence")
+            found.setdefault(tx["txid"], []).append(NexusMintDebitEvidence(
+                remote_txid=tx["txid"], timestamp=tx["timestamp"], confirmations=confirmations,
+                from_address=source, to_address=destination, amount_usdd_units=amount,
+                reference=str(reference), contract_id=contract["id"],
+            ))
+    return BatchLookup(found, True)
+
+
 def find_nexus_mint_debits_since(
     recipients, since_timestamp: int, limit: int = 100
 ) -> BatchLookup:
     """Enumerate exact remote mint contracts for completed-mint reconciliation.
 
-    The token history is the remote source of truth. A result is complete only after the
-    ordered scan reaches the requested time boundary (or the endpoint returns a short
-    final page). Any malformed DEBIT, API error, unstable ordering, or exhausted page
-    budget remains explicitly incomplete and therefore cannot authorize a green result.
+    Production proves the token owner's linked history from its head to genesis and
+    applies the inclusive timestamp locally. Only development retains the old token
+    index query, which is not an authoritative coverage proof.
     """
+    if config.PRODUCTION_MODE:
+        return _find_owned_token_mint_debits(since_timestamp)
+
     # The caller provides known recipients for interface clarity, but the scan must
     # retain every DEBIT. Restricting by known recipients would hide an unauthorized
     # token-supply emission to a new address and permit a false green result.
@@ -1765,11 +1846,17 @@ def get_circulating_nexus_units() -> int:
     if code != 0:
         raise RuntimeError(f"Nexus token supply lookup failed: {redact(err or out)}")
 
-    data = _parse_json_lenient(out)
-    if isinstance(data, dict) and data.get("error"):
-        raise RuntimeError(f"Nexus token supply API error: {redact(str(data['error']))}")
+    data, error = _parse_nexus_result(out)
+    if error is not None:
+        raise RuntimeError(f"Invalid Nexus token supply response: {error}")
+    if config.PRODUCTION_MODE:
+        value = data.get("currentsupply") if isinstance(data, dict) else data
+        units = _parse_exact_nexus_units(value)
+        if units is None:
+            raise RuntimeError("Invalid Nexus token supply response: expected exact nonnegative base units")
+        return units
     try:
-        if isinstance(data, (int, float, str)):
+        if isinstance(data, (int, float, str, Decimal)):
             dec = Decimal(str(data))
         elif isinstance(data, dict) and data.get("currentsupply") is not None:
             dec = Decimal(str(data["currentsupply"]))
@@ -1976,6 +2063,16 @@ def publish_service_record(status: str = "online", last_poll: int | None = None,
     asset = get_heartbeat_asset()
     if not asset:
         return False
+    if config.PRODUCTION_MODE:
+        try:
+            on_chain = parse_heartbeat_waterlines(asset)
+        except ValueError:
+            return False
+        # A persisted proposal can outlive its already-published checkpoint.
+        if wline_sol is not None:
+            wline_sol = max(on_chain.solana or 0, wline_sol)
+        if wline_nxs is not None:
+            wline_nxs = max(on_chain.nexus or 0, wline_nxs)
     rec = build_service_record(status=status, last_poll=last_poll,
                                wline_sol=wline_sol, wline_nxs=wline_nxs)
     nxs_field, sol_field = heartbeat_waterline_field_names()
@@ -1998,7 +2095,12 @@ def publish_service_record(status: str = "online", last_poll: int | None = None,
         if code != 0:
             _log("nexus_service_record_update_failed", level=logging.ERROR, error=redact(err or out))
             return False
-        return _heartbeat_update_acknowledged(out)
+        if not _heartbeat_update_acknowledged(out):
+            return False
+        if config.PRODUCTION_MODE:
+            state_db.update_heartbeat(name, last_beat=rec["last_poll_timestamp"],
+                                      wline_sol=wline_sol, wline_nxs=wline_nxs)
+        return True
     except Exception as e:
         _log("nexus_service_record_update_failed", level=logging.ERROR, error=redact(str(e)))
         return False
@@ -2237,8 +2339,13 @@ def _read_recovery_history(cmd: list[str]) -> tuple[Any, str | None]:
         return None, "exception"
     if code != 0:
         return None, "cli_error"
+    return _parse_nexus_result(out)
+
+
+def _parse_nexus_result(text: str) -> tuple[Any, str | None]:
+    """Decode a complete direct JSON value or HTTP envelope without rounding amounts."""
     try:
-        value = json.loads(out, parse_float=Decimal)
+        value = json.loads(text, parse_float=Decimal)
     except (ValueError, TypeError, ArithmeticError, RecursionError):
         return None, "invalid_response"
     if isinstance(value, dict):
@@ -2254,8 +2361,95 @@ _RECOVERY_CONTRACT_OPS = frozenset({
 })
 
 
+def _read_owned_register_history(
+    address: str, kind: str, cap: int, *, allow_mempool: bool,
+) -> tuple[list[tuple[dict, int]] | None, str | None]:
+    """Prove register creation and continuous ownership in one bounded sigchain."""
+    record, reason = _read_recovery_history([
+        config.NEXUS_CLI, f"register/get/finance:{kind}", f"address={address}",
+    ])
+    if reason is not None:
+        return None, reason
+    owner = record.get("owner") if isinstance(record, dict) else None
+    if (not isinstance(owner, str) or len(owner) != 64
+            or any(ch not in "0123456789abcdef" for ch in owner) or owner == "0" * 64
+            or record.get("address") != address):
+        return None, "treasury_owner_unproven" if kind == "account" else "token_owner_unproven"
+
+    txs, reason = _read_recovery_history([
+        config.NEXUS_CLI, "ledger/list/transactions", f"genesis={owner}",
+        "verbose=detail", "order=desc", f"limit={cap + 1}",
+    ])
+    if reason is not None:
+        return None, reason
+    if not isinstance(txs, list):
+        return None, "invalid_response"
+    if len(txs) > cap:
+        return None, "pagination_truncated"
+    if not txs:
+        return None, "invalid_sigchain_range"
+
+    validated: list[tuple[dict, int]] = []
+    seen: set[str] = set()
+    expected_hash = None
+    newer_timestamp: int | None = None
+    created = False
+    confirmed_suffix = False
+    for sequence, tx in zip(range(len(txs) - 1, -1, -1), txs):
+        if not isinstance(tx, dict):
+            return None, "invalid_transaction"
+        txid, prevhash = tx.get("txid"), tx.get("prevhash")
+        if (not isinstance(txid, str) or not nexus_memo.is_canonical_nexus_txid(txid) or txid == "0" * 128
+                or txid in seen or (expected_hash is not None and txid != expected_hash)
+                or not nexus_memo.is_canonical_nexus_txid(prevhash)
+                or tx.get("genesis") != owner
+                or type(tx.get("sequence")) is not int or tx["sequence"] != sequence):
+            return None, "invalid_sigchain_range"
+        seen.add(txid)
+        expected_hash = prevhash
+        # Sequence zero is the root (hybrid chains can carry a nonzero root prevhash).
+        timestamp = tx.get("timestamp")
+        if type(timestamp) is not int or timestamp <= 0:
+            return None, "invalid_timestamp"
+        if newer_timestamp is not None and timestamp > newer_timestamp:
+            return None, "invalid_sigchain_timestamp_order"
+        newer_timestamp = timestamp
+        # LLL-TAO detail omits confirmations and blockhash for mempool rows.
+        # Accept these only as a contiguous prefix, never as chain evidence.
+        confirmations = tx.get("confirmations")
+        if (allow_mempool and not confirmed_suffix
+                and "confirmations" not in tx and "blockhash" not in tx):
+            confirmations = 0
+        elif type(confirmations) is not int or confirmations <= 0:
+            return None, "invalid_confirmations"
+        else:
+            confirmed_suffix = True
+        contracts = tx.get("contracts")
+        if not isinstance(contracts, list) or not 1 <= len(contracts) <= 100:
+            return None, "invalid_contracts"
+        for contract_id, contract in enumerate(contracts):
+            op = contract.get("OP") if isinstance(contract, dict) else None
+            if not isinstance(op, str) or op not in _RECOVERY_CONTRACT_OPS:
+                return None, "invalid_contract"
+            if type(contract.get("id")) is not int or contract["id"] != contract_id:
+                return None, "invalid_contract_id"
+            if op in {"CREATE", "TRANSFER", "CLAIM"}:
+                target = _parse_nexus_contract_address(contract.get("address"))
+                if not target:
+                    return None, "invalid_ownership_evidence"
+                if target == address:
+                    if op != "CREATE" or created or confirmations == 0:
+                        return None, "treasury_ownership_changed" if kind == "account" else "token_ownership_changed"
+                    created = True
+        validated.append((tx, confirmations))
+    if not created:
+        return None, "treasury_creation_unproven" if kind == "account" else "token_creation_unproven"
+    return validated, None
+
+
 def fetch_deposits_since(treasury_addr: str, since_timestamp: int, max_pages: int = 50,
-                         *, live_min_confirmations: int | None = None) -> DepositScan:
+                         *, live_min_confirmations: int | None = None,
+                         pending_heartbeat_address: str | None = None) -> DepositScan:
     """Recover from a single hash-linked owner sigchain range, not register offset pages.
 
     Verified against LLL-TAO 5.1.6 (1185145534a20ed4d2288e4513c505f271be536d):
@@ -2286,91 +2480,34 @@ def fetch_deposits_since(treasury_addr: str, since_timestamp: int, max_pages: in
     ):
         return incomplete("invalid_confirmation_policy")
 
-    account, reason = _read_recovery_history([
-        config.NEXUS_CLI, "register/get/finance:account", f"address={treasury_addr}",
-    ])
-    if reason is not None:
-        return incomplete(reason)
-    owner = account.get("owner") if isinstance(account, dict) else None
-    if (not isinstance(owner, str) or len(owner) != 64
-            or any(ch not in "0123456789abcdef" for ch in owner) or owner == "0" * 64
-            or account.get("address") != treasury_addr):
-        return incomplete("treasury_owner_unproven")
-
-    limit = max_pages * 100 + 1
-    txs, reason = _read_recovery_history([
-        config.NEXUS_CLI, "ledger/list/transactions", f"genesis={owner}",
-        "verbose=detail", "order=desc", f"limit={limit}",
-    ])
-    if reason is not None:
-        return incomplete(reason)
-    if not isinstance(txs, list):
-        return incomplete("invalid_response")
-    if len(txs) >= limit:
-        return incomplete("pagination_truncated")
-    if not txs:
-        return incomplete("invalid_sigchain_range")
+    txs, reason = _read_owned_register_history(
+        treasury_addr, "account", max_pages * 100,
+        allow_mempool=live_min_confirmations is not None or bool(pending_heartbeat_address),
+    )
+    if txs is None:
+        return incomplete(reason or "invalid_response")
 
     results: list[dict] = []
-    seen: set[str] = set()
-    expected_hash = None
-    newer_timestamp: int | None = None
-    created = False
-    confirmed_suffix = False
     deferred_credit = False
-    for sequence, tx in zip(range(len(txs) - 1, -1, -1), txs):
-        if not isinstance(tx, dict):
-            return incomplete("invalid_transaction")
-        txid, prevhash = tx.get("txid"), tx.get("prevhash")
-        if (not isinstance(txid, str) or not nexus_memo.is_canonical_nexus_txid(txid) or txid == "0" * 128
-                or txid in seen or (expected_hash is not None and txid != expected_hash)
-                or not nexus_memo.is_canonical_nexus_txid(prevhash)
-                or tx.get("genesis") != owner
-                or type(tx.get("sequence")) is not int or tx["sequence"] != sequence):
-            return incomplete("invalid_sigchain_range")
-        seen.add(txid)
-        expected_hash = prevhash
-        # Sequence zero is the root (hybrid chains can carry a nonzero root prevhash).
-        timestamp = tx.get("timestamp")
-        if type(timestamp) is not int or timestamp <= 0:
-            return incomplete("invalid_timestamp")
-        if newer_timestamp is not None and timestamp > newer_timestamp:
-            return incomplete("invalid_sigchain_timestamp_order")
-        newer_timestamp = timestamp
-        # LLL-TAO detail omits confirmations and blockhash for mempool rows.
-        # Accept these only as a contiguous prefix, never as chain evidence.
-        confirmations = tx.get("confirmations")
-        if (live_min_confirmations is not None and not confirmed_suffix
-                and "confirmations" not in tx and "blockhash" not in tx):
-            confirmations = 0
-        elif type(confirmations) is not int or confirmations <= 0:
-            return incomplete("invalid_confirmations")
-        else:
-            confirmed_suffix = True
-        contracts = tx.get("contracts")
-        if not isinstance(contracts, list) or not 1 <= len(contracts) <= 100:
-            return incomplete("invalid_contracts")
+    for tx, confirmations in txs:
+        if confirmations == 0 and live_min_confirmations is None:
+            # A clean shutdown does not wait for the last metadata update to be mined.
+            # Only pinned heartbeat writes and their fees are harmless to this scan.
+            writes = [c for c in tx["contracts"] if c["OP"] == "WRITE"]
+            if (not pending_heartbeat_address or not writes
+                    or any(c["OP"] not in {"WRITE", "FEE"} for c in tx["contracts"])
+                    or any(_parse_nexus_contract_address(c.get("address")) != pending_heartbeat_address
+                           for c in writes)):
+                return incomplete("invalid_confirmations")
+            continue
         has_credit = False
-        for contract_id, contract in enumerate(contracts):
-            op = contract.get("OP") if isinstance(contract, dict) else None
-            if not isinstance(op, str) or op not in _RECOVERY_CONTRACT_OPS:
-                return incomplete("invalid_contract")
-            if type(contract.get("id")) is not int or contract["id"] != contract_id:
-                return incomplete("invalid_contract_id")
-            if op in {"CREATE", "TRANSFER", "CLAIM"}:
-                address = _parse_nexus_contract_address(contract.get("address"))
-                if not address:
-                    return incomplete("invalid_ownership_evidence")
-                if address == treasury_addr:
-                    if op != "CREATE" or created:
-                        return incomplete("treasury_ownership_changed")
-                    created = confirmations > 0
-            if op != "CREDIT":
+        for contract in tx["contracts"]:
+            if contract["OP"] != "CREDIT":
                 continue
             to_address = _parse_nexus_contract_address(contract.get("to"))
             if not to_address:
                 return incomplete("invalid_credit_destination")
-            if to_address != treasury_addr or timestamp < since_timestamp:
+            if to_address != treasury_addr or tx["timestamp"] < since_timestamp:
                 continue
             if not _parse_nexus_contract_address(contract.get("from")):
                 return incomplete("invalid_credit_source")
@@ -2382,8 +2519,6 @@ def fetch_deposits_since(treasury_addr: str, since_timestamp: int, max_pages: in
                 deferred_credit = True
             else:
                 results.append(tx)
-    if not created:
-        return incomplete("treasury_creation_unproven")
     return DepositScan(results, True, deferred_credit=deferred_credit)
 
 

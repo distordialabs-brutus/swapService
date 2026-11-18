@@ -78,7 +78,12 @@ def _rebuild_nexus_from_waterline(
             }
 
     print(f"   Rebuilding Nexus deposits from waterline {waterline_timestamp}...")
-    scan = nexus_client.fetch_deposits_since(treasury_addr, waterline_timestamp)
+    if config.PRODUCTION_MODE and config.NEXUS_HEARTBEAT_ASSET_ADDRESS:
+        scan = nexus_client.fetch_deposits_since(
+            treasury_addr, waterline_timestamp, pending_heartbeat_address=config.NEXUS_HEARTBEAT_ASSET_ADDRESS,
+        )
+    else:
+        scan = nexus_client.fetch_deposits_since(treasury_addr, waterline_timestamp)
     if not isinstance(scan, nexus_client.DepositScan) or not scan.complete:
         reason = scan.reason if isinstance(scan, nexus_client.DepositScan) else "invalid_result"
         return {

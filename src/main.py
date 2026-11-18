@@ -45,6 +45,8 @@ def report_startup_balance_reconciliation(bal_result: object) -> bool:
             addresses=len(bal_result["discrepancies"]),
             total_surplus_units=bal_result.get("total_surplus_nexus_units", 0),
         )
+    elif healthy and bal_result.get("empty_mint_history_verified") is True:
+        print("   ✓ Balance check: no local or on-chain Nexus mint activity in the verified range")
     elif healthy:
         print(
             f"   ✓ Balance check: All {bal_result.get('checked_addresses', 0)} "
@@ -79,6 +81,30 @@ def update_reconciliation_exposure_pause(
     # newly observed explicit healthy result clears it.
     del paused
     return not report_startup_balance_reconciliation(bal_result)
+
+
+def _publish_custody_heartbeat(paused: bool, last_poll: int) -> bool:
+    """Publish liveness and both durable proposals in one acknowledged write."""
+    from . import nexus_client
+
+    sol_wl = state_db.get_proposed_solana_waterline()
+    nxs_wl = state_db.get_proposed_nexus_waterline()
+    if not nexus_client.publish_service_record(status="paused" if paused else "online",
+                                               last_poll=last_poll, wline_sol=sol_wl, wline_nxs=nxs_wl):
+        return False
+    state_db.acknowledge_waterline_proposals(solana=sol_wl, nexus=nxs_wl)
+    return True
+
+
+def _maybe_publish_custody_heartbeat(paused: bool, next_attempt: float) -> float:
+    now = time.monotonic()
+    if now < next_attempt:
+        return next_attempt
+    try:
+        _publish_custody_heartbeat(paused, int(time.time()))
+    except Exception as exc:
+        print(f"[waterline] apply error: {exc}")
+    return now + config.HEARTBEAT_MIN_INTERVAL_SEC
 
 
 def is_balance_reconciliation_due(now: int, last_attempt: int) -> bool:
@@ -465,6 +491,7 @@ def _run_with_signing_gate(lease, signing):
             reconciliation_pause, error=e
         )
     last_balance_reconciliation_attempt = int(time.time())
+    next_heartbeat_attempt = 0.0
 
     # Setup graceful shutdown via Ctrl+C (SIGINT) or SIGTERM
     import signal, threading
@@ -674,11 +701,16 @@ def _run_with_signing_gate(lease, signing):
 
             # Apply waterline proposals to heartbeat asset (FIX: was commented out)
             try:
-                sol_wl = state_db.get_proposed_solana_waterline()
-                nxs_wl = state_db.get_proposed_nexus_waterline()
-                if (sol_wl or nxs_wl) and nexus_client.update_heartbeat_asset(int(time.time()), nxs_wl, sol_wl):
-                    state_db.acknowledge_waterline_proposals(solana=sol_wl, nexus=nxs_wl)
-                    print(f"[waterline] Applied proposals: solana={sol_wl} nexus={nxs_wl}")
+                if config.PRODUCTION_MODE:
+                    next_heartbeat_attempt = _maybe_publish_custody_heartbeat(
+                        bool(should_pause), next_heartbeat_attempt,
+                    )
+                else:
+                    sol_wl = state_db.get_proposed_solana_waterline()
+                    nxs_wl = state_db.get_proposed_nexus_waterline()
+                    if (sol_wl or nxs_wl) and nexus_client.update_heartbeat_asset(int(time.time()), nxs_wl, sol_wl):
+                        state_db.acknowledge_waterline_proposals(solana=sol_wl, nexus=nxs_wl)
+                        print(f"[waterline] Applied proposals: solana={sol_wl} nexus={nxs_wl}")
             except Exception as e:
                 print(f"[waterline] apply error: {e}")
             

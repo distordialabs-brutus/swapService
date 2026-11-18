@@ -5,7 +5,7 @@ from unittest.mock import call, patch
 
 import pytest
 
-from src import config, nexus_client, startup_recovery, state_db, swap_nexus
+from src import balance_reconciler, config, main, nexus_client, startup_recovery, state_db, swap_nexus
 
 
 TREASURY = "TREASURY"
@@ -38,6 +38,201 @@ def sigchain(count, *, root_contracts=None):
 
 def reply(value, wrapped=False):
     return 0, json.dumps({"result": value, "info": {}} if wrapped else value), ""
+
+
+TOKEN = "token-register"
+
+
+def test_first_start_proves_no_mints_and_clears_exposure_pause(tmp_path, monkeypatch):
+    path = tmp_path / "fresh.db"
+    monkeypatch.setattr(state_db, "DB_PATH", str(path))
+    state_db.init_db()
+    history = sigchain(135, root_contracts=[{"id": 0, "OP": "CREATE", "address": TOKEN}])
+    pair = replace(config.SWAP_PAIR, nexus=replace(config.SWAP_PAIR.nexus, register_address=TOKEN))
+    monkeypatch.setattr(config, "SWAP_PAIR", pair)
+    monkeypatch.setattr(config, "PRODUCTION_MODE", True)
+    with patch.object(nexus_client, "_run", side_effect=[
+        reply({"address": TOKEN, "owner": GENESIS}, wrapped=True), reply(history, wrapped=True),
+    ]) as run:
+        result = balance_reconciler.run_balance_reconciliation()
+    assert result["healthy"] is True, result
+    assert result["checked_addresses"] == 0
+    assert result["empty_mint_history_verified"] is True
+    assert main.update_reconciliation_exposure_pause(True, result) is False
+    assert [c.args[0][1] for c in run.call_args_list] == ["register/get/finance:token", HISTORY]
+    assert not any(a.startswith("offset=") for a in run.call_args.args[0])
+
+
+@pytest.mark.parametrize("fault", ["unmatched", "unconfirmed", "wrong_owner", "broken_link", "truncated"])
+def test_empty_local_database_never_hides_remote_mints_or_incomplete_history(tmp_path, monkeypatch, fault):
+    monkeypatch.setattr(state_db, "DB_PATH", str(tmp_path / "fresh.db"))
+    state_db.init_db()
+    history = sigchain(5001 if fault == "truncated" else 135,
+                       root_contracts=[{"id": 0, "OP": "CREATE", "address": TOKEN}])
+    index = 0 if fault == "unconfirmed" else 110
+    history[index]["contracts"] = [{"id": 0, "OP": "DEBIT", "from": {"address": TOKEN},
+                                    "to": {"address": "recipient"}, "amount": "3.25", "reference": 99}]
+    if fault == "unconfirmed":
+        history[index].pop("confirmations")
+    if fault == "broken_link":
+        history[99]["prevhash"] = "ff" * 64
+    owner = "b2" * 32 if fault == "wrong_owner" else GENESIS
+    pair = replace(config.SWAP_PAIR, nexus=replace(config.SWAP_PAIR.nexus, register_address=TOKEN))
+    monkeypatch.setattr(config, "SWAP_PAIR", pair)
+    monkeypatch.setattr(config, "PRODUCTION_MODE", True)
+    with patch.object(nexus_client, "_run", side_effect=[
+        reply({"address": TOKEN, "owner": owner}, wrapped=True), reply(history, wrapped=True),
+    ]) as run:
+        result = balance_reconciler.run_balance_reconciliation()
+    assert result["healthy"] is False, result
+    assert result["empty_mint_history_verified"] is False
+    assert run.call_count == 2
+    if fault in {"unmatched", "unconfirmed"}:
+        assert result["discrepancies"][0]["account"] == "recipient"
+    else:
+        assert any("history incomplete" in reason for reason in result["incomplete_reasons"])
+
+
+def test_production_reconciliation_matches_completed_mint_past_row_100(tmp_path, monkeypatch):
+    monkeypatch.setattr(state_db, "DB_PATH", str(tmp_path / "complete.db"))
+    state_db.init_db()
+    pair = replace(config.SWAP_PAIR, nexus=replace(config.SWAP_PAIR.nexus, register_address=TOKEN))
+    monkeypatch.setattr(config, "SWAP_PAIR", pair)
+    monkeypatch.setattr(config, "PRODUCTION_MODE", True)
+    monkeypatch.setattr(config, "NEXUS_TRANSFER_MIN_CONFIRMATIONS", 10)
+    history = sigchain(135, root_contracts=[{"id": 0, "OP": "CREATE", "address": TOKEN}])
+    mint = history[110]
+    mint["contracts"] = [{"id": 0, "OP": "DEBIT", "from": {"address": TOKEN},
+                          "to": {"address": "recipient"}, "amount": "1", "reference": 99}]
+    units = 10**pair.nexus.decimals
+    state_db.mark_processed_sig(
+        "source-sig", 100, 2_000_000, mint["txid"], 0.0, "debit_confirmed", 99,
+        amount_usdd_units=units, nexus_destination="recipient", memo="nexus:recipient", contract_id=0,
+    )
+    with patch.object(nexus_client, "_run", side_effect=[
+        reply({"address": TOKEN, "owner": GENESIS}, wrapped=True), reply(history, wrapped=True),
+    ]):
+        result = balance_reconciler.run_balance_reconciliation()
+    assert result["healthy"] is True, result
+    assert result["checked_addresses"] == 1
+    assert not result["empty_mint_history_verified"]
+
+
+def test_production_backing_reads_wrapped_supply(monkeypatch):
+    monkeypatch.setattr(config, "PRODUCTION_MODE", True)
+    with patch.object(nexus_client, "_run", return_value=reply({"currentsupply": "1.25"}, wrapped=True)):
+        assert nexus_client.get_circulating_nexus_units() == 125 * 10**(config.NEXUS_TOKEN_DECIMALS - 2)
+
+
+def test_production_mint_preserves_wrapped_txid_and_uses_pinned_register(monkeypatch):
+    pair = replace(config.SWAP_PAIR, nexus=replace(config.SWAP_PAIR.nexus, register_address=TOKEN))
+    monkeypatch.setattr(config, "SWAP_PAIR", pair)
+    monkeypatch.setattr(config, "PRODUCTION_MODE", True)
+    monkeypatch.setattr(config, "NEXUS_PIN", "offline-test")
+    with patch.object(nexus_client, "_run", return_value=reply({"txid": txid(2)}, wrapped=True)) as run:
+        assert nexus_client.debit_nexus_token_with_txid("recipient", 1_000_000, 99) == (True, txid(2))
+    assert f"from={TOKEN}" in run.call_args.args[0]
+
+
+@pytest.mark.parametrize("case", ["confirmed", "shallow", "duplicate"])
+def test_interrupted_mint_uses_linked_evidence_then_exact_txid(tmp_path, monkeypatch, case):
+    monkeypatch.setattr(state_db, "DB_PATH", str(tmp_path / "interrupted.db"))
+    state_db.init_db()
+    pair = replace(config.SWAP_PAIR, nexus=replace(config.SWAP_PAIR.nexus, register_address=TOKEN))
+    monkeypatch.setattr(config, "SWAP_PAIR", pair)
+    monkeypatch.setattr(config, "PRODUCTION_MODE", True)
+    monkeypatch.setattr(config, "NEXUS_TRANSFER_MIN_CONFIRMATIONS", 10)
+    units = 10**pair.nexus.decimals
+    state_db.add_unprocessed_sig("source-sig", 100, "nexus:recipient", "sender", 2_000_000,
+                                 "debit in flight", None)
+    state_db.set_unprocessed_sig_debit_intent("source-sig", 99, units)
+    history = sigchain(135, root_contracts=[{"id": 0, "OP": "CREATE", "address": TOKEN}])
+    mint = history[110]
+    term = {"id": 0, "OP": "DEBIT", "from": {"address": TOKEN},
+            "to": {"address": "recipient"}, "amount": 1.0, "reference": 99}
+    mint["contracts"] = [term]
+    if case == "shallow":
+        mint["confirmations"] = 9
+    if case == "duplicate":
+        history[0]["contracts"] = [term]
+        history[0].pop("confirmations")
+
+    replies = [reply({"address": TOKEN, "owner": GENESIS}, wrapped=True), reply(history, wrapped=True)]
+    if case == "confirmed":
+        replies.append(reply(mint, wrapped=True))
+    with patch.object(nexus_client, "_run", side_effect=replies) as run:
+        resolved = nexus_client.resolve_unverified_debits()
+        if case == "confirmed":
+            assert resolved == 1
+            assert nexus_client.check_unconfirmed_debits(10, 8) == 1
+            assert run.call_args.args[0][1:] == ["ledger/get/transaction", f"txid={mint['txid']}"]
+        else:
+            assert resolved == 0
+            assert state_db.get_sigs_pending_debit_verification(nexus_client.DEBIT_UNVERIFIED_STATUSES)
+    assert run.call_count == (3 if case == "confirmed" else 2)
+
+
+def test_restart_accepts_a_pending_pinned_heartbeat_but_not_a_pending_credit(tmp_path, monkeypatch):
+    monkeypatch.setattr(state_db, "DB_PATH", str(tmp_path / "idle.db"))
+    state_db.init_db()
+    pair = replace(config.SWAP_PAIR, nexus=replace(config.SWAP_PAIR.nexus, treasury_account=TREASURY))
+    monkeypatch.setattr(config, "SWAP_PAIR", pair)
+    monkeypatch.setattr(config, "PRODUCTION_MODE", True)
+    monkeypatch.setattr(config, "NEXUS_HEARTBEAT_ASSET_ADDRESS", "heartbeat")
+    history = sigchain(3)
+    history[0].pop("confirmations")
+    history[0]["contracts"].append({"id": 1, "OP": "FEE"})
+    owner = reply({"address": TREASURY, "owner": GENESIS})
+    with patch.object(nexus_client, "_run", side_effect=[owner, reply(history)]):
+        result = startup_recovery._rebuild_nexus_from_waterline(1)
+    assert result["recovery_complete"] is True, result
+    history[0]["contracts"] = [credit()]
+    with patch.object(nexus_client, "_run", side_effect=[owner, reply(history)]):
+        result = startup_recovery._rebuild_nexus_from_waterline(1)
+    assert result["recovery_complete"] is False
+
+
+def test_known_mint_txid_does_not_require_reference_history(tmp_path, monkeypatch):
+    monkeypatch.setattr(state_db, "DB_PATH", str(tmp_path / "known.db"))
+    state_db.init_db()
+    pair = replace(config.SWAP_PAIR, nexus=replace(config.SWAP_PAIR.nexus, register_address=TOKEN))
+    monkeypatch.setattr(config, "SWAP_PAIR", pair)
+    monkeypatch.setattr(config, "PRODUCTION_MODE", True)
+    monkeypatch.setattr(config, "NEXUS_TRANSFER_MIN_CONFIRMATIONS", 10)
+    mint = {"txid": txid(2), "confirmations": 10, "contracts": [
+        {"id": 0, "OP": "DEBIT", "from": {"address": TOKEN}, "to": {"address": "recipient"},
+         "amount": "1", "reference": 99},
+    ]}
+    state_db.add_unprocessed_sig("source-sig", 100, "nexus:recipient", "sender", 2_000_000,
+                                 "debit in flight", mint["txid"])
+    state_db.set_unprocessed_sig_debit_intent("source-sig", 99, 10**pair.nexus.decimals)
+    with patch.object(nexus_client, "_run", return_value=reply(mint, wrapped=True)) as run:
+        assert nexus_client.resolve_unverified_debits() == 0
+        assert nexus_client.check_unconfirmed_debits(10, 8) == 1
+    assert run.call_args.args[0][1:] == ["ledger/get/transaction", f"txid={mint['txid']}"]
+    assert run.call_count == 1
+    assert state_db.is_processed_sig("source-sig")
+
+
+def test_slow_mint_confirmation_does_not_starve_a_later_row(tmp_path, monkeypatch):
+    monkeypatch.setattr(state_db, "DB_PATH", str(tmp_path / "slow.db"))
+    state_db.init_db()
+    monkeypatch.setattr(config, "PRODUCTION_MODE", True)
+    monkeypatch.setattr(nexus_client, "_mint_confirmation_cursor", None)
+    for i in range(2):
+        state_db.add_unprocessed_sig(str(i), 100, "nexus:recipient", "sender", 2_000_000,
+                                     "debited, awaiting confirmation", txid(i))
+        state_db.set_unprocessed_sig_debit_intent(str(i), i + 1, 1_000_000)
+    now = [0.0]
+    def lookup(cmd, *, timeout):
+        assert 0 < timeout <= 3
+        now[0] += 3
+        return 1, "", "fixture timeout"
+    monkeypatch.setattr(nexus_client.time, "monotonic", lambda: now[0])
+    with patch.object(nexus_client, "_run", side_effect=lookup) as run:
+        assert nexus_client.check_unconfirmed_debits(10, 3) == 0
+        assert nexus_client.check_unconfirmed_debits(10, 3) == 0
+    assert [c.args[0][-1] for c in run.call_args_list] == [f"txid={txid(0)}", f"txid={txid(1)}"]
 
 
 @pytest.mark.parametrize("wrapped", [False, True])

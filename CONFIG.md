@@ -227,7 +227,7 @@ batches of at most 256 signatures.
 | `NEXUS_HEARTBEAT_ASSET_NAME` | empty | Current live lookup identity. In practice required for complete startup recovery. |
 | `NEXUS_HEARTBEAT_ASSET_ADDRESS` | empty | Independently pinned heartbeat register address; required in production for reads and writes. |
 | `NEXUS_HEARTBEAT_ASSET_OWNER` | empty | Independently pinned heartbeat owner sigchain; required in production along with the exact custody accounts and token identifiers. |
-| `HEARTBEAT_MIN_INTERVAL_SEC` | `max(10, POLL_INTERVAL)` | Parsed and clamped to at least 10 seconds; current live update functions do not consult it. |
+| `HEARTBEAT_MIN_INTERVAL_SEC` | `max(10, POLL_INTERVAL)` | Minimum interval between production attempts to publish liveness and both checkpoint proposals in one transaction. Use `300` or longer for the bounded pilot. |
 | `HEARTBEAT_WATERLINE_ENABLED` | `true` | Controls Nexus live-poller cutoff use. Startup recovery still requires both waterlines. |
 | `HEARTBEAT_WATERLINE_SOLANA_FIELD` | `last_safe_timestamp_solana` | Top-level field name on the current v1 asset. |
 | `HEARTBEAT_WATERLINE_NEXUS_FIELD` | `last_safe_timestamp_nexus` | Top-level field name on the current v1 asset. |

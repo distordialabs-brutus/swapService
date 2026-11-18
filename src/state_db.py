@@ -2701,10 +2701,15 @@ def filter_unprocessed_sigs(filters: dict) -> List[Tuple[str, int, str, str, flo
         elif key == 'txid' and value is not None:
             where_clauses.append("u.txid = ?")
             values.append(value)
-    
+        elif key == 'has_txid' and value is True:
+            where_clauses.append("u.txid IS NOT NULL AND u.txid <> ''")
+        elif key == 'after' and value is not None:
+            where_clauses.append("(u.timestamp, u.sig) > (?, ?)")
+            values.extend(value)
+
     limit = filters.get('limit', 1000)  # Default limit to prevent large fetches
     join = ""
-    order = "u.timestamp ASC"
+    order = "u.timestamp ASC, u.sig ASC"
     if capacity_kind is not None:
         join = (
             "LEFT JOIN solana_payout_capacity_holds AS h "
@@ -2864,6 +2869,41 @@ def set_unprocessed_sig_debit_intent(sig: str, reference: int, amount_usdd_units
         conn.close()
 
 
+def record_submitted_nexus_mint(sig: str, reference: int, txid: str) -> bool:
+    """Atomically attach an acknowledgement without replacing a recorded txid."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        with conn:
+            return conn.execute(
+                """UPDATE unprocessed_sigs SET txid = ?, status = 'debited, awaiting confirmation'
+                   WHERE sig = ? AND reference = ? AND status IN ('debit in flight', 'debit unverified')
+                     AND (txid IS NULL OR txid = '' OR txid = ?)""",
+                (txid, sig, reference, txid),
+            ).rowcount == 1
+    finally:
+        conn.close()
+
+
+def requeue_unsent_nexus_mint(sig: str, reference: int) -> bool:
+    """Undo only the exact unsubmitted claim; do not rewind the reference counter."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        with conn:
+            changed = conn.execute(
+                """UPDATE unprocessed_sigs SET status = 'ready for processing',
+                       reference = NULL, amount_usdd_units = NULL
+                   WHERE sig = ? AND reference = ? AND status = 'debit in flight' AND txid IS NULL""",
+                (sig, reference),
+            ).rowcount
+            if changed != 1:
+                return False
+            conn.execute("DELETE FROM reservations WHERE kind = ? AND key = ?",
+                         (DEBIT_RESERVATION_KIND, sig))
+            return True
+    finally:
+        conn.close()
+
+
 def get_unprocessed_sig_reference(sig: str) -> int | None:
     """Return the exact persisted debit reference for one queued deposit."""
     conn = sqlite3.connect(DB_PATH)
@@ -2896,7 +2936,9 @@ def get_unprocessed_sig_nexus_amount(sig: str) -> int | None:
         conn.close()
 
 
-def get_sigs_pending_debit_verification(statuses: tuple, limit: int = 500) -> List[Tuple]:
+def get_sigs_pending_debit_verification(
+    statuses: tuple, limit: int = 500, *, missing_txid: bool = False,
+) -> List[Tuple]:
     """Rows whose debit outcome is unknown and must be resolved against the chain.
 
     Returns: (sig, timestamp, memo, from_address, amount_usdc_units, status, txid, reference)
@@ -2910,11 +2952,11 @@ def get_sigs_pending_debit_verification(statuses: tuple, limit: int = 500) -> Li
         f"""
         SELECT sig, timestamp, memo, from_address, amount_usdc_units, status, txid, reference
         FROM unprocessed_sigs
-        WHERE status IN ({placeholders})
+        WHERE status IN ({placeholders}) AND (? = 0 OR txid IS NULL OR txid = '')
         ORDER BY timestamp ASC
         LIMIT ?
         """,
-        tuple(statuses) + (limit,),
+        tuple(statuses) + (int(missing_txid), limit),
     )
     rows = cursor.fetchall()
     conn.close()

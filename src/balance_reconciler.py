@@ -378,12 +378,14 @@ def _reconcile_remote_mint_history(
         remote.extend(candidates)
 
     consumed: set[tuple[str, int]] = set()
-    verified_mint_sources: set[str] = set()
     incomplete: List[str] = []
     completed = completed_rows if completed_rows is not None else _completed_mint_rows(waterline_ts)
     configured_token_register = str(config.SWAP_PAIR.nexus.register_address or "").strip()
     if not configured_token_register:
         return {}, ["configured Nexus token register address is missing"]
+    # Production history proves continuous ownership of this exact register;
+    # a local mint is not needed to establish which source debits are emissions.
+    verified_mint_sources = {configured_token_register} if config.PRODUCTION_MODE else set()
     for row in completed:
         sig, _ts, _solana_units, txid, nexus_units, _status, reference, destination, _memo, contract_id = row
         _valid_destination, error = _validate_mint_row(row)
@@ -420,7 +422,7 @@ def _reconcile_remote_mint_history(
             and evidence.reference == intent["reference"]
             and (intent["txid"] is None or evidence.remote_txid == intent["txid"])
         ]
-        if exact:
+        if len(exact) == 1:
             consumed.add((exact[0].remote_txid, exact[0].contract_id))
         incomplete.append(
             f"active mint {intent['sig']} remains {intent['status']}; remote outcome is not terminal"
@@ -431,9 +433,8 @@ def _reconcile_remote_mint_history(
         identity = (evidence.remote_txid, evidence.contract_id)
         if identity in consumed:
             continue
-        # finance/transactions/token also contains account-to-account movements.
-        # Classify an unmatched DEBIT as a duplicate mint only when its source is the
-        # same token-supply register proven by an exact completed local mint.
+        # Ordinary account debits are not supply emissions. Every unmatched
+        # debit from the proven token register is a discrepancy, even at first start.
         if evidence.from_address not in verified_mint_sources:
             continue
         surplus_by_account[evidence.to_address] = (
@@ -449,9 +450,9 @@ def run_balance_reconciliation(
 ) -> Dict:
     """Run a read-only, fail-closed double-mint reconciliation.
 
-    ``healthy`` is false if no mint recipient was checked, if any durable evidence is
-    missing/malformed, or if any account calculation fails.  Callers must treat an
-    unhealthy result as an operational safety event, separately from a confirmed surplus.
+    Zero recipients is healthy only when production proves no mint activity in
+    the requested range and there are no local completed or active mints.
+    Missing or inconsistent evidence remains an exposure pause.
     """
     waterline = int(waterline_ts or 0)
     completed_rows, active_rows = _mint_reconciliation_snapshot(waterline)
@@ -460,13 +461,18 @@ def run_balance_reconciliation(
     discrepancies: List[Dict] = []
     account_errors: List[Dict] = []
     checked = 0
+    empty_mint_history_verified = False
 
-    if accounts or active_rows:
+    if config.PRODUCTION_MODE or accounts or active_rows:
         try:
             remote_surplus, remote_incomplete = _reconcile_remote_mint_history(
                 accounts, waterline, completed_rows, active_rows
             )
             incomplete.extend(remote_incomplete)
+            empty_mint_history_verified = bool(
+                config.PRODUCTION_MODE and not completed_rows and not active_rows
+                and not incomplete and not remote_surplus
+            )
             for account, units in remote_surplus.items():
                 discrepancy_units[account] = discrepancy_units.get(account, 0) + int(units)
         except Exception as exc:
@@ -490,7 +496,7 @@ def run_balance_reconciliation(
             discrepancies.append({"account": account, "surplus_nexus_units": units})
     total_surplus = sum(item["surplus_nexus_units"] for item in discrepancies)
 
-    if checked == 0:
+    if checked == 0 and not empty_mint_history_verified:
         incomplete.append("no completed mint recipients were checked")
     if account_errors:
         incomplete.append("one or more recipient calculations failed")
@@ -501,6 +507,7 @@ def run_balance_reconciliation(
         "waterline_ts": waterline,
         "healthy": healthy,
         "checked_addresses": checked,
+        "empty_mint_history_verified": empty_mint_history_verified,
         "discrepancies": discrepancies,
         "total_surplus_nexus_units": total_surplus,
         # Compatibility aliases for existing dashboard/callers; values remain integers.
