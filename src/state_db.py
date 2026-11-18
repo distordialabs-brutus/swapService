@@ -2696,6 +2696,8 @@ def filter_unprocessed_sigs(filters: dict) -> List[Tuple[str, int, str, str, flo
             "ON h.source_signature = u.sig AND h.kind = ?"
         )
         values.insert(0, capacity_kind)
+        where_clauses.append("(h.source_signature IS NULL OR h.reason <> ?)")
+        values.append(SOLANA_PAYOUT_OPERATOR_REVIEW_REASON)
         if capacity_cap_units is None:
             order = (
                 "CASE WHEN h.source_signature IS NULL THEN 1 ELSE 0 END ASC, "
@@ -4075,6 +4077,24 @@ SOLANA_PAYOUT_CURRENT_CAP_TOO_LOW_REASON = (
 )
 
 
+SOLANA_PAYOUT_OPERATOR_REVIEW_REASON = "invalid frozen Solana payout requires operator review"
+
+
+def isolate_solana_capacity_hold(*, source_sig: str, kind: str) -> None:
+    """Remove an invalid hold from scheduling only; preserve principal, intent and budget."""
+    _solana_sig_disposition(source_sig, kind)
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        with conn:
+            conn.execute(
+                """UPDATE solana_payout_capacity_holds SET reason = ?
+                   WHERE source_signature = ? AND kind = ?""",
+                (SOLANA_PAYOUT_OPERATOR_REVIEW_REASON, source_sig, kind),
+            )
+    finally:
+        conn.close()
+
+
 class SolanaDispositionPrepareStatus(str, Enum):
     """Closed set of preparation outcomes consumed by money-moving workers."""
 
@@ -4915,9 +4935,16 @@ def prepare_solana_sig_disposition(
         conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            """SELECT timestamp, memo, from_address, amount_usdc_units, status
-               FROM unprocessed_sigs WHERE sig = ?""", (source_sig,)
+            """SELECT timestamp, memo, from_address, amount_usdc_units, status,
+                      txid, reference, amount_usdd_units
+               FROM unprocessed_sigs WHERE sig = ?""", (source_sig,),
         ).fetchone()
+        if row is not None and any(value is not None for value in row[5:]):
+            conn.commit()
+            return result(
+                SolanaDispositionPrepareStatus.SOURCE_CONFLICT,
+                "source already has Nexus debit intent or outcome evidence",
+            )
         if (row is None or row[0] != timestamp
                 or _canonical_solana_source_memo(row[1]) != memo
                 or row[2] != from_address
@@ -4977,6 +5004,12 @@ def prepare_solana_sig_disposition(
                 "frozen capacity evidence has no durable hold",
             )
         if existing_hold is not None:
+            if conn.execute(
+                "SELECT 1 FROM solana_payout_capacity_holds WHERE source_signature = ? AND reason = ?",
+                (source_sig, SOLANA_PAYOUT_OPERATOR_REVIEW_REASON),
+            ).fetchone():
+                conn.commit()
+                return result(SolanaDispositionPrepareStatus.SOURCE_CONFLICT, "capacity hold requires operator review")
             frozen = _parse_solana_sig_disposition_intent_evidence(existing_hold[3])
             if frozen is None:
                 conn.commit()
@@ -5008,14 +5041,15 @@ def prepare_solana_sig_disposition(
         now = int(time.time())
         used_units = _payout_budget_usage_in_transaction(conn, now - 86400)
         oldest_hold = conn.execute(
-            """SELECT source_signature FROM solana_payout_capacity_holds
-               WHERE NOT (
-                   ? > 0
-                   AND typeof(needed_units) = 'integer'
-                   AND needed_units > ?
-               )
-               ORDER BY first_held_timestamp ASC, source_signature ASC LIMIT 1""",
-            (cap_units, cap_units),
+            """SELECT h.source_signature FROM solana_payout_capacity_holds AS h
+               JOIN unprocessed_sigs AS u ON u.sig = h.source_signature
+               WHERE h.reason <> ? AND u.txid IS NULL AND u.reference IS NULL
+                 AND u.amount_usdd_units IS NULL
+                 AND ((h.kind = 'refund' AND u.status = 'refund capacity held')
+                      OR (h.kind = 'quarantine' AND u.status = 'quarantine capacity held'))
+                 AND NOT (? > 0 AND typeof(h.needed_units) = 'integer' AND h.needed_units > ?)
+               ORDER BY h.first_held_timestamp ASC, h.source_signature ASC LIMIT 1""",
+            (SOLANA_PAYOUT_OPERATOR_REVIEW_REASON, cap_units, cap_units),
         ).fetchone()
         waits_for_older = oldest_hold is not None and oldest_hold[0] != source_sig
         current_cap_too_low = cap_units > 0 and payout_units > cap_units

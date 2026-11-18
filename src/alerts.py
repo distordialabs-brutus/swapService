@@ -29,7 +29,7 @@ import threading
 import time
 from typing import Any, Dict
 
-from . import config, state_db, structured_logging
+from . import config, custody_workers, state_db, structured_logging
 
 _LOG = structured_logging.get_logger("swapService.alerts")
 
@@ -66,10 +66,11 @@ def _deliver(payload: dict) -> tuple[bool, str | None]:
     if url:
         try:
             import requests
-            requests.post(url, data=body,
-                          headers={"Content-Type": "application/json"},
-                          timeout=10)
-            outcomes.append((True, None))
+            response = requests.post(url, data=body,
+                                     headers={"Content-Type": "application/json"},
+                                     timeout=10, allow_redirects=False)
+            accepted = 200 <= response.status_code < 300
+            outcomes.append((accepted, None if accepted else f"webhook: HTTP {response.status_code}"))
         except Exception as e:
             structured_logging.emit(
                 _LOG, logging.WARNING, "alert_webhook_delivery_failed",
@@ -81,9 +82,10 @@ def _deliver(payload: dict) -> tuple[bool, str | None]:
     cmd = getattr(config, "ALERT_COMMAND", None)
     if cmd:
         try:
-            subprocess.run([cmd], input=body, text=True, timeout=15,
-                           capture_output=True)
-            outcomes.append((True, None))
+            result = subprocess.run([cmd], input=body, text=True, timeout=15,
+                                    capture_output=True)
+            accepted = result.returncode == 0
+            outcomes.append((accepted, None if accepted else f"command: exit {result.returncode}"))
         except Exception as e:
             structured_logging.emit(
                 _LOG, logging.WARNING, "alert_command_delivery_failed",
@@ -158,19 +160,25 @@ def deliver_pending(limit: int = DRAIN_LIMIT) -> tuple[int, int]:
     return delivered, abandoned
 
 
-def alert(level: str, event: str, message: str = "", **fields) -> None:
+def alert(level: str, event: str, message: str = "", *, persist: bool = True, **fields) -> None:
     """Emit an operator alert. Always logs; delivers if a channel is configured."""
     try:
-        safe_fields = {k: _redact(v) for k, v in fields.items()}
+        safe_fields = structured_logging.redact({k: _redact(v) for k, v in fields.items()})
+        safe_message = structured_logging.redact(_redact(message))
         structured_logging.emit(
             _LOG,
             {CRITICAL: logging.CRITICAL, WARNING: logging.WARNING, INFO: logging.INFO}.get(
                 level, logging.INFO
             ),
             event,
-            _redact(message),
+            safe_message,
             **safe_fields,
         )
+
+        if not persist:
+            # Startup/refusal diagnostics belong in externally monitored logs, not
+            # the custody database that this process has not been admitted to.
+            return
 
         # Rate-limit identical events so a persistent condition cannot flood the channel.
         now = time.monotonic()
@@ -188,7 +196,7 @@ def alert(level: str, event: str, message: str = "", **fields) -> None:
             "service": "swapService",
             "level": level,
             "event": event,
-            "message": _redact(message),
+            "message": safe_message,
             "timestamp": int(time.time()),
             "fields": safe_fields,
         }
@@ -196,7 +204,7 @@ def alert(level: str, event: str, message: str = "", **fields) -> None:
         # retries from it, so an alert is never lost for lack of transport.
         try:
             alert_id = state_db.enqueue_alert(
-                level, event, _redact(message), json.dumps(payload, default=str))
+                level, event, safe_message, json.dumps(payload, default=str))
         except Exception as e:
             structured_logging.emit(
                 _LOG, logging.ERROR, "alert_outbox_enqueue_failed",
@@ -207,7 +215,7 @@ def alert(level: str, event: str, message: str = "", **fields) -> None:
             threading.Thread(target=_deliver, args=(payload,), daemon=True).start()
             return
         # Deliver off the hot path; a slow webhook must not stall the swap loop.
-        threading.Thread(target=_deliver_queued, args=(alert_id,), daemon=True).start()
+        custody_workers.start(threading.Thread(target=_deliver_queued, args=(alert_id,), daemon=True))
     except Exception as e:
         structured_logging.emit(
             _LOG, logging.ERROR, "alert_emit_failed", "operator alert emission failed",

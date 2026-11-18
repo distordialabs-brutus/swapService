@@ -230,7 +230,8 @@ def process_unprocessed_txids(paused: bool = False):
             # reopen an operator hold, quarantine or an already-submitted intent.
             if cmt != NEXUS_STATUS_PENDING:
                 continue
-            if int(r.get("confirmations") or 0) <= 1:
+            minimum_depth = config.get_nexus_transfer_min_confirmations() if config.PRODUCTION_MODE else 2
+            if int(r.get("confirmations") or 0) < minimum_depth:
                 continue
             txid = r.get("txid")
             contract_id = _row_contract_id(r)
@@ -294,6 +295,15 @@ def process_unprocessed_txids(paused: bool = False):
                     continue  # Will be resolved in Priority 1 next cycle
                 
                 amount_nexus_units = _row_amount_units(r)
+                if config.PRODUCTION_MODE:
+                    pair = config.SWAP_PAIR.nexus
+                    if not nexus_client.has_confirmed_treasury_credit(
+                        txid=txid, contract_id=contract_id, source=r.get("from"),
+                        treasury=pair.treasury_account, register=pair.register_address,
+                        amount_units=amount_nexus_units,
+                    ):
+                        _log("NEXUS_CREDIT_FINALITY_HOLD", txid=txid, contract_id=contract_id)
+                        continue
                 nexus_decimals = int(getattr(config, "NEXUS_TOKEN_DECIMALS", 6))
                 amt_nexus = Decimal(amount_nexus_units) / (Decimal(10) ** nexus_decimals)
                 # All payout math stays in integer base units.  The helper converts the
@@ -431,9 +441,13 @@ def process_unprocessed_txids(paused: bool = False):
                 if time.time() - process_start > PROCESS_BUDGET_SEC:
                     break
                     
-                if r.get("comment") not in {NEXUS_STATUS_SENDING, NEXUS_STATUS_AWAITING}:
+                # A pre-upgrade ambiguous payout may already have been tagged
+                # quarantined. Recheck only those with frozen payout terms.
+                if r.get("comment") not in {NEXUS_STATUS_SENDING, NEXUS_STATUS_AWAITING} and not (
+                    r.get("comment") == NEXUS_STATUS_QUARANTINED and r.get("payout_solana_units")
+                ):
                     continue
-                
+
                 txid = r.get("txid")
                 contract_id = _row_contract_id(r)
                 
@@ -482,17 +496,8 @@ def process_unprocessed_txids(paused: bool = False):
                         _log("NEXUS_SOLANA_CONFIRMED", txid=txid, sig=found_sig)
                     else:
                         _log("NEXUS_PAYOUT_EVIDENCE_HOLD", txid=txid, contract_id=contract_id)
-                        # Check for timeout - but DON'T auto-refund!
-                        # Bug #15 fix: Auto-refunding on confirmation timeout is dangerous
-                        # because the payout may have actually been sent (memo search failed).
-                        # Mark for manual review instead of triggering automatic refund.
-                        ts = int(r.get("ts") or 0)
-                        confirm_timeout = int(getattr(config, "SOLANA_CONFIRM_TIMEOUT_SEC", 600))
-                        if ts and (time.time() - ts) > confirm_timeout:
-                            # Timeout waiting for confirmation - quarantine for manual review
-                            # DO NOT auto-refund as the payout may have been sent successfully
-                            state_db.update_unprocessed_txid(txid=txid, contract_id=contract_id, status=NEXUS_STATUS_QUARANTINED)
-                            _log("NEXUS_CONFIRM_TIMEOUT_QUARANTINE", txid=txid, age=int(time.time() - ts), reason="manual_review_required")
+                        # Keep the original intent and its cap reservation searchable.
+                        # The source's age does not measure how long the payout has been pending.
                 except Exception as e:
                     _log("NEXUS_CONFIRM_CHECK_ERROR", txid=txid, error=str(e))
         

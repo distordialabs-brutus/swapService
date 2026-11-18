@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import time
 
 import requests
 from solders.hash import Hash
@@ -37,6 +38,63 @@ def _expected_nexus_identity() -> str:
     return nexus
 
 
+def _solana_rpc(method: str, params: list):
+    url = config.RPC_URL
+    if not url:
+        raise AdmissionError("Solana RPC URL is missing")
+    response = requests.post(
+        url,
+        json={"jsonrpc": "2.0", "id": "custody-tip", "method": method, "params": params},
+        timeout=config.SOLANA_RPC_TIMEOUT_SEC,
+        allow_redirects=False,
+    )
+    if response.status_code != 200:
+        raise AdmissionError("Solana readiness HTTP request failed")
+    body = response.json()
+    if not isinstance(body, dict) or body.get("id") != "custody-tip" or "error" in body:
+        raise AdmissionError("Solana readiness response invalid")
+    return body["result"]
+
+
+def _nexus_status(endpoint: str, *args: str) -> dict:
+    code, output, _ = nexus_client._run(
+        [config.NEXUS_CLI, endpoint, *args], timeout=config.NEXUS_CLI_TIMEOUT_SEC,
+    )
+    body = nexus_client._parse_json_lenient(output)
+    if code != 0 or not isinstance(body, dict) or "error" in body:
+        raise AdmissionError("Nexus readiness response invalid")
+    result = body.get("result", body)
+    if not isinstance(result, dict):
+        raise AdmissionError("Nexus readiness response invalid")
+    return result
+
+
+def require_fresh_tips(*, now: int | None = None) -> None:
+    """Require healthy primary RPCs and a recent finalized Solana and Nexus tip."""
+    def fresh(timestamp):
+        return type(timestamp) is int and -30 <= current - timestamp <= 900
+
+    current = int(time.time()) if now is None else now
+    try:
+        if _solana_rpc("getHealth", []) != "ok":
+            raise AdmissionError("Solana RPC is not healthy")
+        slot = _solana_rpc("getSlot", [{"commitment": "finalized"}])
+        if type(slot) is not int or slot <= 0 or not fresh(_solana_rpc("getBlockTime", [slot])):
+            raise AdmissionError("Solana finalized tip is not fresh")
+        info = _nexus_status("system/get/info")
+        height = info.get("blocks")
+        if (info.get("synchronized") is not True or info.get("syncing") is not False
+                or type(height) is not int or height <= 0):
+            raise AdmissionError("Nexus node is not synchronized")
+        tip = _nexus_status("ledger/get/block", f"height={height}")
+        if tip.get("height") != height or not fresh(tip.get("timestamp")):
+            raise AdmissionError("Nexus tip is not fresh")
+    except AdmissionError:
+        raise
+    except Exception as exc:
+        raise AdmissionError("chain readiness query failed") from exc
+
+
 def _solana_genesis_hash() -> str:
     try:
         response = requests.post(
@@ -67,6 +125,8 @@ def _nexus_height_zero_hash() -> str:
         if code != 0:
             raise ValueError
         body = nexus_client._parse_json_lenient(output)
+        if isinstance(body, dict) and "error" not in body:
+            body = body.get("result", body)
         if not isinstance(body, dict) or set(body) != {"hash"}:
             raise ValueError
         observed = body["hash"]

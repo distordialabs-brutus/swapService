@@ -189,7 +189,7 @@ def test_verify_rejects_wrong_observed_chain(monkeypatch, chain):
     [
         ({"result": 123}, {"hash": NEXUS_GENESIS}),
         ({"result": SOLANA_GENESIS}, {"hash": 123}),
-        ({"result": SOLANA_GENESIS}, {"result": {"hash": NEXUS_GENESIS}}),
+        ({"result": SOLANA_GENESIS}, {"result": {"hash": NEXUS_GENESIS, "unexpected": True}}),
         ({"result": SOLANA_GENESIS}, {"error": {"code": -83}}),
     ],
 )

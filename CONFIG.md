@@ -178,7 +178,7 @@ the transient-owner-outage gap; target-node receipt acceptance remains outstandi
 | `MAX_ACTION_ATTEMPTS` | `3` | Persistent action retry budget. Nexus transfer intents still prohibit blind debit retry. |
 | `ACTION_RETRY_COOLDOWN_SEC` | `300` | Minimum retry spacing. |
 | `REFUND_TIMEOUT_SEC` | `3600` | Mapping wait before Nexus credit moves to refund hold/review. It does not trigger an automatic Nexus debit. |
-| `STALE_DEPOSIT_QUARANTINE_SEC` | `86400` | Age before eligible stale Solana rows are marked for quarantine handling. |
+| `STALE_DEPOSIT_QUARANTINE_SEC` | `86400` | Legacy setting; age alone no longer moves a Solana deposit to quarantine. Review stalled deposits without overriding unresolved debit evidence. |
 | `SOLANA_CONFIRM_TIMEOUT_SEC` | `600` | Outbound Solana confirmation timeout. |
 | `STALE_ROW_SEC` | `86400` | General stale-row age threshold. |
 | `METRICS_BUDGET_SEC` | `5` | Parsed setting; the current main metrics block uses explicit per-call timeouts rather than this value. |
@@ -216,7 +216,7 @@ batches of at most 256 signatures.
 
 | Key | Default | Notes |
 |---|---:|---|
-| `SOLANA_DEPOSIT_COMMITMENT` | `finalized` | Used for deposit admission and outbound settlement. `confirmed` is not rooted and can be reorged. |
+| `SOLANA_DEPOSIT_COMMITMENT` | `finalized` | Used for deposit admission. Production requires `finalized` and uses the primary Solana RPC for ingestion. |
 | `SOLANA_FINALIZED_ABOVE_UNITS` | `0` | Raw Solana base-unit threshold that always requires finalization if the general commitment is relaxed. `0` disables this carve-out. |
 
 ## Heartbeat and recovery
@@ -225,7 +225,8 @@ batches of at most 256 signatures.
 |---|---:|---|
 | `HEARTBEAT_ENABLED` | `true` | Consulted by service-record publication and heartbeat validation. Main startup recovery and polling still depend on the name-addressed asset when false. |
 | `NEXUS_HEARTBEAT_ASSET_NAME` | empty | Current live lookup identity. In practice required for complete startup recovery. |
-| `NEXUS_HEARTBEAT_ASSET_ADDRESS` | empty | Recorded configuration only; current runtime does not use it to select the asset. Address-based provider-v2 is planned. |
+| `NEXUS_HEARTBEAT_ASSET_ADDRESS` | empty | Independently pinned heartbeat register address; required in production for reads and writes. |
+| `NEXUS_HEARTBEAT_ASSET_OWNER` | empty | Independently pinned heartbeat owner sigchain; required in production along with the exact custody accounts and token identifiers. |
 | `HEARTBEAT_MIN_INTERVAL_SEC` | `max(10, POLL_INTERVAL)` | Parsed and clamped to at least 10 seconds; current live update functions do not consult it. |
 | `HEARTBEAT_WATERLINE_ENABLED` | `true` | Controls Nexus live-poller cutoff use. Startup recovery still requires both waterlines. |
 | `HEARTBEAT_WATERLINE_SOLANA_FIELD` | `last_safe_timestamp_solana` | Top-level field name on the current v1 asset. |
@@ -254,7 +255,7 @@ An unavailable, malformed, incomplete or discrepant balance reconciliation latch
 
 ## Production admission
 
-`SWAP_PRODUCTION_MODE` defaults to `false`. It, `NEXUS_SWAP_RECEIPTS_ENABLED` and `CUSTODY_NEXUS_IDENTITY_CHECK` are parsed strictly: accepted values are `1/true/yes/on` and `0/false/no/off`, case-insensitively with surrounding whitespace ignored. Any other present value raises. The custody pathway's optional Nexus height-zero identity check defaults to enabled and is documented with the witness protocol in [docs/maintenance/sealed-custody-admission.md](docs/maintenance/sealed-custody-admission.md); set it to `false` when the node cannot answer that query and accept responsibility for node version correctness. Receipt publication is development/test-only: production admission rejects an explicit receipt enablement until its independent NXS-spend controls and registration migration exist.
+`SWAP_PRODUCTION_MODE` defaults to `false`. It, `NEXUS_SWAP_RECEIPTS_ENABLED` and `CUSTODY_NEXUS_IDENTITY_CHECK` are parsed strictly: accepted values are `1/true/yes/on` and `0/false/no/off`, case-insensitively with surrounding whitespace ignored. Any other present value raises. The custody pathway's optional Nexus height-zero identity check defaults to enabled and is documented with the witness protocol in [docs/maintenance/sealed-custody-admission.md](docs/maintenance/sealed-custody-admission.md); production requires it to be enabled; disabling it is for non-production nodes only. Receipt publication is development/test-only: production admission rejects an explicit receipt enablement until its independent NXS-spend controls and registration migration exist.
 
 When true, startup refuses before polling unless all of these are present:
 

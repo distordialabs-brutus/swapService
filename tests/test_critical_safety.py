@@ -876,6 +876,8 @@ class CriticalSafetyTests(unittest.TestCase):
         """A production process must not start with disabled loss-limiting controls."""
         with (
             patch.object(config, "PRODUCTION_MODE", True),
+            patch.object(config, "NEXUS_HEARTBEAT_ASSET_ADDRESS", "heartbeat"),
+            patch.object(config, "NEXUS_HEARTBEAT_ASSET_OWNER", "heartbeat-owner"),
             patch.object(config, "production_pair_configuration_errors", return_value=[]),
             patch.object(config, "MAX_SWAP_SOLANA_UNITS", 0),
             patch.object(config, "MAX_SWAP_NEXUS_UNITS", 0),
@@ -893,6 +895,7 @@ class CriticalSafetyTests(unittest.TestCase):
         critical.assert_called_once_with(
             "production_controls_missing",
             "refusing production startup because mandatory exposure controls are disabled",
+            persist=False,
             missing_controls=[
                 "MAX_SWAP_USDC",
                 "MAX_SWAP_USDD",
@@ -906,6 +909,8 @@ class CriticalSafetyTests(unittest.TestCase):
         """A production bridge must not authorize Nexus debits by a display ticker alone."""
         with (
             patch.object(config, "PRODUCTION_MODE", True),
+            patch.object(config, "NEXUS_HEARTBEAT_ASSET_ADDRESS", "heartbeat"),
+            patch.object(config, "NEXUS_HEARTBEAT_ASSET_OWNER", "heartbeat-owner"),
             patch.object(config, "production_pair_configuration_errors", return_value=[]),
             patch.object(config, "MAX_SWAP_SOLANA_UNITS", 1),
             patch.object(config, "MAX_SWAP_NEXUS_UNITS", 1),
@@ -925,6 +930,7 @@ class CriticalSafetyTests(unittest.TestCase):
         critical.assert_called_once_with(
             "production_controls_missing",
             "refusing production startup because mandatory exposure controls are disabled",
+            persist=False,
             missing_controls=["NEXUS_TOKEN_REGISTER_ADDRESS"],
         )
 
@@ -946,6 +952,8 @@ class CriticalSafetyTests(unittest.TestCase):
         with patch.dict(os.environ, pair_terms, clear=True):
             with (
                 patch.object(config, "PRODUCTION_MODE", True),
+                patch.object(config, "NEXUS_HEARTBEAT_ASSET_ADDRESS", "heartbeat"),
+                patch.object(config, "NEXUS_HEARTBEAT_ASSET_OWNER", "heartbeat-owner"),
                 patch.object(config, "MAX_SWAP_SOLANA_UNITS", 1),
                 patch.object(config, "MAX_SWAP_NEXUS_UNITS", 1),
                 patch.object(config, "DAILY_PAYOUT_CAP_SOLANA_UNITS", 1),
@@ -964,6 +972,7 @@ class CriticalSafetyTests(unittest.TestCase):
         critical.assert_called_once_with(
             "production_controls_missing",
             "refusing production startup because mandatory exposure controls are disabled",
+            persist=False,
             missing_controls=["NEXUS_TOKEN_DECIMALS (or USDD_DECIMALS)"],
         )
 
@@ -972,6 +981,8 @@ class CriticalSafetyTests(unittest.TestCase):
         """A live bridge must not place Nexus credentials in a child-process argv."""
         with (
             patch.object(config, "PRODUCTION_MODE", True),
+            patch.object(config, "NEXUS_HEARTBEAT_ASSET_ADDRESS", "heartbeat"),
+            patch.object(config, "NEXUS_HEARTBEAT_ASSET_OWNER", "heartbeat-owner"),
             patch.object(config, "production_pair_configuration_errors", return_value=[]),
             patch.object(config, "MAX_SWAP_SOLANA_UNITS", 1),
             patch.object(config, "MAX_SWAP_NEXUS_UNITS", 1),
@@ -989,6 +1000,7 @@ class CriticalSafetyTests(unittest.TestCase):
         critical.assert_called_once_with(
             "production_controls_missing",
             "refusing production startup because mandatory exposure controls are disabled",
+            persist=False,
             missing_controls=[
                 "NEXUS_API_URL (HTTPS)",
                 "NEXUS_API_USER",
@@ -1001,6 +1013,8 @@ class CriticalSafetyTests(unittest.TestCase):
         """A multiuser Nexus node cannot admit a bridge without its session credential."""
         with (
             patch.object(config, "PRODUCTION_MODE", True),
+            patch.object(config, "NEXUS_HEARTBEAT_ASSET_ADDRESS", "heartbeat"),
+            patch.object(config, "NEXUS_HEARTBEAT_ASSET_OWNER", "heartbeat-owner"),
             patch.object(config, "production_pair_configuration_errors", return_value=[]),
             patch.object(config, "MAX_SWAP_SOLANA_UNITS", 1),
             patch.object(config, "MAX_SWAP_NEXUS_UNITS", 1),
@@ -1020,6 +1034,7 @@ class CriticalSafetyTests(unittest.TestCase):
         critical.assert_called_once_with(
             "production_controls_missing",
             "refusing production startup because mandatory exposure controls are disabled",
+            persist=False,
             missing_controls=["NEXUS_SESSION (required when NEXUS_MULTIUSER=true)"],
         )
 
@@ -1028,6 +1043,8 @@ class CriticalSafetyTests(unittest.TestCase):
         """A default-off receipt flag must not become an uncapped production spend path."""
         with (
             patch.object(config, "PRODUCTION_MODE", True),
+            patch.object(config, "NEXUS_HEARTBEAT_ASSET_ADDRESS", "heartbeat"),
+            patch.object(config, "NEXUS_HEARTBEAT_ASSET_OWNER", "heartbeat-owner"),
             patch.object(config, "production_pair_configuration_errors", return_value=[]),
             patch.object(config, "MAX_SWAP_SOLANA_UNITS", 1),
             patch.object(config, "MAX_SWAP_NEXUS_UNITS", 1),
@@ -1048,6 +1065,7 @@ class CriticalSafetyTests(unittest.TestCase):
         critical.assert_called_once_with(
             "production_controls_missing",
             "refusing production startup because mandatory exposure controls are disabled",
+            persist=False,
             missing_controls=[
                 "NEXUS_SWAP_RECEIPTS_ENABLED (receipt NXS-spend controls are not production-ready)"
             ],
@@ -1058,6 +1076,8 @@ class CriticalSafetyTests(unittest.TestCase):
         """A live bridge cannot strand either chain's failed-payout funds in its vault."""
         with (
             patch.object(config, "PRODUCTION_MODE", True),
+            patch.object(config, "NEXUS_HEARTBEAT_ASSET_ADDRESS", "heartbeat"),
+            patch.object(config, "NEXUS_HEARTBEAT_ASSET_OWNER", "heartbeat-owner"),
             patch.object(config, "production_pair_configuration_errors", return_value=[]),
             patch.object(config, "MAX_SWAP_SOLANA_UNITS", 1),
             patch.object(config, "MAX_SWAP_NEXUS_UNITS", 1),
@@ -1075,6 +1095,7 @@ class CriticalSafetyTests(unittest.TestCase):
         critical.assert_called_once_with(
             "production_controls_missing",
             "refusing production startup because mandatory exposure controls are disabled",
+            persist=False,
             missing_controls=[
                 "USDC_QUARANTINE_ACCOUNT",
                 "NEXUS_USDD_QUARANTINE_ACCOUNT",

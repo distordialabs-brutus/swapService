@@ -626,6 +626,45 @@ def execute_nexus_transfer_intent(intent_id: str) -> TransferExecution:
     return TransferExecution(True, "submitted", remote_txid)
 
 
+def has_confirmed_treasury_credit(*, txid: object, contract_id: int, source: object,
+                                  treasury: str, register: str, amount_units: int) -> bool:
+    """Check the exact Nexus source immediately before authorizing a Solana payout."""
+    if (not nexus_memo.is_canonical_nexus_txid(txid) or type(contract_id) is not int
+            or contract_id < 0 or type(amount_units) is not int or amount_units <= 0
+            or not all(isinstance(value, str) and value for value in (source, treasury, register))):
+        return False
+    try:
+        code, output, _ = _run([config.NEXUS_CLI, "ledger/get/transaction", f"txid={txid}"],
+                               timeout=config.NEXUS_CLI_TIMEOUT_SEC)
+        body = _parse_json_lenient(output)
+        if code != 0 or not isinstance(body, dict) or "error" in body:
+            return False
+        tx = body.get("result", body)
+        if not isinstance(tx, dict) or tx.get("txid") != txid:
+            return False
+        blockhash = tx.get("blockhash")
+        confirmations = tx.get("confirmations")
+        if (not isinstance(blockhash, str) or len(blockhash) != 256
+                or any(c not in "0123456789abcdef" for c in blockhash) or not int(blockhash, 16)
+                or type(confirmations) is not int
+                or confirmations < config.get_nexus_transfer_min_confirmations()):
+            return False
+        contracts = tx.get("contracts")
+        if not isinstance(contracts, list):
+            return False
+        matches = [c for c in contracts if isinstance(c, dict) and c.get("id") == contract_id]
+        if len(matches) != 1:
+            return False
+        credit = matches[0]
+        return (type(credit["id"]) is int and credit.get("OP") == "CREDIT"
+                and _parse_nexus_contract_address(credit.get("from")) == source
+                and _parse_nexus_contract_address(credit.get("to")) == treasury
+                and _parse_nexus_contract_address(credit.get("token")) == register
+                and _parse_exact_nexus_units(credit.get("amount")) == amount_units)
+    except Exception:
+        return False
+
+
 def get_nexus_transfer_debits_by_txid(txid: str) -> "BatchLookup":
     """Read one returned Nexus transaction by its authoritative immutable identity.
 
@@ -1705,7 +1744,9 @@ def get_circulating_nexus_units() -> int:
     Returning zero on a transport or parse failure makes an unavailable liability look
     like no liability at all and causes backing checks to fail open.
     """
-    cmd = [config.NEXUS_CLI, "finance/get/token/currentsupply", f"name={config.NEXUS_TOKEN_NAME}"]
+    selector = (f"address={config.SWAP_PAIR.nexus.register_address}" if config.PRODUCTION_MODE
+                else f"name={config.NEXUS_TOKEN_NAME}")
+    cmd = [config.NEXUS_CLI, "finance/get/token/currentsupply", selector]
     try:
         code, out, err = _run(cmd, timeout=10)
     except Exception as e:
@@ -1928,7 +1969,7 @@ def publish_service_record(status: str = "online", last_poll: int | None = None,
                                wline_sol=wline_sol, wline_nxs=wline_nxs)
     nxs_field, sol_field = heartbeat_waterline_field_names()
     mutable = set(SERVICE_RECORD_MUTABLE) | {sol_field, nxs_field}
-    cmd = [config.NEXUS_CLI, "assets/update/asset", f"name={name}", "format=basic",
+    cmd = [config.NEXUS_CLI, "assets/update/asset", _heartbeat_selector(), "format=basic",
            f"pin={config.NEXUS_PIN}"]
     wrote = 0
     for k, v in rec.items():
@@ -1970,8 +2011,8 @@ def update_heartbeat_asset(last_poll: int, wline_nxs: int | None, wline_sol: int
     cmd = [
         config.NEXUS_CLI, 
         "assets/update/asset", 
-        f"name={config.NEXUS_HEARTBEAT_ASSET_NAME}", 
-        f"format=basic",  
+        _heartbeat_selector(),
+        "format=basic",
         f"pin={config.NEXUS_PIN}"
     ]
 
@@ -2062,17 +2103,42 @@ def validate_heartbeat_asset() -> tuple[bool, str]:
     return (True, f"heartbeat asset OK ({', '.join(required)})")
 
 
+def _heartbeat_selector() -> str:
+    if config.PRODUCTION_MODE:
+        return f"address={config.NEXUS_HEARTBEAT_ASSET_ADDRESS}"
+    return f"name={config.NEXUS_HEARTBEAT_ASSET_NAME}"
+
+
+def _heartbeat_identity_matches(asset: dict) -> bool:
+    pair = config.SWAP_PAIR
+    fields = {
+        "address": config.NEXUS_HEARTBEAT_ASSET_ADDRESS,
+        "owner": config.NEXUS_HEARTBEAT_ASSET_OWNER,
+        "distordiaType": "nexusBridgeHeartbeat",
+        "nexus_treasury_address": pair.nexus.treasury_account,
+        "nexus_token_register_address": pair.nexus.register_address,
+        "solana_vault_address": str(pair.solana.vault_account),
+        "solana_vault_mint": str(pair.solana.mint),
+    }
+    return all(isinstance(value, str) and value and asset.get(key) == value
+               for key, value in fields.items())
+
+
 def get_heartbeat_asset() -> Optional[Dict[str, Any]]:
-    cmd = [config.NEXUS_CLI, "assets/get/asset", f"name={config.NEXUS_HEARTBEAT_ASSET_NAME}"]
+    cmd = [config.NEXUS_CLI, "assets/get/asset", _heartbeat_selector()]
     try:
         code, out, err = _run(cmd, timeout=5)
         if code != 0:
             _log("nexus_heartbeat_lookup_failed", level=logging.ERROR, error=redact(err or out))
             return None
         data = _parse_json_lenient(out)
-        if not isinstance(data, dict) or not data.get("address"):
-            _log("nexus_heartbeat_lookup_failed", level=logging.ERROR,
-                 error=redact(out), reason="invalid_response")
+        if isinstance(data, dict) and "error" not in data:
+            data = data.get("result", data)
+        if not isinstance(data, dict) or not data.get("address") or "error" in data:
+            _log("nexus_heartbeat_lookup_failed", level=logging.ERROR, reason="invalid_response")
+            return None
+        if config.PRODUCTION_MODE and not _heartbeat_identity_matches(data):
+            _log("nexus_heartbeat_lookup_failed", level=logging.ERROR, reason="identity_mismatch")
             return None
         return data
     except Exception as e:

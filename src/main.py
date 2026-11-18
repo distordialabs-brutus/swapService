@@ -92,6 +92,13 @@ def validate_production_controls() -> bool:
         return True
 
     missing = []
+    if config.SOLANA_DEPOSIT_COMMITMENT != "finalized":
+        missing.append("SOLANA_DEPOSIT_COMMITMENT=finalized")
+    if not config.CUSTODY_NEXUS_IDENTITY_CHECK:
+        missing.append("CUSTODY_NEXUS_IDENTITY_CHECK=true")
+    if not (config.HEARTBEAT_ENABLED and config.HEARTBEAT_WATERLINE_ENABLED
+            and config.NEXUS_HEARTBEAT_ASSET_ADDRESS and config.NEXUS_HEARTBEAT_ASSET_OWNER):
+        missing.append("enabled heartbeat with pinned asset address and owner")
     if int(getattr(config, "MAX_SWAP_SOLANA_UNITS", 0) or 0) <= 0:
         missing.append("MAX_SWAP_USDC")
     if int(getattr(config, "MAX_SWAP_NEXUS_UNITS", 0) or 0) <= 0:
@@ -144,7 +151,7 @@ def validate_production_controls() -> bool:
 
     message = "refusing production startup because mandatory exposure controls are disabled"
     print(f"[startup] {message}: {', '.join(missing)}")
-    alerts.critical("production_controls_missing", message, missing_controls=missing)
+    alerts.critical("production_controls_missing", message, persist=False, missing_controls=missing)
     return False
 
 
@@ -249,44 +256,6 @@ def _drain_alerts():
         print(f"[alerts] outbox drain: delivered={delivered} abandoned={abandoned}")
 
 
-def _process_stale_deposits():
-    """Process stale deposits that exceed STALE_DEPOSIT_QUARANTINE_SEC.
-    
-    FIX: This config variable was defined but never used. Now deposits
-    stuck in unprocessable states for too long are moved to quarantine.
-    """
-    try:
-        stale_threshold_sec = int(getattr(config, 'STALE_DEPOSIT_QUARANTINE_SEC', 86400))  # 24h default
-        now = int(time.time())
-        
-        # Get all unprocessed signatures
-        unproc_rows = state_db.get_unprocessed_sigs()
-        
-        stale_statuses = {'memo unresolved', 'ready for processing', None}
-        quarantined_count = 0
-        
-        for sig, timestamp, memo, from_address, amount_usdc_units, status, txid in unproc_rows:
-            if not timestamp:
-                continue
-                
-            age_sec = now - int(timestamp)
-            
-            # Check if this deposit is stale and in a non-terminal state
-            if age_sec > stale_threshold_sec and status in stale_statuses:
-                # Mark for quarantine - the quarantine handler will process it
-                state_db.update_unprocessed_sig_status(sig, "to be quarantined")
-                quarantined_count += 1
-                print(f"[stale_deposit] sig={sig} age={age_sec}s > {stale_threshold_sec}s status={status} - marking for quarantine")
-        
-        if quarantined_count > 0:
-            print(f"[stale_deposit] Marked {quarantined_count} stale deposits for quarantine")
-            
-    except Exception as e:
-        print(f"[stale_deposit] error: {e}")
-
-
-#print("↻ Updating Nexus heartbeat asset:", cmd[:-1] + ["pin=***"] if cfg.NEXUS_PIN else cmd)
-
 def run():
     # An explicit production deployment must have finite blast-radius controls and an
     # alert route before it opens mutable state or starts polling either chain.
@@ -303,7 +272,7 @@ def run():
         alerts.critical(
             "custody_admission_refused",
             "independent sealed custody evidence unavailable; refusing all activity",
-            error=str(exc),
+            persist=False, error=str(exc),
         )
         return False
     sealed = False
@@ -311,6 +280,8 @@ def run():
         # Pin the observed chains before migrations, recovery scans or reference reads.
         from . import custody_chain
         custody_chain.verify()
+        if config.PRODUCTION_MODE:
+            custody_chain.require_fresh_tips()
         if _run_admitted(lease) is not True:
             return False
         if not _drain_custody_workers():
@@ -320,7 +291,7 @@ def run():
         sealed = True
         return True
     except Exception:
-        alerts.critical("custody_runtime_failed", "custody runtime or seal failed; restart permit withheld")
+        alerts.critical("custody_runtime_failed", "custody runtime or seal failed; restart permit withheld", persist=False)
         return False
     finally:
         if _stop_event is not None:
@@ -386,7 +357,8 @@ def _run_admitted(lease):
 
     print("\n")
     print("🌐 Starting bidirectional swap service")
-    print(f"   Solana RPC: {config.RPC_URL}")
+    from urllib.parse import urlsplit
+    print(f"   Solana RPC host: {urlsplit(config.RPC_URL).hostname or 'unknown'}")
     print(f"   {config.SOLANA_TOKEN_SYMBOL} vault (Solana): {config.VAULT_USDC_ACCOUNT}")
     print(f"   {config.NEXUS_TOKEN_NAME} treasury (Nexus): {config.NEXUS_USDD_TREASURY_ACCOUNT}")
     print(f"   Bridging: {config.SOLANA_TOKEN_SYMBOL} (Solana, {config.SOLANA_TOKEN_DECIMALS}dp) "
@@ -517,6 +489,9 @@ def _run_admitted(lease):
             # Safety and maintenance first with timeout protection
             try:
                 from . import fees, nexus_client, solana_client
+                if config.PRODUCTION_MODE:
+                    from . import custody_chain
+                    custody_chain.require_fresh_tips()
                 should_pause = _safe_call(fees.maintain_backing_and_bounds, timeout_sec=5)
                 
                 # Periodic backing reconcile: mint the Nexus-side token to fees account to bring the vault back to 1:1 with circulating
@@ -634,7 +609,9 @@ def _run_admitted(lease):
                                         "the vault below the configured floor vs circulating supply; "
                                         "new swaps paused, refunds and quarantine still running")
             except Exception as e:
-                print(f"Maintenance error: {e}")
+                should_pause = True
+                alerts.critical("custody_preflight_paused", "New payouts paused: readiness or maintenance check failed",
+                                error_type=type(e).__name__)
 
             # Guard long-running pollers with watchdog timeouts so Ctrl+C remains responsive
             loop_slice_start = time.time()
@@ -649,11 +626,8 @@ def _run_admitted(lease):
             
             if _stop_event.is_set():
                 break
-            # Process stale deposits that need quarantine (FIX: STALE_DEPOSIT_QUARANTINE_SEC now used)
-            _run_with_watchdog(_process_stale_deposits, "stale_deposits", 5)
-            
-            if _stop_event.is_set():
-                break
+            # Stale deposits remain visible for review. Do not run an independent
+            # quarantine worker against rows the Solana settlement worker can change.
             _run_with_watchdog(poll_nexus_deposits, "nexus_poll", NEXUS_POLL_BUDGET)
             
             if _stop_event.is_set():

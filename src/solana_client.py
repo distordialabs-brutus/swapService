@@ -107,6 +107,10 @@ def _helius_rpc_url() -> Optional[str]:
     from urllib.parse import quote, urlparse
 
     rpc_url = str(getattr(config, "RPC_URL", "") or "").strip()
+    if config.PRODUCTION_MODE:
+        # Admission verifies only the primary. Use the core RPC cursor there and
+        # do not authorize deposits from an independent, unverified indexer.
+        return None
     rpc_network = _network_identity_for_url(rpc_url)
     explicit = str(
         getattr(config, "HELIUS_RPC_URL", "") or os.getenv("HELIUS_RPC_URL") or ""
@@ -1223,6 +1227,15 @@ def _alert_solana_disposition_preparation(preparation, *, source_signature: str,
     """Report durable preparation holds without changing their money-path state."""
     from . import alerts, state_db
 
+    if preparation.status in {
+        state_db.SolanaDispositionPrepareStatus.SOURCE_CONFLICT,
+        state_db.SolanaDispositionPrepareStatus.MALFORMED_EVIDENCE,
+    }:
+        try:
+            state_db.isolate_solana_capacity_hold(source_sig=source_signature, kind=kind)
+        except Exception as exc:
+            _log("solana_capacity_hold_isolation_failed", level=logging.ERROR,
+                 sig=source_signature, error_type=type(exc).__name__)
     if preparation.status is state_db.SolanaDispositionPrepareStatus.CAPACITY_HELD:
         alerts.warning(
             "solana_disposition_capacity_held",

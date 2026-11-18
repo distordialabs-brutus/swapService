@@ -233,7 +233,7 @@ def run_create(
         else:
             print("  WARNING: no --name given. The service addresses the heartbeat asset by")
             print("           NAME, so an unnamed asset is unreachable. Re-create it with --name.")
-        print(f"  # NEXUS_HEARTBEAT_ASSET_ADDRESS={address}   (recorded for reference; not read by the service)")
+        print(f"  # NEXUS_HEARTBEAT_ASSET_ADDRESS={address}   (required for production heartbeat admission)")
         print("  HEARTBEAT_ENABLED=true")
         return 0
     else:
